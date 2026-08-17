@@ -407,7 +407,7 @@
                 <div id="prod_cartonResult" class="text-[11px] text-emerald-700 font-bold mt-1.5 min-h-[15px]"></div>
               </div>
             </details>
-            <details id="prod_morePrices" class="mt-2 bg-amber-50/60 rounded-xl border border-amber-100">
+            <details id="prod_morePrices" class="hidden mt-2 bg-amber-50/60 rounded-xl border border-amber-100"><!-- ברמן: אין מחיר זיכוי/פיקדון -->
               <summary class="p-2.5 flex items-center justify-between text-[11px] text-amber-800 font-black"><span>אפשרויות מחיר נוספות</span><i class="fa-solid fa-chevron-down hist-chevron"></i></summary>
               <div class="px-2.5 pb-2.5">
                 <label class="text-[11px] text-slate-500 font-bold block mb-1">מחיר זיכוי בחזרות — רק אם שונה ממחיר הקנייה</label>
@@ -428,7 +428,7 @@
           </section>
 
           <section class="bg-white border border-slate-200 rounded-2xl p-3">
-            <div class="font-black text-sm text-slate-700 mb-3"><i class="fa-solid fa-boxes-stacked text-amber-600 ml-1"></i> הגדרות ארגז — לבלש ולכפתור "+ ארגז"</div>
+            <div class="font-black text-sm text-slate-700 mb-3"><i class="fa-solid fa-basket-shopping text-amber-600 ml-1"></i> לחם בתפזורת</div>
             <input id="prod_defaultUnit" type="hidden" value="carton">
             <div class="hidden"><!-- v16: שדות הזמנה — אין מסך הזמנות בתנובה -->
             <label class="text-[11px] text-slate-400 font-bold block mb-1.5">איך מזמינים בדרך כלל?</label>
@@ -439,17 +439,17 @@
             <label id="prod_averageLabel" class="text-[11px] text-slate-400 font-bold block mb-1">כמות מומלצת להזמנה</label>
             <input id="prod_average" type="text" inputmode="numeric" class="w-full p-3 rounded-xl border-2 border-slate-200 outline-none text-center font-black focus:border-blue-500 mb-3" placeholder="לדוגמה 1">
             </div>
-            <label class="flex items-start gap-2 p-3 rounded-xl bg-amber-50 border border-amber-100 cursor-pointer">
+            <label class="hidden items-start gap-2 p-3 rounded-xl bg-amber-50 border border-amber-100 cursor-pointer"><!-- ברמן: אין ארגזים שלמים -->
               <input id="prod_wholeCarton" type="checkbox" class="mt-1 w-4 h-4 accent-amber-600">
-              <span><span class="block text-sm font-black text-amber-900">המוצר מתקבל רק בארגזים שלמים</span><span class="block text-[10px] text-amber-700 font-bold mt-0.5">משמש את הבלש כדי לבדוק רק כפולות של ארגז שלם.</span></span>
+              <span><span class="block text-sm font-black text-amber-900">המוצר מתקבל רק בארגזים שלמים</span></span>
             </label>
             <div id="prod_boxSizeWrap" class="hidden mt-2.5">
               <label class="text-[11px] text-slate-500 font-bold block mb-1">כמה יחידות יש בארגז?</label>
               <input id="prod_boxSize" type="text" inputmode="numeric" class="w-full p-3 rounded-xl border-2 border-amber-200 bg-amber-50 outline-none text-center font-black focus:border-amber-500" placeholder="לדוגמה 12">
             </div>
-            <label class="hidden items-start gap-2 mt-3 p-3 rounded-xl bg-emerald-50/60 border border-emerald-100 cursor-pointer"><!-- ברמן: אין חיוב/זיכוי ארגזים -->
-              <input id="prod_quickCrate" type="checkbox" class="mt-0.5 w-5 h-5 accent-emerald-600">
-              <span><span class="block text-sm font-black text-slate-700">הצג בכפתור המהיר של הארגזים</span><span class="block text-[10px] text-slate-400 font-bold">לפריטים בלי ברקוד שמחויבים כשורה — ארגזים, לולים, משטחים. מופיע בקליטה ובחזרות.</span></span>
+            <label class="flex items-start gap-2 mt-1 p-3 rounded-xl bg-amber-50/70 border border-amber-200 cursor-pointer">
+              <input id="prod_quickCrate" type="checkbox" class="mt-0.5 w-5 h-5 accent-amber-600">
+              <span><span class="block text-sm font-black text-amber-900">הצג בבורר התפזורת</span><span class="block text-[10px] text-amber-700 font-bold">ללחמים שמגיעים בתפזורת — בחירה מהירה מרשימה בקליטה ובהחזרות, בלי לזכור ברקוד.</span></span>
             </label>
             <label class="hidden items-center justify-between gap-3 mt-3 p-3 rounded-xl bg-slate-50 border border-slate-100 cursor-pointer"><!-- v16: אין מסך הזמנות -->
               <span><span class="block text-sm font-black text-slate-700">הצג במסך ההזמנה</span><span class="block text-[10px] text-slate-400 font-bold">כיבוי מסתיר רק מההזמנה; המוצר נשאר בקליטה ובחזרות.</span></span>
@@ -711,7 +711,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '3'; // גרסה 3: ניקוי דוגמאות טקסט שנשארו מתנובה (קוטג' ← לחם)
+const APP_VERSION = '4'; // גרסה 4: בורר לחם בתפזורת; הוסרו 'ארגזים שלמים' ו'אפשרויות מחיר נוספות' (וגם ניקוי טקסטים של גרסה 3)
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -2791,6 +2791,7 @@ function renderReturns() {
     '<button data-role="ret-slot" data-slot="' + key + '" class="btn-tap flex-1 py-2.5 rounded-lg font-black text-sm ' + (returnsSlot === key ? 'bg-white shadow text-emerald-800' : 'text-slate-500') + '">' + label + (cnt ? ' <span class="text-[10px] bg-rose-100 text-rose-700 rounded-full px-1.5">' + cnt + '</span>' : '') + '</button>';
   app.innerHTML = histBar +
     '<button data-role="ret-scan" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 text-lg font-black flex items-center justify-center gap-2 mb-2 shadow-lg"><i class="fa-solid fa-barcode text-xl"></i> סרוק פריט</button>' +
+    '<button data-role="ret-crates" class="btn-tap w-full bg-amber-50 border-2 border-amber-300 text-amber-900 rounded-2xl py-3 font-black flex items-center justify-center gap-2 mb-2"><i class="fa-solid fa-basket-shopping"></i> החזרת לחם בתפזורת</button>' +
     '<details class="bg-white rounded-xl border border-slate-200 shadow-sm mb-3"><summary class="cursor-pointer p-3 font-black text-sm text-slate-600"><i class="fa-solid fa-circle-question text-slate-400"></i> לא מצליח לסרוק?</summary><div class="px-3 pb-3">' +
       '<div class="relative mb-2"><i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i><input id="returnsSearch" type="text" inputmode="search" autocomplete="off" placeholder="חפש מוצר לפי שם..." class="w-full bg-white border border-slate-200 rounded-xl py-3 pr-9 pl-3 text-sm font-bold outline-none focus:border-blue-500"></div>' +
       '<div id="returnsResults" class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-3 hidden"></div>' +
@@ -4700,15 +4701,15 @@ function isQuickCrate(p) {
 }
 function openCratePicker(target) {
   const found = (products || []).filter(isQuickCrate).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'he'));
-  if (!found.length) { showToast('לא הוגדרו מוצרי ארגזים — סמן "הצג בכפתור המהיר של הארגזים" בכרטיס מוצר', null, null, 3600); return; }
+  if (!found.length) { showToast('לא סומנו מוצרי תפזורת — פתח את כרטיס המוצר וסמן "הצג בבורר התפזורת"', null, null, 3800); return; }
   const old = document.getElementById('cratePickerOverlay');
   if (old) old.remove();
   const ov = document.createElement('div');
   ov.id = 'cratePickerOverlay';
   ov.className = 'fixed inset-0 bg-black/50 z-[70] flex items-end justify-center p-3';
   ov.innerHTML = '<div class="bg-white w-full max-w-md rounded-3xl p-4 shadow-2xl">' +
-    '<div class="flex items-center justify-between mb-2"><div class="font-black text-slate-800 text-lg"><i class="fa-solid fa-boxes-stacked text-emerald-600"></i> ארגזים</div><button data-crate-close class="btn-tap w-9 h-9 rounded-lg bg-slate-100 text-slate-500"><i class="fa-solid fa-xmark"></i></button></div>' +
-    '<div class="text-[11px] text-slate-400 font-bold mb-2">על הארגז עצמו אין ברקוד — לכן מוסיפים מכאן. בתעודה הם שורות רגילות.</div>' +
+    '<div class="flex items-center justify-between mb-2"><div class="font-black text-slate-800 text-lg"><i class="fa-solid fa-basket-shopping text-amber-700"></i> לחם בתפזורת</div><button data-crate-close class="btn-tap w-9 h-9 rounded-lg bg-slate-100 text-slate-500"><i class="fa-solid fa-xmark"></i></button></div>' +
+    '<div class="text-[11px] text-slate-400 font-bold mb-2">לחם שמגיע בתפזורת — בוחרים מהרשימה בלי ברקוד. בתעודה זו שורה רגילה לכל דבר.</div>' +
     found.map(p => '<button data-crate-id="' + p.id + '" class="btn-tap w-full flex items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 mb-1.5"><span class="font-black text-slate-800 text-right">' + htmlEscape(p.name) + '</span><span class="font-black text-emerald-700 shrink-0">₪' + fmtMoney(Number(p.price) || 0) + '</span></button>').join('') +
   '</div>';
   ov.addEventListener('click', (e) => {
@@ -4750,7 +4751,7 @@ function promptQty(p, target, nextMode) {
   if (again) {
     const crateFlow = qtyNextMode === 'crates';
     again.classList.toggle('hidden', !crateFlow);
-    if (crateFlow) again.innerHTML = '<i class="fa-solid fa-boxes-stacked"></i> שמור והוסף ארגז נוסף';
+    if (crateFlow) again.innerHTML = '<i class="fa-solid fa-basket-shopping"></i> שמור והוסף תפזורת';
   }
   const m = $('qtyModal'); m.classList.remove('hidden'); m.classList.add('flex');
   setTimeout(() => { const i = $('qtyVal'); if (i) { i.focus(); i.select(); } }, 80);
@@ -4908,6 +4909,7 @@ function renderReceiving() {
   const progress = receivingProgressHtml(t);
   app.innerHTML = banner + topButtons + noteBar + progress +
     '<button data-role="rc-scan" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 font-black text-lg flex items-center justify-center gap-3 shadow-lg mb-2"><i class="fa-solid fa-barcode text-2xl"></i> סרוק פריט לתעודה</button>' +
+    '<button data-role="rc-crates" class="btn-tap w-full bg-amber-50 border-2 border-amber-300 text-amber-900 rounded-2xl py-3 font-black text-base flex items-center justify-center gap-2 mb-2"><i class="fa-solid fa-basket-shopping"></i> הוסף לחם בתפזורת</button>' +
     '<details class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4"><summary class="cursor-pointer p-3 font-black text-sm text-slate-600"><i class="fa-solid fa-circle-question text-slate-400"></i> לא מצליח לסרוק?</summary><div class="px-3 pb-3">' +
       '<div class="text-[11px] font-bold text-slate-400 mb-1.5"><i class="fa-solid fa-keyboard"></i> הסורק לא קורא? הקלד את קוד הפריט שמודפס בתעודה (2–4 ספרות)</div>' +
       '<input id="rcDigits" type="text" inputmode="numeric" placeholder="למשל: 236" class="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-base font-black text-center outline-none focus:border-blue-500" dir="ltr">' +
@@ -14980,6 +14982,8 @@ app.addEventListener('click', (e) => {
   else if (role === 'clear-history') showConfirm('ניקוי היסטוריה', 'למחוק את כל היסטוריית ההזמנות? יישמר גיבוי בסל מחזור.', 'מחק הכל', () => clearAllDocs('history'));
   else if (role === 'clear-returns-history') showConfirm('ניקוי היסטוריה', 'למחוק את כל היסטוריית החזרות? יישמר גיבוי בסל מחזור.', 'מחק הכל', () => clearAllDocs('returns'));
   else if (role === 'rc-scan') openReceivingScanner();
+  else if (role === 'rc-crates') { openCratePicker('receipt'); }
+  else if (role === 'ret-crates') { openCratePicker('returns'); }
   else if (role === 'ret-slot') { const de = $('retDocDate'); if (de) returnsDocDate = de.value || ''; switchReturnsSlot(t.dataset.slot); }
   else if (role === 'rc-open') { const en = readNoteEntry(receiptNotes.length === 0); if (en === false) return; if (en) receiptNotes.push(en); receiptDocDate = (($('rcDocDate') || {}).value || '').trim() || null; recomputeNoteTotal(); receiptOpened = true; receiptDupConfirmed = false; receiptLinesConfirmed = false; saveReceiptDraft(); refreshReceipt(); openReceivingScanner(); }
   else if (role === 'rc-cancel') { showConfirm('ביטול תעודה', 'לבטל את התעודה הנוכחית? כל הפריטים שנסרקו יימחקו.', 'בטל תעודה', () => { receiptList = []; receiptNotes = []; receiptDocDate = null; receiptDraftId = null; recomputeNoteTotal(); receiptOpened = false; editingNotes = false; reconcileData = null; receiptDupConfirmed = false; receiptLinesConfirmed = false; saveReceiptDraft(); setView('receiving'); }); }
