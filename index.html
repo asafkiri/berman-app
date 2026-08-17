@@ -347,9 +347,9 @@
     <!-- מוצר ידני לחזרה (ללא ברקוד) -->
     <div id="manualReturnModal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm items-center justify-center p-4 z-[70]">
       <div class="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden">
-        <div class="p-5 pb-3"><div class="flex items-center gap-2"><i class="fa-solid fa-pen-to-square text-blue-600 text-xl"></i><h3 class="font-black text-lg text-slate-800">מוצר ידני לחזרה</h3></div><p class="text-slate-500 text-sm mt-1">למוצר ללא ברקוד (מארז שנפתח). ודא מול המנהל את המחיר.</p></div>
+        <div class="p-5 pb-3"><div class="flex items-center gap-2"><i class="fa-solid fa-pen-to-square text-blue-600 text-xl"></i><h3 class="font-black text-lg text-slate-800">מוצר ידני לחזרה</h3></div><p class="text-slate-500 text-sm mt-1">למוצר ללא ברקוד (שקית שנפתחה). ודא מול המנהל את המחיר.</p></div>
         <div class="px-5 space-y-3">
-          <div><label class="text-xs font-bold text-slate-500 mb-1 block">שם המוצר</label><input id="mr_name" type="text" class="w-full h-11 border-2 border-slate-200 rounded-xl px-3 font-bold outline-none focus:border-blue-500" placeholder="לדוגמה: קוטג׳ מהמארז"></div>
+          <div><label class="text-xs font-bold text-slate-500 mb-1 block">שם המוצר</label><input id="mr_name" type="text" class="w-full h-11 border-2 border-slate-200 rounded-xl px-3 font-bold outline-none focus:border-blue-500" placeholder="לדוגמה: לחמניה משקית שנפתחה"></div>
           <div class="flex gap-2">
             <div class="flex-1"><label class="text-xs font-bold text-slate-500 mb-1 block">מחיר ליח׳ (ללא מע״מ)</label><div class="flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500"><span class="text-slate-400 font-black">₪</span><input id="mr_price" data-role="mr-live" type="text" inputmode="decimal" class="w-full h-11 text-center font-black outline-none bg-transparent" placeholder="0.00"></div></div>
             <div class="w-24"><label class="text-xs font-bold text-slate-500 mb-1 block">כמות</label><input id="mr_qty" data-role="mr-live" type="text" inputmode="numeric" value="1" class="w-full h-11 text-center font-black border-2 border-slate-200 rounded-xl outline-none focus:border-blue-500"></div>
@@ -711,7 +711,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '2'; // גרסה 2: הוסרו חיוב וזיכוי ארגזים — לא קיימים בברמן
+const APP_VERSION = '3'; // גרסה 3: ניקוי דוגמאות טקסט שנשארו מתנובה (קוטג' ← לחם)
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -2732,7 +2732,7 @@ function renderNotes() {
   }).join('') : '<div class="text-center py-10 text-slate-400"><i class="fa-regular fa-note-sticky text-4xl mb-3"></i><div class="font-bold">אין הערות פתוחות</div></div>';
   app.innerHTML =
     '<h2 class="font-black text-2xl px-1 py-1 text-slate-800">הערות ותזכורות</h2>' +
-    '<div class="text-xs text-slate-400 px-1 mb-3">למשל: "אסף חייב זיכוי על חלב". ההערה נשארת עד שתסמנו <i class="fa-solid fa-check text-green-500"></i> בוצע.</div>' +
+    '<div class="text-xs text-slate-400 px-1 mb-3">למשל: "הנהג חייב זיכוי על לחם אחיד". ההערה נשארת עד שתסמנו <i class="fa-solid fa-check text-green-500"></i> בוצע.</div>' +
     '<div class="flex gap-2 mb-4">' +
       '<input id="newNote" type="text" placeholder="כתוב הערה..." class="flex-1 p-3 rounded-xl border border-slate-200 outline-none bg-white">' +
       '<button data-role="add-note" class="btn-tap bg-blue-600 text-white px-4 rounded-xl font-black"><i class="fa-solid fa-plus"></i></button>' +
