@@ -711,7 +711,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '5'; // גרסה 5: כפתור 'נקה תאריך — חזרה להיום' (איפוס התאריך של אייפון לא באמת מרוקן את השדה)
+const APP_VERSION = '6'; // גרסה 6: סריקה מזהה ברקוד מלא מהאריזה מול קטע הברקוד שמודפס במחירון
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -772,10 +772,25 @@ function normalizeBarcode(value) {
   const raw = String(value == null ? '' : value).replace(/[\s\u00AD\u061C\u200B-\u200F\u2060-\u2069\uFEFF]/g, '').trim();
   return /^[0-9-]+$/.test(raw) ? raw.replace(/-/g, '') : raw;
 }
+// במחירון ברמן מודפס קטע ברקוד פנימי (5–7 ספרות); הסורק קורא את הקוד
+// המלא מהאריזה (12–13 ספרות). הקטע יושב בסוף הקוד המלא — לפעמים לפני
+// ספרת הביקורת האחרונה. לכן ההתאמה: שוויון מלא, או שהקוד הסרוק מסתיים
+// בקטע השמור (עם או בלי ספרת הביקורת). קטעים קצרים מ-5 ספרות לא
+// משתתפים בהתאמת סיומת — כדי לא לתפוס בטעות.
+function barcodeMatchesProduct(scanKey, p) {
+  const b = normalizeBarcode(p && p.barcode);
+  if (!b || !scanKey) return false;
+  if (b === scanKey) return true;
+  if (scanKey.length > b.length && b.length >= 5) {
+    if (scanKey.endsWith(b)) return true;
+    if (scanKey.slice(0, -1).endsWith(b)) return true;
+  }
+  return false;
+}
 function findProductByBarcode(value, exceptId) {
   const key = normalizeBarcode(value);
   if (!key) return null;
-  return products.find(p => p.id !== exceptId && normalizeBarcode(p.barcode) === key) || null;
+  return products.find(p => p.id !== exceptId && barcodeMatchesProduct(key, p)) || null;
 }
 // ===== ברמן: קוד הפריט (2–4 ספרות) הוא המפתח — לא הברקוד =====
 // ברקודים יכולים לחזור על כמה מוצרים או לחסר; לכן חיפוש ברקוד מחזיר רשימה.
@@ -788,7 +803,9 @@ function findProductByCode(codeVal, exceptId) {
 function findProductsByBarcode(value) {
   const key = normalizeBarcode(value);
   if (!key) return [];
-  return products.filter(p => normalizeBarcode(p.barcode) === key);
+  const exact = products.filter(p => normalizeBarcode(p.barcode) === key);
+  if (exact.length) return exact;
+  return products.filter(p => barcodeMatchesProduct(key, p));
 }
 // מחיר סופי = מחירון × (1 − אחוז הנחה קבועה). לא מעגלים את מחיר היחידה —
 // רק סכומי שורות מתעגלים לאגורה בסוף (כמו שברמן מחשבת את "נטו לחיוב").
@@ -4560,10 +4577,9 @@ function returnTotals(r) {
 }
 
 // --- סורק קליטה ---
-const RECEIVING_UNKNOWN_BARCODE_MSG = '❌ ברקוד לא קיים במערכת — הוסף את המוצר במסך מוצרים ומחירים וסרוק שוב';
-function rejectUnknownReceivingBarcode() {
+function rejectUnknownReceivingBarcode(code) {
   buzz([120, 80, 120]);
-  showToast(RECEIVING_UNKNOWN_BARCODE_MSG, null, null, 5000);
+  showToast('❌ ברקוד לא מזוהה' + (code ? ': ' + code : '') + ' — בדוק את הברקוד בכרטיס המוצר, או הוסף מוצר חדש', null, null, 5200);
 }
 function openReceivingScanner() {
   scanPurpose = 'receiving';
@@ -4579,7 +4595,7 @@ function updateScanOverlay(name) {
 function handleReceivingScan(code) {
   code = (code || '').trim(); if (!code) return;
   const matches = findProductsByBarcode(code);
-  if (!matches.length) { rejectUnknownReceivingBarcode(); return; }
+  if (!matches.length) { rejectUnknownReceivingBarcode(code); return; }
   if (matches.length > 1) { openBarcodeChoicePicker(matches, p => proceedScannedProduct(p, 'receipt')); return; }
   proceedScannedProduct(matches[0], 'receipt');
 }
@@ -4656,7 +4672,7 @@ function openReturnsScanner() {
 function handleReturnsScan(code) {
   code = (code || '').trim(); if (!code) return;
   const matches = findProductsByBarcode(code);
-  if (!matches.length) { buzz([120, 80, 120]); showToast('❌ ברקוד לא קיים במערכת — הוסף את המוצר במסך מוצרים ומחירים, או השתמש ב\'הוסף מוצר ידני\'', null, null, 5000); return; }
+  if (!matches.length) { buzz([120, 80, 120]); showToast('❌ ברקוד לא מזוהה: ' + code + ' — בדוק את הברקוד בכרטיס המוצר, או השתמש ב\'הוסף מוצר ידני\'', null, null, 5200); return; }
   if (matches.length > 1) { openBarcodeChoicePicker(matches, p => proceedScannedProduct(p, 'returns')); return; }
   proceedScannedProduct(matches[0], 'returns');
 }
