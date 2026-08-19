@@ -716,7 +716,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '8'; // גרסה 8: מחירי קופה — שדה לכל מוצר, ייבוא דוח שינוי מחירים (PDF), מחיר קופה בולט בקליטה
+const APP_VERSION = '9'; // גרסה 9: קובץ הגיבוי נקרא ומסומן ברמן (לא תנובה); גיבויים ישנים עדיין נקלטים
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -2211,7 +2211,8 @@ function backupTotalCount(payload) {
   return Object.keys(payload.collections).reduce((a, name) => a + backupDocCount(payload, name), 0);
 }
 function validBackupPayload(payload) {
-  return !!(payload && payload.collections && typeof payload.collections === 'object' && (payload.backupType === 'tnuva-firestore-full' || payload.appId === appId));
+  // גיבויים ישנים נכתבו עם backupType של תנובה — ממשיכים לקבל אותם לצד החדש
+  return !!(payload && payload.collections && typeof payload.collections === 'object' && (payload.backupType === 'berman-firestore-full' || payload.backupType === 'tnuva-firestore-full' || payload.appId === appId));
 }
 function backupSummaryHtml(payload) {
   if (!payload || !payload.collections) return '';
@@ -2257,7 +2258,7 @@ async function exportFullBackup() {
   showCloudBusy('מכין גיבוי מלא...');
   try {
     const payload = {
-      backupType: 'tnuva-firestore-full',
+      backupType: 'berman-firestore-full',
       backupVersion: 1,
       appId,
       appVersion: 'v107_receiving_improvements',
@@ -2283,7 +2284,7 @@ async function exportFullBackup() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'tnuva-backup-' + backupNowStamp() + '.json';
+    a.download = 'berman-backup-' + backupNowStamp() + '.json';
     document.body.appendChild(a);
     a.click();
     setTimeout(() => { try { URL.revokeObjectURL(url); a.remove(); } catch (e) {} }, 1000);
