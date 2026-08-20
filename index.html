@@ -716,7 +716,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '10'; // גרסה 10: הבלש מקבל מחירים מדויקים — עיגול פר-שורה במסך הבדיקה הסיט את הפער והפיל אותו
+const APP_VERSION = '11'; // גרסה 11: שליחה לקבוצה בוואטסאפ — וואטסאפ נפתח עם ההודעה ובוחרים את הקבוצה בבורר
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -3648,8 +3648,17 @@ async function saveReturnsWithoutSending() {
 }
 function renderContactPicker() {
   const c = $('contactList'); if (!c) return;
-  if (!contacts.length) { c.innerHTML = '<div class="text-center p-4 text-slate-500">לא הוגדרו אנשי קשר. הוסף בהגדרות.</div>'; return; }
-  c.innerHTML = contacts.map(ct =>
+  // שליחה לקבוצה: לוואטסאפ אין קישור ישיר לקבוצה, אבל קישור בלי נמען
+  // (wa.me/?text=...) פותח את וואטסאפ עם ההודעה מוכנה ובורר צ'אטים —
+  // שם בוחרים את הקבוצה. הרשומה בהיסטוריה נשמרת כ"קבוצה בוואטסאפ".
+  const groupBtn =
+    '<button data-role="send-to" data-id="__group__" class="btn-tap w-full p-4 rounded-2xl border-2 border-emerald-200 bg-emerald-50 hover:border-emerald-500 flex items-center justify-between">' +
+      '<div class="flex items-center gap-3"><div class="bg-emerald-100 text-emerald-600 p-2 rounded-full"><i class="fa-solid fa-user-group text-xl"></i></div>' +
+      '<div class="text-right"><div class="font-black text-slate-800 text-lg">שליחה לקבוצה</div><div class="text-[11px] text-slate-500 font-bold">וואטסאפ ייפתח עם ההודעה — בחר שם את הקבוצה</div></div></div>' +
+      '<i class="fa-solid fa-chevron-left text-slate-300"></i>' +
+    '</button>';
+  if (!contacts.length) { c.innerHTML = groupBtn + '<div class="text-center p-4 text-slate-500">לא הוגדרו אנשי קשר. הוסף בהגדרות.</div>'; return; }
+  c.innerHTML = groupBtn + contacts.map(ct =>
     '<button data-role="send-to" data-id="' + htmlEscape(ct.id) + '" class="btn-tap w-full p-4 rounded-2xl border-2 border-slate-100 hover:border-green-500 flex items-center justify-between">' +
       '<div class="flex items-center gap-3"><div class="bg-green-100 text-green-600 p-2 rounded-full"><i class="fa-brands fa-whatsapp text-xl"></i></div>' +
       '<div class="text-right"><div class="font-black text-slate-800 text-lg">' + htmlEscape(ct.name) + '</div><div class="text-sm text-slate-500" dir="ltr">' + htmlEscape(ct.phone) + '</div></div></div>' +
@@ -3725,11 +3734,15 @@ async function performSend(contact) {
   const note = ($('orderNote') ? $('orderNote').value.trim() : '');
   let phone = (contact.phone || '').replace(/[-+\s]/g, '');
   if (phone.startsWith('0')) phone = '972' + phone.substring(1);
+  // שליחה לקבוצה: בלי נמען — וואטסאפ נפתח עם ההודעה ובורר צ'אטים לבחירת הקבוצה
+  const waUrl = (msg) => contact.group
+    ? 'https://wa.me/?text=' + encodeURIComponent(msg)
+    : 'https://wa.me/' + phone + '?text=' + encodeURIComponent(msg);
   if (type === 'returns') {
     if (sendCtx.resendExisting) {
       // שליחה חוזרת של תעודה קיימת — רק וואטסאפ, בלי ליצור רשומה חדשה ובלי לגעת בטיוטה
       const msg = buildReturnsMessage(items, note);
-      const url = 'https://wa.me/' + phone + '?text=' + encodeURIComponent(msg);
+      const url = waUrl(msg);
       sendCtx = null; hideSend(); window.location.href = url;
       return;
     }
@@ -3745,7 +3758,7 @@ async function performSend(contact) {
     const saved = await runCloudTask('save returns before send', { op: 'set', path: dataPath('returns', opId), data, operationId: opId });
     if (!saved) return;
     const msg = buildReturnsMessage(items, note);
-    const url = 'https://wa.me/' + phone + '?text=' + encodeURIComponent(msg);
+    const url = waUrl(msg);
     returnsList = []; returnsSlots[returnsSlot] = returnsList; returnsDocDate = ''; returnsDocDates[returnsSlot] = ''; returnsDraftIds[returnsSlot] = null; saveReturnsDraft();
     sendCtx = null; hideSend(); setView('returnsHistory'); window.location.href = url;
     return;
@@ -3755,7 +3768,7 @@ async function performSend(contact) {
   const saved = await runCloudTask('save order before send', { op: 'set', path: dataPath('history', opId), data, operationId: opId });
   if (!saved) return;
   const msg = buildMessage(items, note);
-  const url = 'https://wa.me/' + phone + '?text=' + encodeURIComponent(msg);
+  const url = waUrl(msg);
   if (resetCurrent) {
     orderState = {};
     products.forEach(p => orderState[p.id] = { amount: '', unit: normalizeOrderUnit(p.defaultUnit) });
@@ -14978,7 +14991,7 @@ $('toastBtn').addEventListener('click', doUndo);
 $('closeSend').addEventListener('click', hideSend);
 $('searchInput').addEventListener('input', (e) => { $('clearSearch').classList.toggle('hidden', !e.target.value); applySearch(e.target.value); });
 $('clearSearch').addEventListener('click', () => { $('searchInput').value = ''; $('clearSearch').classList.add('hidden'); applySearch(''); });
-$('contactList').addEventListener('click', (e) => { const b = e.target.closest('[data-role="send-to"]'); if (!b) return; const ct = contacts.find(x => x.id === b.dataset.id); if (ct) performSend(ct); });
+$('contactList').addEventListener('click', (e) => { const b = e.target.closest('[data-role="send-to"]'); if (!b) return; if (b.dataset.id === '__group__') { performSend({ name: 'קבוצה בוואטסאפ', phone: '', group: true }); return; } const ct = contacts.find(x => x.id === b.dataset.id); if (ct) performSend(ct); });
 $('sendModal').addEventListener('click', (e) => { const b = e.target.closest('[data-role="ret-save-only"]'); if (b) saveReturnsWithoutSending(); });
 
 app.addEventListener('input', (e) => {
