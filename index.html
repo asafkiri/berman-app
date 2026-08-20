@@ -716,7 +716,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '9'; // גרסה 9: קובץ הגיבוי נקרא ומסומן ברמן (לא תנובה); גיבויים ישנים עדיין נקלטים
+const APP_VERSION = '10'; // גרסה 10: הבלש מקבל מחירים מדויקים — עיגול פר-שורה במסך הבדיקה הסיט את הפער והפיל אותו
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -5232,7 +5232,11 @@ function openReconcile() {
   const day = activeReceiptDate();
   reconcileData = receiptList.map(it => {
     const p = products.find(x => x.id === it.productId);
-    const base = r2(Number(p && p.price) || 0);
+    // מחיר השורה נשאר בדיוק מלא (5.7408, 10.962) — בברמן המחיר נגזר
+    // ממחירון×הנחה ועיגול פר-שורה מזיז את הסכום בכמה אגורות על תעודה
+    // שלמה, והפער שהבלש מקבל כבר לא מתאים לאף מחיר מוצר. העיגול נעשה
+    // פעם אחת בסוף הסכימה (reconcileNoteInc), כמו בקליטה וכמו בנייר.
+    const base = Number(p && p.price) || 0;
     const pr = promoForProduct(it.productId, day);
     const on = promoTriggered(pr, day);
     const pct = on ? promoPctOf(pr, base) : 0;
@@ -5423,7 +5427,9 @@ const DETECTIVE_TOLERANCE_STEPS = [0, 50, 100, 500, 10000]; // מאיות אגו
 const DETECTIVE_QUESTION_POOL_LIMIT = 96; // שואלים רק כשכל סט האפשרויות נאסף; מעבר לכך עוברים לברקודים
 function detectiveEffectiveProductPrice(p) {
   if (!p) return { price: 0, promoOn: false, promoPct: 0 };
-  const base = r2(Number(p.price) || 0);
+  // בדיוק מלא גם כאן: מועמד מהקטלוג מושווה לפער שנבנה ממחירים מדויקים,
+  // ועיגול הבסיס לאגורה היה מסיט מועמד בכמות גדולה אל מחוץ לסבילות.
+  const base = Number(p.price) || 0;
   const day = activeReceiptDate();
   const pr = promoForProduct(p.id, day);
   // v206: מועמד של הבלש הוא מוצר שחסר — לא נסרק — ולכן הסל החי לעולם לא
@@ -5879,7 +5885,7 @@ function detectivePromoFlipSolve(gap, unitGap) {
       if (result) break;
     }
     if (!result) continue;
-    result.promoFlip = { promoId: pr.id, promoName: pr.name || '', pct: pct };
+    result.promoFlip = { promoId: pr.id, promoName: pr.name || '' }; // pct לא היה מוגדר כאן — קרס ברגע שנמצא פתרון flip
     return result;
   }
   return null;
