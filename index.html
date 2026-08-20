@@ -716,7 +716,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '11'; // גרסה 11: שליחה לקבוצה בוואטסאפ — וואטסאפ נפתח עם ההודעה ובוחרים את הקבוצה בבורר
+const APP_VERSION = '12'; // גרסה 12: שליחה לקבוצה — הטקסט עובר (סכמת whatsapp:// ישירה) + העתקה ללוח כגיבוי
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -3734,16 +3734,25 @@ async function performSend(contact) {
   const note = ($('orderNote') ? $('orderNote').value.trim() : '');
   let phone = (contact.phone || '').replace(/[-+\s]/g, '');
   if (phone.startsWith('0')) phone = '972' + phone.substring(1);
-  // שליחה לקבוצה: בלי נמען — וואטסאפ נפתח עם ההודעה ובורר צ'אטים לבחירת הקבוצה
+  // שליחה לקבוצה: בלי נמען — וואטסאפ נפתח עם ההודעה ובורר צ'אטים לבחירת
+  // הקבוצה. חייבים את הסכמה הישירה whatsapp:// — הקישור wa.me בלי מספר
+  // עובר ב-iOS דרך universal link ומאבד את הטקסט בדרך.
   const waUrl = (msg) => contact.group
-    ? 'https://wa.me/?text=' + encodeURIComponent(msg)
+    ? 'whatsapp://send?text=' + encodeURIComponent(msg)
     : 'https://wa.me/' + phone + '?text=' + encodeURIComponent(msg);
+  // רשת ביטחון לקבוצה: ההודעה מועתקת גם ללוח — אם הטקסט לא הופיע
+  // בוואטסאפ (גרסאות iOS מסוימות), מדביקים אותו בקבוצה ידנית.
+  const groupCopy = (msg) => {
+    if (!contact.group) return;
+    try { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(msg).catch(() => {}); } catch (e) {}
+    showToast('בחר את הקבוצה בוואטסאפ · ההודעה גם הועתקה — אם הטקסט חסר, הדבק אותו', null, null, 5000);
+  };
   if (type === 'returns') {
     if (sendCtx.resendExisting) {
       // שליחה חוזרת של תעודה קיימת — רק וואטסאפ, בלי ליצור רשומה חדשה ובלי לגעת בטיוטה
       const msg = buildReturnsMessage(items, note);
       const url = waUrl(msg);
-      sendCtx = null; hideSend(); window.location.href = url;
+      sendCtx = null; hideSend(); groupCopy(msg); window.location.href = url;
       return;
     }
     const opId = sendCtx.operationId || returnsDraftIds[returnsSlot] || (sendCtx.operationId = makeOperationId('returns'));
@@ -3760,7 +3769,7 @@ async function performSend(contact) {
     const msg = buildReturnsMessage(items, note);
     const url = waUrl(msg);
     returnsList = []; returnsSlots[returnsSlot] = returnsList; returnsDocDate = ''; returnsDocDates[returnsSlot] = ''; returnsDraftIds[returnsSlot] = null; saveReturnsDraft();
-    sendCtx = null; hideSend(); setView('returnsHistory'); window.location.href = url;
+    sendCtx = null; hideSend(); setView('returnsHistory'); groupCopy(msg); window.location.href = url;
     return;
   }
   const opId = sendCtx.operationId || (sendCtx.operationId = makeOperationId('order'));
@@ -3777,6 +3786,7 @@ async function performSend(contact) {
   sendCtx = null;
   hideSend();
   setView('history');
+  groupCopy(msg);
   window.location.href = url;
 }
 
