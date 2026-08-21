@@ -179,6 +179,19 @@
       </div>
     </div>
 
+    <!-- גרסה 13: בוחר שיוך — תעודת החזרה פתוחה מול חוסר בתעודת קליטה -->
+    <div id="shortLinkModal" role="dialog" aria-modal="true" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm items-center justify-center p-4 z-50">
+      <div class="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden flex flex-col max-h-[80vh]">
+        <div class="p-5 pb-3 text-center">
+          <div class="mx-auto mb-3 w-14 h-14 rounded-full bg-teal-50 flex items-center justify-center"><i class="fa-solid fa-link text-teal-600 text-2xl"></i></div>
+          <h3 class="font-black text-lg text-slate-800 mb-1">שיוך חוסר לתעודת החזרה</h3>
+          <p id="shortLinkSub" class="text-slate-500 text-sm"></p>
+        </div>
+        <div id="shortLinkList" class="px-4 pb-2 overflow-y-auto space-y-2"></div>
+        <div class="p-4 pt-2"><button data-role="short-link-cancel" class="btn-tap w-full py-3 rounded-xl font-black bg-slate-100 text-slate-600">ביטול</button></div>
+      </div>
+    </div>
+
     <div id="promptModal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm items-center justify-center p-4 z-50">
       <div class="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden">
         <div class="p-5">
@@ -716,7 +729,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '12'; // גרסה 12: שליחה לקבוצה — הטקסט עובר (סכמת whatsapp:// ישירה) + העתקה ללוח כגיבוי
+const APP_VERSION = '13'; // גרסה 13: שיוך תעודת החזרה פתוחה לחוסר בתעודת קליטה — סגירה הדדית בלי הפחתה כפולה
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -2988,6 +3001,7 @@ function renderReturnsHistory() {
     return;
   }
   const pending = returns.filter(r => !r.credited).length;
+  const shortRcCands = shortLinkCandidateReceipts().length; // גרסה 13: יש חוסר פתוח שאפשר לשייך אליו?
   const balInfo = returnsBalance();
   let balBanner = '';
   if (balInfo.n > 0) {
@@ -3012,7 +3026,7 @@ function renderReturnsHistory() {
         ? '<div class="bg-amber-400 text-amber-900 px-4 py-2.5 flex items-center gap-2 font-black"><i class="fa-solid fa-hourglass-half"></i> ממתין לאימות זיכוי<button data-role="ret-resend" data-id="' + r.id + '" class="btn-tap mr-auto text-[11px] bg-white/80 text-amber-900 border border-amber-500/40 rounded-lg px-2.5 py-1 font-black"><i class="fa-brands fa-whatsapp"></i> שלח שוב</button></div>'
         : (openGap
           ? '<div class="bg-rose-500 text-white px-4 py-2.5 flex items-center gap-2 font-black"><i class="fa-solid fa-triangle-exclamation"></i> אומת — נותר פער בזיכוי</div>'
-          : '<div class="bg-green-500 text-white px-4 py-2.5 flex items-center gap-2 font-black"><i class="fa-solid fa-circle-check"></i> הזיכוי אומת' + (credDate ? ' · ' + credDate : '') + '</div>');
+          : '<div class="bg-green-500 text-white px-4 py-2.5 flex items-center gap-2 font-black"><i class="fa-solid fa-circle-check"></i> ' + (r.shortRetLink ? 'הזיכוי אומת · משויך לחוסר' : 'הזיכוי אומת') + (credDate ? ' · ' + credDate : '') + '</div>');
       const owedDiff = (r.creditNoteTotal != null) ? r2(rt.ex - r.creditNoteTotal) : 0;
       const breakdown = openGap ?
         ((Math.abs(owedDiff) > 0.5
@@ -3028,14 +3042,16 @@ function renderReturnsHistory() {
           '<div class="flex gap-2 items-stretch mb-2">' +
             '<div class="flex-1 flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500"><span class="text-slate-400 font-black">₪</span><input id="rvNote_' + r.id + '" type="text" inputmode="decimal" placeholder="סכום זיכוי ללא מע״מ" class="w-full h-11 text-center text-base font-black outline-none bg-transparent"></div>' +
             '<button data-role="rv-verify-inline" data-id="' + r.id + '" class="btn-tap px-4 rounded-xl font-black bg-green-600 text-white flex items-center gap-1"><i class="fa-solid fa-check-double"></i> בדוק</button>' +
-          '</div>' + '<button data-role="ret-edit-items" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + (pending >= 2 ? retMergeBtnHtml(r.id) : '') + '<button data-role="ret-delete" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>'
+          '</div>' + '<button data-role="ret-edit-items" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + (shortRcCands ? retShortLinkBtnHtml(r.id) : '') + (pending >= 2 ? retMergeBtnHtml(r.id) : '') + '<button data-role="ret-delete" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>'
         : breakdown +
           creditPartsInfoHtml(r) +
           (openGap ? creditAddNoteHtml(r) : '') +
-          '<div class="flex gap-2">' +
-            '<button data-role="rv-open" data-id="' + r.id + '" class="btn-tap flex-1 font-black py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 ' + (openGap ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700') + '"><i class="fa-solid ' + (openGap ? 'fa-wrench' : 'fa-pen') + '"></i> ' + (openGap ? 'תקן פער' : 'ערוך אימות') + '</button>' +
-            '<button data-role="uncredit" data-id="' + r.id + '" class="btn-tap px-3 font-bold py-2.5 rounded-xl text-sm bg-slate-100 text-slate-500"><i class="fa-solid fa-rotate-left"></i></button>' +
-          '</div>' + '<button data-role="ret-edit-items" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + '<button data-role="ret-delete" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>';
+          (r.shortRetLink
+            ? retShortLinkInfoHtml(r)
+            : '<div class="flex gap-2">' +
+              '<button data-role="rv-open" data-id="' + r.id + '" class="btn-tap flex-1 font-black py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 ' + (openGap ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700') + '"><i class="fa-solid ' + (openGap ? 'fa-wrench' : 'fa-pen') + '"></i> ' + (openGap ? 'תקן פער' : 'ערוך אימות') + '</button>' +
+              '<button data-role="uncredit" data-id="' + r.id + '" class="btn-tap px-3 font-bold py-2.5 rounded-xl text-sm bg-slate-100 text-slate-500"><i class="fa-solid fa-rotate-left"></i></button>' +
+            '</div>') + '<button data-role="ret-edit-items" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + '<button data-role="ret-delete" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>';
       return '<div class="bg-white rounded-2xl shadow-sm border ' + (credited ? (openGap ? 'border-rose-300' : 'border-green-300') : 'border-amber-300') + ' overflow-hidden mb-4">' +
         statusBar +
         '<div class="p-4 border-b border-slate-100 flex justify-between items-center">' +
@@ -11732,6 +11748,20 @@ let retMergeTargetId = null;
 function retMergeBtnHtml(id) {
   return '<button data-role="ret-merge" data-id="' + id + '" class="btn-tap w-full mt-2 bg-white border border-purple-200 text-purple-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-layer-group"></i> מזג עם תעודה פתוחה אחרת</button>';
 }
+// גרסה 13: כפתור ותיבת מידע של שיוך החזרה⇄חוסר בכרטיסי החזרות
+function retShortLinkBtnHtml(id) {
+  return '<button data-role="ret-short-link" data-id="' + id + '" class="btn-tap w-full mt-2 bg-white border border-teal-200 text-teal-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-link"></i> שייך לחוסר בתעודת קליטה</button>';
+}
+function retShortLinkInfoHtml(r) {
+  if (!r || !r.shortRetLink || !r.shortRetLink.receiptId) return '';
+  const rc = receipts.find(x => x.id === r.shortRetLink.receiptId);
+  const dateTxt = rc ? dDisp(storedReceiptDate(rc)) : '';
+  return '<div class="bg-teal-50 border-2 border-teal-200 rounded-xl p-2.5 text-xs mb-2">' +
+    '<div class="font-black text-teal-800 mb-1"><i class="fa-solid fa-link"></i> משויכת לחוסר בתעודת קליטה' + (dateTxt ? ' מ־' + dateTxt : '') + ' ✓</div>' +
+    '<div class="text-teal-700/80">הזיכוי אומת דרך השיוך — הכמויות מקזזות את החוסר במרכזת. ביטול השיוך פותח מחדש את שני הצדדים.</div>' +
+    '<button data-role="ret-short-unlink" data-id="' + r.id + '" class="btn-tap mt-2 w-full bg-white border border-slate-300 text-slate-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-link-slash"></i> בטל שיוך</button>' +
+  '</div>';
+}
 function retMergedNoteHtml(r) {
   const arr = (r && Array.isArray(r.mergedFrom)) ? r.mergedFrom : [];
   if (!arr.length) return '';
@@ -11854,6 +11884,195 @@ async function undoReturnMerge(targetBackup, sourceBackup, trashId) {
   } finally { hideCloudBusy(); }
 }
 
+// ===== גרסה 13: שיוך תעודת החזרה פתוחה לחוסר בתעודת קליטה =====
+// כשהנהג מזכה חוסר בתעודה נפרדת נוצר בדיוק הזוג הזה: תעודת קליטה עם חוסר
+// ותעודת החזרה שמכסה אותו. השיוך סוגר את שניהם בפעולה אחת ומונע הפחתה כפולה:
+// החלק המשויך של החוסר אינו מופחת מהתשלום (תעודת ההחזרה כבר מקזזת אותו
+// במרכזת), ותעודת ההחזרה מסומנת כזיכוי שאומת. שתי התעודות נשארות רשומות
+// נפרדות — בעמוד הסיכום של חשבונית ברמן כל אחת מהן שורה משלה.
+// הכיסוי מחושב חי (ראה receiptDiscrepancyInfo): מחיקת צד אחד פותחת את הצד
+// השני מחדש לבד, ושחזור מסל המחזור מרפא את השיוך בלי כתיבה נוספת.
+let shortLinkCtx = null; // { mode: 'receipt'|'return', id }
+function shortLinkCandidateReturns() {
+  return returns.filter(x => !x.credited && !(x.shortRetLink && x.shortRetLink.receiptId));
+}
+function shortLinkCandidateReceipts() {
+  return receipts.filter(rc => {
+    if (rc.shortRetLink && rc.shortRetLink.returnId) return false;
+    const di = receiptDiscrepancyInfo(rc);
+    return (di.shortItems || []).length > 0 && (Number(di.shortVal) || 0) > 0.009;
+  });
+}
+function shortLinkMatchHtml(openShort, retEx) {
+  const diff = r2(retEx - openShort);
+  if (Math.abs(diff) <= 0.02) return '<span class="text-emerald-700 font-black">התאמה מלאה ✓</span>';
+  if (diff < 0) return '<span class="text-amber-700 font-black">כיסוי חלקי — יישאר חוב ₪' + fmtMoney(-diff) + '</span>';
+  return '<span class="text-sky-700 font-black">מכסה את החוסר; ₪' + fmtMoney(diff) + ' נוספים הם החזרה רגילה</span>';
+}
+function openShortLinkPicker(mode, id) {
+  if (mode === 'receipt') {
+    const rc = receipts.find(x => x.id === id); if (!rc) return;
+    const di = receiptDiscrepancyInfo(rc);
+    const openShort = Math.max(0, r2(Number(di.shortVal) || 0));
+    if (!(openShort > 0.009)) { showToast('אין חוסר פתוח לשיוך בתעודה הזאת', null, null, 2600); return; }
+    const cands = shortLinkCandidateReturns();
+    if (!cands.length) { showToast('אין תעודת החזרה פתוחה לשיוך', null, null, 2600); return; }
+    shortLinkCtx = { mode, id };
+    const sub = $('shortLinkSub');
+    if (sub) sub.textContent = 'חוסר פתוח של ₪' + fmtMoney(openShort) + ' בתעודה מ־' + dDisp(storedReceiptDate(rc)) + '. בחר את תעודת ההחזרה (הזיכוי שרשם הנהג) שמכסה אותו.';
+    const list = $('shortLinkList');
+    if (list) list.innerHTML = cands.map(o => {
+      const t = returnTotals(o);
+      return '<button data-role="short-link-pick" data-id="' + o.id + '" class="btn-tap w-full p-3 rounded-2xl border-2 border-slate-100 hover:border-teal-400 text-right">' +
+        '<div class="flex items-center justify-between gap-2">' +
+          '<div class="min-w-0"><div class="font-black text-slate-800 text-sm">' + dDisp(o.docDate || o.date) + '</div>' +
+            '<div class="text-[11px] text-slate-400 mt-0.5">' + ((o.items || []).length) + ' פריטים · ' + shortLinkMatchHtml(openShort, t.ex) + '</div></div>' +
+          '<div class="font-black text-emerald-700 shrink-0">₪' + fmtMoney(t.ex) + '</div>' +
+        '</div></button>';
+    }).join('');
+  } else {
+    const r = returns.find(x => x.id === id);
+    if (!r || r.credited) { showToast('אפשר לשייך רק תעודת החזרה פתוחה', null, null, 2600); return; }
+    const cands = shortLinkCandidateReceipts();
+    if (!cands.length) { showToast('אין תעודת קליטה עם חוסר פתוח לשיוך', null, null, 2600); return; }
+    shortLinkCtx = { mode, id };
+    const retEx = returnTotals(r).ex;
+    const sub = $('shortLinkSub');
+    if (sub) sub.textContent = 'תעודת החזרה של ₪' + fmtMoney(retEx) + ' מ־' + dDisp(r.docDate || r.date) + '. בחר את תעודת הקליטה שהחוסר בה מכוסה בזיכוי הזה.';
+    const list = $('shortLinkList');
+    if (list) list.innerHTML = cands.map(rc => {
+      const di = receiptDiscrepancyInfo(rc);
+      const openShort = Math.max(0, r2(Number(di.shortVal) || 0));
+      const names = (di.shortItems || []).map(s => (Number(s.n) || 0) + ' × ' + htmlEscape(s.name || '')).join(' · ');
+      return '<button data-role="short-link-pick" data-id="' + rc.id + '" class="btn-tap w-full p-3 rounded-2xl border-2 border-slate-100 hover:border-teal-400 text-right">' +
+        '<div class="flex items-center justify-between gap-2">' +
+          '<div class="min-w-0"><div class="font-black text-slate-800 text-sm">' + dDisp(storedReceiptDate(rc)) + '</div>' +
+            '<div class="text-[11px] text-slate-400 mt-0.5 truncate">' + (names || 'חוסר') + ' · ' + shortLinkMatchHtml(openShort, retEx) + '</div></div>' +
+          '<div class="font-black text-rose-600 shrink-0">חוסר ₪' + fmtMoney(openShort) + '</div>' +
+        '</div></button>';
+    }).join('');
+  }
+  const m = $('shortLinkModal'); if (m) { m.classList.remove('hidden'); m.classList.add('flex'); }
+}
+function hideShortLinkModal() {
+  const m = $('shortLinkModal'); if (m) { m.classList.add('hidden'); m.classList.remove('flex'); }
+  shortLinkCtx = null;
+}
+function confirmShortLinkPick(pickId) {
+  const ctx = shortLinkCtx;
+  hideShortLinkModal();
+  if (!ctx) return;
+  const receiptId = ctx.mode === 'receipt' ? ctx.id : pickId;
+  const returnId = ctx.mode === 'receipt' ? pickId : ctx.id;
+  const rc = receipts.find(x => x.id === receiptId);
+  const r = returns.find(x => x.id === returnId);
+  if (!rc || !r || r.credited || (rc.shortRetLink && rc.shortRetLink.returnId)) { showToast('השיוך בוטל — אחת התעודות כבר לא זמינה', null, null, 3000); return; }
+  const di = receiptDiscrepancyInfo(rc);
+  const openShort = Math.max(0, r2(Number(di.shortVal) || 0));
+  const retEx = returnTotals(r).ex;
+  const diff = r2(retEx - openShort);
+  let extra;
+  if (Math.abs(diff) <= 0.02) extra = 'הסכומים תואמים במלואם (₪' + fmtMoney(openShort) + ') ✓';
+  else if (diff < 0) extra = 'תעודת ההחזרה (₪' + fmtMoney(retEx) + ') מכסה חלק מהחוסר (₪' + fmtMoney(openShort) + ') — היתרה ₪' + fmtMoney(-diff) + ' תישאר חוב פתוח.';
+  else extra = 'תעודת ההחזרה (₪' + fmtMoney(retEx) + ') גדולה מהחוסר (₪' + fmtMoney(openShort) + ') — ₪' + fmtMoney(diff) + ' הנוספים ייחשבו החזרת סחורה רגילה.';
+  showConfirm('שיוך חוסר לתעודת החזרה',
+    'לשייך את תעודת ההחזרה מ־' + dDisp(r.docDate || r.date) + ' לחוסר בתעודת הקליטה מ־' + dDisp(storedReceiptDate(rc)) + '? ' + extra + ' החלק המשויך לא יופחת מהתשלום — תעודת ההחזרה מקזזת אותו במרכזת.',
+    'שייך', () => linkShortToReturn(receiptId, returnId));
+}
+async function linkShortToReturn(receiptId, returnId) {
+  if (!db) { showToast('אין חיבור לענן — שיוך דורש חיבור.', null, null, 3500); return; }
+  showCloudBusy();
+  try {
+    // כמו במיזוג (v54): טרנזקציה עם קריאה טרייה, כדי ששני מכשירים לא ישייכו
+    // את אותה החזרה לשני חוסרים, או ישייכו תעודה שאומתה/נמחקה בינתיים.
+    const rcRef = doc(db, 'artifacts', appId, 'public', 'data', 'receipts', receiptId);
+    const rRef = doc(db, 'artifacts', appId, 'public', 'data', 'returns', returnId);
+    const done = await runTransaction(db, async (transaction) => {
+      const rcSnap = await transaction.get(rcRef);
+      const rSnap = await transaction.get(rRef);
+      if (!rcSnap.exists() || !rSnap.exists()) { const err = new Error('אחת התעודות כבר לא קיימת — ייתכן שנמחקה ממכשיר אחר.'); err.code = 'link-abort'; throw err; }
+      const rcFresh = { id: rcSnap.id, ...rcSnap.data() };
+      const rFresh = { id: rSnap.id, ...rSnap.data() };
+      if (rcFresh.shortRetLink && rcFresh.shortRetLink.returnId) { const err = new Error('לתעודת הקליטה כבר שויכה תעודת החזרה — בטל קודם את השיוך הקיים.'); err.code = 'link-abort'; throw err; }
+      if (rFresh.credited || (rFresh.shortRetLink && rFresh.shortRetLink.receiptId)) { const err = new Error('תעודת ההחזרה אומתה או שויכה בינתיים ממכשיר אחר.'); err.code = 'link-abort'; throw err; }
+      const diFresh = receiptDiscrepancyInfo(rcFresh);
+      if (!((Number(diFresh.shortVal) || 0) > 0.009)) { const err = new Error('אין עוד חוסר פתוח בתעודת הקליטה.'); err.code = 'link-abort'; throw err; }
+      const at = Date.now();
+      const retEx = returnTotals(rFresh).ex;
+      transaction.update(rcRef, { shortRetLink: { returnId: returnId, at: at } });
+      transaction.update(rRef, { shortRetLink: { receiptId: receiptId, at: at }, credited: true, creditedAt: at, creditStatus: 'ok', creditNoteTotal: retEx });
+      return { at, retEx };
+    });
+    const rc = receipts.find(x => x.id === receiptId);
+    const r = returns.find(x => x.id === returnId);
+    if (rc) rc.shortRetLink = { returnId: returnId, at: done.at };
+    if (r) { r.shortRetLink = { receiptId: receiptId, at: done.at }; r.credited = true; r.creditedAt = done.at; r.creditStatus = 'ok'; r.creditNoteTotal = done.retEx; }
+    buzz(24);
+    logAction('update', 'שיוך חוסר לתעודת החזרה', 'תעודת ההחזרה (זיכוי ₪' + fmtMoney(done.retEx) + ') שויכה לחוסר בתעודת הקליטה — שני הצדדים נסגרו יחד', { receiptId, returnId });
+    const diAfter = rc ? receiptDiscrepancyInfo(rc) : null;
+    showToast(diAfter && !diAfter.shortClosed
+      ? 'שויך ✓ — ההחזרה מכסה חלק מהחוסר; נותר חוב ₪' + fmtMoney(Math.max(0, r2(diAfter.shortVal)))
+      : 'שויך ✓ — החוסר ותעודת ההחזרה נסגרו יחד', 'בטל', () => unlinkShortReturn(receiptId, returnId));
+    if (currentView === 'receiptsHistory') renderReceiptsHistory();
+    else if (currentView === 'returnsHistory') renderReturnsHistory();
+  } catch (e) {
+    if (e && e.code === 'link-abort') showToast(e.message, null, null, 4200);
+    else { console.error('link short to return failed', e); showToast('השיוך נכשל — לא שיניתי כלום.', null, null, 4000); }
+  } finally { hideCloudBusy(); }
+}
+async function unlinkShortReturn(receiptId, returnId) {
+  if (!db) { showToast('אין חיבור לענן — ביטול שיוך דורש חיבור.', null, null, 3500); return; }
+  showCloudBusy();
+  try {
+    const rcRef = doc(db, 'artifacts', appId, 'public', 'data', 'receipts', receiptId);
+    const rRef = doc(db, 'artifacts', appId, 'public', 'data', 'returns', returnId);
+    const done = await runTransaction(db, async (transaction) => {
+      const rcSnap = await transaction.get(rcRef);
+      const rSnap = await transaction.get(rRef);
+      // סובלני לצד חסר (למשל אחרי מחיקת ההחזרה): מנקים כל צד שעדיין נושא את השיוך הזה.
+      const rcHas = rcSnap.exists() && rcSnap.data().shortRetLink && rcSnap.data().shortRetLink.returnId === returnId;
+      const rHas = rSnap.exists() && rSnap.data().shortRetLink && rSnap.data().shortRetLink.receiptId === receiptId;
+      if (!rcHas && !rHas) { const err = new Error('השיוך כבר בוטל.'); err.code = 'link-abort'; throw err; }
+      if (rcHas) transaction.update(rcRef, { shortRetLink: null });
+      if (rHas) transaction.update(rRef, { shortRetLink: null, credited: false, creditedAt: null, creditStatus: null, creditNoteTotal: null, creditNoteParts: null });
+      return { rcHas, rHas };
+    });
+    const rc = receipts.find(x => x.id === receiptId);
+    const r = returns.find(x => x.id === returnId);
+    if (done.rcHas && rc) rc.shortRetLink = null;
+    if (done.rHas && r) { r.shortRetLink = null; r.credited = false; r.creditedAt = null; r.creditStatus = null; r.creditNoteTotal = null; r.creditNoteParts = null; }
+    buzz(12);
+    logAction('update', 'ביטול שיוך חוסר–החזרה', 'השיוך בוטל — החוסר נפתח מחדש ותעודת ההחזרה חזרה להמתין לאימות זיכוי', { receiptId, returnId });
+    showToast('השיוך בוטל — החוסר וההחזרה נפתחו מחדש', null, null, 3000);
+    if (currentView === 'receiptsHistory') renderReceiptsHistory();
+    else if (currentView === 'returnsHistory') renderReturnsHistory();
+  } catch (e) {
+    if (e && e.code === 'link-abort') showToast(e.message, null, null, 3000);
+    else { console.error('unlink short return failed', e); showToast('ביטול השיוך נכשל — לא שיניתי כלום.', null, null, 4000); }
+  } finally { hideCloudBusy(); }
+}
+// תיבת הסטטוס של השיוך בכרטיס תעודת הקליטה
+function shortLinkInfoHtml(rc, di) {
+  if (!di || !di.shortRetLink) return '';
+  if (di.shortLinkBroken) {
+    return '<div class="mt-2 bg-rose-50 border-2 border-rose-200 rounded-xl p-2.5 text-xs">' +
+      '<div class="font-black text-rose-800 mb-1"><i class="fa-solid fa-link-slash"></i> תעודת ההחזרה ששויכה לחוסר נמחקה — החוסר נפתח מחדש</div>' +
+      '<div class="text-rose-700/80">שחזור ההחזרה מסל המחזור יחזיר את השיוך לבד. אם המחיקה סופית — נקה את השיוך.</div>' +
+      '<button data-role="rc-short-unlink" data-id="' + rc.id + '" class="btn-tap mt-2 w-full bg-white border border-rose-300 text-rose-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-broom"></i> נקה שיוך</button>' +
+    '</div>';
+  }
+  const ret = di.shortLinkedReturn;
+  const partial = !di.shortClosed;
+  const rem = Math.max(0, r2(Number(di.shortVal) || 0));
+  return '<div class="mt-2 ' + (partial ? 'bg-amber-50 border-amber-200' : 'bg-teal-50 border-teal-200') + ' border-2 rounded-xl p-2.5 text-xs">' +
+    '<div class="font-black mb-1 ' + (partial ? 'text-amber-800' : 'text-teal-800') + '"><i class="fa-solid fa-link"></i> ' +
+      (partial ? 'החוסר משויך חלקית לתעודת החזרה — נותר חוב ₪' + fmtMoney(rem) : 'החוסר משויך לתעודת החזרה ✓') + '</div>' +
+    '<div class="' + (partial ? 'text-amber-700' : 'text-teal-700') + ' font-bold">תעודת החזרה מ־' + dDisp((ret && (ret.docDate || ret.date)) || '') + ' · כיסוי ₪' + fmtMoney(di.shortLinkEx) + '</div>' +
+    '<div class="mt-1 pt-1 border-t ' + (partial ? 'border-amber-200 text-amber-700/80' : 'border-teal-200 text-teal-700/80') + '">החלק המשויך לא הופחת מהתשלום — תעודת ההחזרה מקזזת אותו במרכזת, ובחשבונית ברמן יופיעו שתי תעודות נפרדות.</div>' +
+    '<button data-role="rc-short-unlink" data-id="' + rc.id + '" class="btn-tap mt-2 w-full bg-white border border-slate-300 text-slate-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-link-slash"></i> בטל שיוך</button>' +
+  '</div>';
+}
+
 // --- היסטוריית תעודות + דוח טווח ---
 // כרטיס תעודת חזרות בתוך מסך תעודות הקליטה
 function returnCardInReceipts(r) {
@@ -11872,7 +12091,7 @@ function returnCardInReceipts(r) {
     ? '<i class="fa-solid fa-hourglass-half"></i> לא אומתה'
     : (openGap
       ? '<i class="fa-solid fa-triangle-exclamation"></i> נותר פער'
-      : '<i class="fa-solid fa-circle-check"></i> אומתה' + (r.creditedAt ? ' · ' + new Date(r.creditedAt).toLocaleDateString('he-IL') : ''));
+      : '<i class="fa-solid fa-circle-check"></i> ' + (r.shortRetLink ? 'אומתה · משויכת לחוסר' : 'אומתה') + (r.creditedAt ? ' · ' + new Date(r.creditedAt).toLocaleDateString('he-IL') : ''));
   const rows = (r.items || []).map(it =>
     '<div class="flex items-center justify-between gap-2 py-1 border-b border-slate-100 last:border-0">' +
       '<div class="min-w-0"><div class="text-sm font-bold text-slate-700 truncate">' + it.name + '</div><div class="text-[11px] text-slate-400"><i class="fa-solid fa-barcode"></i> ' + (it.barcode || '—') + '</div></div>' +
@@ -11884,13 +12103,15 @@ function returnCardInReceipts(r) {
       '<div class="flex gap-2 items-stretch">' +
         '<div class="flex-1 flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500"><span class="text-slate-400 font-black">₪</span><input id="rvNote_' + r.id + '" type="text" inputmode="decimal" placeholder="סכום זיכוי ללא מע״מ" class="w-full h-11 text-center text-base font-black outline-none bg-transparent"></div>' +
         '<button data-role="rv-verify-inline" data-id="' + r.id + '" class="btn-tap px-4 rounded-xl font-black bg-green-600 text-white flex items-center gap-1"><i class="fa-solid fa-check-double"></i> בדוק</button>' +
-      '</div>' + '<button data-role="ret-edit-items" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + (returns.filter(x => !x.credited).length >= 2 ? retMergeBtnHtml(r.id) : '') + '<button data-role="ret-delete" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>'
-    : '<div class="mt-2">' + creditPartsInfoHtml(r) + (openGap ? creditAddNoteHtml(r) : '') +
-      '<button data-role="uncredit" data-id="' + r.id + '" class="btn-tap w-full bg-white border border-slate-300 text-slate-500 rounded-xl py-2 font-black text-[11px] mt-2"><i class="fa-solid fa-rotate-left"></i> בטל אימות — פתח מחדש לתיקון</button></div>' +
-      '<div class="flex gap-2">' +
-        '<button data-role="rv-open" data-id="' + r.id + '" class="btn-tap flex-1 font-black py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 ' + (openGap ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700') + '"><i class="fa-solid ' + (openGap ? 'fa-wrench' : 'fa-pen') + '"></i> ' + (openGap ? 'תקן פער' : 'ערוך אימות') + '</button>' +
-        '<button data-role="uncredit" data-id="' + r.id + '" class="btn-tap px-3 font-bold py-2.5 rounded-xl text-sm bg-slate-100 text-slate-500" title="בטל אימות"><i class="fa-solid fa-rotate-left"></i></button>' +
-      '</div>' + '<button data-role="ret-edit-items" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + '<button data-role="ret-delete" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>';
+      '</div>' + '<button data-role="ret-edit-items" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + (shortLinkCandidateReceipts().length ? retShortLinkBtnHtml(r.id) : '') + (returns.filter(x => !x.credited).length >= 2 ? retMergeBtnHtml(r.id) : '') + '<button data-role="ret-delete" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>'
+    : (r.shortRetLink
+      ? '<div class="mt-2">' + retShortLinkInfoHtml(r) + '</div>'
+      : '<div class="mt-2">' + creditPartsInfoHtml(r) + (openGap ? creditAddNoteHtml(r) : '') +
+        '<button data-role="uncredit" data-id="' + r.id + '" class="btn-tap w-full bg-white border border-slate-300 text-slate-500 rounded-xl py-2 font-black text-[11px] mt-2"><i class="fa-solid fa-rotate-left"></i> בטל אימות — פתח מחדש לתיקון</button></div>' +
+        '<div class="flex gap-2">' +
+          '<button data-role="rv-open" data-id="' + r.id + '" class="btn-tap flex-1 font-black py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 ' + (openGap ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700') + '"><i class="fa-solid ' + (openGap ? 'fa-wrench' : 'fa-pen') + '"></i> ' + (openGap ? 'תקן פער' : 'ערוך אימות') + '</button>' +
+          '<button data-role="uncredit" data-id="' + r.id + '" class="btn-tap px-3 font-bold py-2.5 rounded-xl text-sm bg-slate-100 text-slate-500" title="בטל אימות"><i class="fa-solid fa-rotate-left"></i></button>' +
+        '</div>') + '<button data-role="ret-edit-items" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + '<button data-role="ret-delete" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>';
   return '<details class="bg-white rounded-2xl border-2 ' + borderCls + ' shadow-sm overflow-hidden">' +
     '<summary class="cursor-pointer">' +
       '<div class="' + barCls + ' px-4 py-2 flex items-center justify-between gap-2 font-black text-[13px]">' +
@@ -12121,7 +12342,16 @@ function receiptDiscrepancyInfo(rc, opts) {
   const shortCreditEx = r2(shortCreditNotes.reduce((a, x) => a + (Number(x.amount) || 0), 0));
   const shortValRaw = r2(shortVal);
   const shortFullyCredited = shortCreditEx > 0 && shortValRaw > 0 && r2(shortValRaw - shortCreditEx) <= 0.01;
-  if (shortCreditEx > 0) shortVal = Math.max(0, r2(shortVal - shortCreditEx));
+  // גרסה 13: חוסר יכול להיסגר גם בשיוך לתעודת החזרה (זיכוי שהנהג רשם כתעודה
+  // נפרדת). הכיסוי מחושב חי מסכום תעודת ההחזרה: מחיקת ההחזרה פותחת את החוסר
+  // מחדש לבד, ושחזור שלה מסל המחזור סוגר אותו שוב. עודף בתעודת ההחזרה מעבר
+  // לחוסר הוא החזרת סחורה רגילה — הכיסוי נחתך בגובה החוסר.
+  const shortRetLink = (rc && rc.shortRetLink && rc.shortRetLink.returnId) ? rc.shortRetLink : null;
+  const shortLinkedReturn = shortRetLink ? returns.find(x => x.id === shortRetLink.returnId) : null;
+  const shortLinkBroken = !!(shortRetLink && !shortLinkedReturn);
+  const shortLinkEx = shortLinkedReturn ? r2(Math.min(returnTotals(shortLinkedReturn).ex, Math.max(0, shortValRaw))) : 0;
+  const shortClosed = shortValRaw > 0 && (shortCreditEx + shortLinkEx) > 0 && r2(shortValRaw - shortCreditEx - shortLinkEx) <= 0.01;
+  shortVal = Math.max(0, r2(shortValRaw - shortCreditEx - shortLinkEx));
   const creditOpen = supplierCreditClaimOpen(rc) || supplierCreditClaimDeferred(rc);
   // ממצאי כמות של ה-AI נשמרים בהיסטוריה, אבל אינם משאירים תעודה אדומה אחרי
   // שהחוסר והעודף עצמם נסגרו בקיזוז. ממצא מחיר/מבצע עדיין מחייב טיפול.
@@ -12131,11 +12361,11 @@ function receiptDiscrepancyInfo(rc, opts) {
   const aiAuditDay = storedReceiptDate(rc);
   const aiHasNonQuantityFinding = aiFindings.some(f => f && (f.type === 'price' || f.type === 'promo_missing') && !aiPriceFindingPromoMatch(f, aiAuditDay));
   const aiAuditOpen = !!(rc && rc.aiAudit && rc.aiAudit.hasDiscrepancy && (aiHasNonQuantityFinding || (!aiFindings.length && !(priceOffsets.length && !finalShort.length && !finalOver.length))));
-  // חוסר שנסגר במלואו בזיכוי אינו פותח את התעודה; פער סכום חיובי (בכיוון
-  // חוסר) נבלע גם הוא בזיכוי. עודף, פער יחידות וממצאי AI אינם נסגרים בכסף.
-  const shortSideOpen = (finalShort.length > 0 || (amountGapOpen && Math.round(unresolvedAmountGap * 100) > 0)) && !shortFullyCredited;
+  // חוסר שנסגר במלואו בזיכוי או בשיוך להחזרה אינו פותח את התעודה; פער סכום
+  // חיובי (בכיוון חוסר) נבלע גם הוא. עודף, פער יחידות וממצאי AI אינם נסגרים בכסף.
+  const shortSideOpen = (finalShort.length > 0 || (amountGapOpen && Math.round(unresolvedAmountGap * 100) > 0)) && !shortClosed;
   const overSideOpen = finalOver.length > 0 || (amountGapOpen && Math.round(unresolvedAmountGap * 100) < 0);
-  return { open: !!(shortSideOpen || overSideOpen || unresolvedUnitsGap !== 0 || aiAuditOpen || creditOpen), shortItems: finalShort, overItems: finalOver, priceOffsets, externalOffsets, shortVal: r2(shortVal), overVal: r2(overVal), shortValRaw, shortCreditEx, shortCreditNotes, shortFullyCredited, unresolvedAmountGap, unresolvedUnitsGap, amountGapOpen, amountToleranceCents, aiAuditOpen };
+  return { open: !!(shortSideOpen || overSideOpen || unresolvedUnitsGap !== 0 || aiAuditOpen || creditOpen), shortItems: finalShort, overItems: finalOver, priceOffsets, externalOffsets, shortVal: r2(shortVal), overVal: r2(overVal), shortValRaw, shortCreditEx, shortCreditNotes, shortFullyCredited, shortRetLink, shortLinkedReturn, shortLinkBroken, shortLinkEx, shortClosed, unresolvedAmountGap, unresolvedUnitsGap, amountGapOpen, amountToleranceCents, aiAuditOpen };
 }
 function receiptsBalance() {
   let bal = 0, n = 0;
@@ -12158,9 +12388,11 @@ function receiptOffsets(rc) {
   // וגם השלים, והתשלום אליו יוצא חסר). הכמות המוצעת לכל שורה נחתכת כך
   // ששוויה לא יעלה על הכסף שעוד לא זוכה; שארית שאינה יחידה שלמה נשארת
   // חוב פתוח גלוי — כסף אמת, לא עיגול נוח.
-  if (!di.shortFullyCredited) {
-    let remaining = (Number(di.shortCreditEx) || 0) > 0
-      ? Math.max(0, r2((Number(di.shortValRaw) || 0) - (Number(di.shortCreditEx) || 0)))
+  // גרסה 13: גם חוסר שמשויך לתעודת החזרה יצא מהמשחק — כמו זיכוי כספי,
+  // ההצעה לקיזוז סחורה מוגבלת ליתרה שלא כוסתה.
+  if (!di.shortClosed) {
+    let remaining = ((Number(di.shortCreditEx) || 0) > 0 || (Number(di.shortLinkEx) || 0) > 0)
+      ? Math.max(0, r2((Number(di.shortValRaw) || 0) - (Number(di.shortCreditEx) || 0) - (Number(di.shortLinkEx) || 0)))
       : Infinity;
     (di.shortItems || []).forEach(l => {
       const n = Number(l.n) || 0, price = Number(l.price) || 0;
@@ -12341,7 +12573,7 @@ async function migrateLegacyReceiptOffsets() {
 function openShortCreditPrompt(rcId) {
   const rc = receipts.find(x => x.id === rcId); if (!rc) return;
   const di = receiptDiscrepancyInfo(rc);
-  const remaining = Math.max(0, r2((Number(di.shortValRaw) || 0) - (Number(di.shortCreditEx) || 0)));
+  const remaining = Math.max(0, r2(Number(di.shortVal) || 0));
   if (!(remaining > 0)) { showToast('אין חוסר פתוח לזיכוי בתעודה הזאת', null, null, 2600); return; }
   shortCreditTarget = rcId;
   $('shortCreditRemaining').textContent = '₪' + fmtMoney(remaining);
@@ -12354,7 +12586,7 @@ function hideShortCreditPrompt() { const m = $('shortCreditModal'); m.classList.
 async function confirmShortCredit() {
   const rc = receipts.find(x => x.id === shortCreditTarget); if (!rc) { hideShortCreditPrompt(); return; }
   const di = receiptDiscrepancyInfo(rc);
-  const remaining = Math.max(0, r2((Number(di.shortValRaw) || 0) - (Number(di.shortCreditEx) || 0)));
+  const remaining = Math.max(0, r2(Number(di.shortVal) || 0));
   const amount = r2(parseFloat(($('shortCreditAmount').value || '').toString().replace(',', '.')) || 0);
   if (!(amount > 0)) { showToast('הזן סכום זיכוי גדול מאפס', null, null, 2600); return; }
   if (amount > r2(remaining + 0.01)) { showToast('הזיכוי (₪' + fmtMoney(amount) + ') גדול מהחוב הפתוח (₪' + fmtMoney(remaining) + ')', null, null, 3200); return; }
@@ -12365,7 +12597,7 @@ async function confirmShortCredit() {
   hideShortCreditPrompt();
   buzz(18);
   const after = receiptDiscrepancyInfo(rc);
-  showToast(after.shortFullyCredited ? 'החוסר נסגר בזיכוי מהספק ✓' : 'נרשם זיכוי ₪' + fmtMoney(amount) + ' — נותר חוב ₪' + fmtMoney(Math.max(0, r2(after.shortValRaw - after.shortCreditEx))), null, null, 3200);
+  showToast(after.shortClosed ? 'החוסר נסגר בזיכוי מהספק ✓' : 'נרשם זיכוי ₪' + fmtMoney(amount) + ' — נותר חוב ₪' + fmtMoney(Math.max(0, r2(after.shortVal))), null, null, 3200);
   if (currentView === 'receiptsHistory') renderReceiptsHistory();
 }
 async function applyOffset(rcId, otherId, productId, otherProductId) {
@@ -12542,6 +12774,9 @@ function renderReceiptsHistory() {
     } else if (hasInternalOffset) {
       statusTxt = '<i class="fa-solid fa-circle-check"></i> אומתה · קיזוז פנימי';
       metaStatus = ' · <span class="text-emerald-700 font-black">קיזוז פנימי</span>';
+    } else if (di.shortClosed && (Number(di.shortLinkEx) || 0) > 0) {
+      statusTxt = '<i class="fa-solid fa-circle-check"></i> אומתה · החוסר משויך להחזרה';
+      metaStatus = ' · <span class="text-teal-700 font-black">משויך להחזרה</span>';
     } else if (di.shortFullyCredited) {
       statusTxt = '<i class="fa-solid fa-circle-check"></i> אומתה · החוסר נסגר בזיכוי';
       metaStatus = ' · <span class="text-emerald-700 font-black">נסגר בזיכוי</span>';
@@ -12585,25 +12820,34 @@ function renderReceiptsHistory() {
         ((Number(rc.supplierDiscount) || 0) > 0 ? '<div class="mt-2 bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-xs text-emerald-800"><div class="font-black mb-1"><i class="fa-solid fa-percent"></i> אומתה עם מבצע / הנחת ספק</div><div class="font-bold">הנחה: −₪' + fmtMoney(rc.supplierDiscount) + ((rc.grossExVat != null) ? ' · לפני מבצע: ₪' + fmtMoney(rc.grossExVat) : '') + '</div>' + ((rc.supplierPromoItems || []).length ? '<div class="text-[11px] mt-1">כוכבית: ' + (rc.supplierPromoItems || []).map(x => htmlEscape(x.name)).join(' · ') + '</div>' : '') + '</div>' : '') +
         ((Number(rc.roundingAdjustment) || 0) !== 0 ? '<div class="mt-2 bg-blue-50 border border-blue-200 rounded-xl p-2.5 text-xs text-blue-800"><div class="font-black"><i class="fa-solid fa-calculator"></i> התאמת עיגול תעודה: ' + (Number(rc.roundingAdjustment) > 0 ? '+' : '−') + '₪' + fmtMoney(Math.abs(Number(rc.roundingAdjustment))) + '</div></div>' : '') +
         ((di.shortCreditNotes || []).length ? (function () {
-          const rem = Math.max(0, r2((Number(di.shortValRaw) || 0) - (Number(di.shortCreditEx) || 0)));
-          return '<div class="mt-2 ' + (di.shortFullyCredited ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200') + ' border rounded-xl p-2.5 text-xs">' +
-            '<div class="font-black mb-1 ' + (di.shortFullyCredited ? 'text-emerald-800' : 'text-amber-800') + '"><i class="fa-solid fa-file-invoice-dollar"></i> ' + (di.shortFullyCredited ? 'החוסר נסגר בזיכוי מהספק ✓' : 'זיכוי חלקי מהספק — נותר חוב ₪' + fmtMoney(rem)) + '</div>' +
-            di.shortCreditNotes.map(x => '<div class="flex justify-between ' + (di.shortFullyCredited ? 'text-emerald-700' : 'text-amber-700') + '"><span>זיכוי ' + new Date(Number(x.at) || 0).toLocaleDateString('he-IL') + '</span><span>₪' + fmtMoney(x.amount) + '</span></div>').join('') +
-            '<div class="mt-1 pt-1 border-t ' + (di.shortFullyCredited ? 'border-emerald-200 text-emerald-700/80' : 'border-amber-200 text-amber-700/80') + '">החוסר המקורי (₪' + fmtMoney(di.shortValRaw) + ') נשמר למעלה בהיסטוריה; הוא נסגר בכסף, לא בהשלמת סחורה, ולא יקוזז מול תעודה עתידית.</div>' +
+          const rem = Math.max(0, r2(Number(di.shortVal) || 0));
+          const closed = di.shortClosed;
+          const title = di.shortFullyCredited ? 'החוסר נסגר בזיכוי מהספק ✓' : (closed ? 'הזיכוי הכספי והשיוך להחזרה סוגרים יחד את החוסר ✓' : 'זיכוי חלקי מהספק — נותר חוב ₪' + fmtMoney(rem));
+          return '<div class="mt-2 ' + (closed ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200') + ' border rounded-xl p-2.5 text-xs">' +
+            '<div class="font-black mb-1 ' + (closed ? 'text-emerald-800' : 'text-amber-800') + '"><i class="fa-solid fa-file-invoice-dollar"></i> ' + title + '</div>' +
+            di.shortCreditNotes.map(x => '<div class="flex justify-between ' + (closed ? 'text-emerald-700' : 'text-amber-700') + '"><span>זיכוי ' + new Date(Number(x.at) || 0).toLocaleDateString('he-IL') + '</span><span>₪' + fmtMoney(x.amount) + '</span></div>').join('') +
+            '<div class="mt-1 pt-1 border-t ' + (closed ? 'border-emerald-200 text-emerald-700/80' : 'border-amber-200 text-amber-700/80') + '">החוסר המקורי (₪' + fmtMoney(di.shortValRaw) + ') נשמר למעלה בהיסטוריה; הוא נסגר בכסף, לא בהשלמת סחורה, ולא יקוזז מול תעודה עתידית.</div>' +
           '</div>';
         })() : '') +
+        shortLinkInfoHtml(rc, di) +
         // חוסר ועודף מוצגים בנפרד: חוסר מופחת מהתשלום; עודף אינו מכסה אותו
         // ואינו מתווסף לתשלום בלי חשבונית. קיזוז קורה רק באישור מפורש.
         (() => {
-          const openShortNow = Math.max(0, r2((Number(di.shortValRaw) || 0) - (Number(di.shortCreditEx) || 0)));
+          const openShortNow = Math.max(0, r2(Number(di.shortVal) || 0));
           const openOverNow = Math.max(0, r2(Number(di.overVal) || 0));
-          if (!(di.shortItems || []).length || di.shortFullyCredited) return '';
+          if (!(di.shortItems || []).length || di.shortClosed) return '';
           const balanceLine = openOverNow > 0
             ? '<div class="mt-2 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-black text-slate-700"><i class="fa-solid fa-scale-balanced"></i> חוסר ₪' + fmtMoney(openShortNow) + ' הופחת מהתשלום · עודף ₪' + fmtMoney(openOverNow) + ' הוא הערה בלבד ולא מקזז את החוסר</div>'
             : '';
-          const creditLabel = 'התקבל זיכוי מהספק' + ((di.shortCreditEx || 0) > 0 ? ' (נותר ₪' + fmtMoney(openShortNow) + ')' : ' (₪' + fmtMoney(openShortNow) + ')');
+          const partial = (di.shortCreditEx || 0) > 0 || (di.shortLinkEx || 0) > 0;
+          const creditLabel = 'התקבל זיכוי מהספק' + (partial ? ' (נותר ₪' + fmtMoney(openShortNow) + ')' : ' (₪' + fmtMoney(openShortNow) + ')');
           const creditBtn = '<button data-role="rc-short-credit" data-id="' + rc.id + '" class="btn-tap mt-2 w-full bg-white border-2 border-emerald-300 text-emerald-700 rounded-xl py-2.5 font-black text-sm"><i class="fa-solid fa-file-invoice-dollar"></i> ' + creditLabel + '</button>';
-          return balanceLine + creditBtn;
+          // גרסה 13: הנהג רשם את הזיכוי כתעודת החזרה נפרדת? משייכים במקום להקליד סכום.
+          const linkables = (!di.shortRetLink) ? shortLinkCandidateReturns() : [];
+          const linkBtn = linkables.length
+            ? '<button data-role="rc-short-link" data-id="' + rc.id + '" class="btn-tap mt-2 w-full bg-white border-2 border-teal-300 text-teal-700 rounded-xl py-2.5 font-black text-sm"><i class="fa-solid fa-link"></i> שייך לתעודת החזרה פתוחה (' + linkables.length + ')</button>'
+            : '';
+          return balanceLine + creditBtn + linkBtn;
         })() +
         supplierCreditClaimCardHtml(rc) +
         (((rc.supplierPromoMismatchItems || []).length) ? '<div class="mt-2 bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-xs text-amber-800"><div class="font-black mb-1"><i class="fa-solid fa-triangle-exclamation"></i> מבצע מוגדר במערכת אך לא הופיע אצל הספק</div><div class="font-bold">' + (rc.supplierPromoMismatchItems || []).map(x => htmlEscape(x.name)).join(' · ') + '</div></div>' : '') +
@@ -12653,7 +12897,11 @@ function renderReceiptsHistory() {
 function receiptPayableBaseEx(rc) {
   const di = receiptDiscrepancyInfo(rc);
   const paper = Number(rc && rc.noteTotalInc);
-  if (rc && rc.noteTotalInc != null && rc.noteTotalInc !== '' && Number.isFinite(paper) && paper >= 0) return r2(Math.max(0, paper - (Number(di.shortValRaw) || 0)));
+  // גרסה 13: חוסר שמשויך לתעודת החזרה לא מופחת כאן — תעודת ההחזרה עצמה כבר
+  // מקזזת אותו במרכזת (אספקות פחות החזרות). הפחתה כפולה הייתה מקטינה את
+  // החודש פעמיים על אותו חוסר. רק היתרה הלא-משויכת מופחתת מהתשלום.
+  const unlinkedShort = Math.max(0, r2((Number(di.shortValRaw) || 0) - (Number(di.shortLinkEx) || 0)));
+  if (rc && rc.noteTotalInc != null && rc.noteTotalInc !== '' && Number.isFinite(paper) && paper >= 0) return r2(Math.max(0, paper - unlinkedShort));
   return r2(Math.max(0, (Number(rc && rc.totalExVat) || 0) - (Number(di.overVal) || 0)));
 }
 function receiptRangeData(from, to) {
@@ -14585,6 +14833,14 @@ $('retMergeModal').addEventListener('click', (e) => {
   if (b.dataset.role === 'ret-merge-cancel') hideRetMergeModal();
   else if (b.dataset.role === 'ret-merge-pick') confirmReturnMergePick(b.dataset.id);
 });
+// גרסה 13: shortLinkModal יושב גם הוא מחוץ ל-#app — מאזין ישיר; רקע = ביטול.
+$('shortLinkModal').addEventListener('click', (e) => {
+  if (e.target === $('shortLinkModal')) { hideShortLinkModal(); return; }
+  const b = e.target.closest('[data-role]');
+  if (!b) return;
+  if (b.dataset.role === 'short-link-cancel') hideShortLinkModal();
+  else if (b.dataset.role === 'short-link-pick') confirmShortLinkPick(b.dataset.id);
+});
 $('brandHome').addEventListener('click', () => setView('receiving'));
 $('btnHistory').addEventListener('click', () => setView(mainMode === 'returns' ? 'returnsHistory' : (mainMode === 'receiving' ? 'receiptsHistory' : 'history')));
 $('segOrder').addEventListener('click', () => setView('order'));
@@ -15288,7 +15544,7 @@ app.addEventListener('click', (e) => {
   else if (role === 'resend') { const o = history.find(x => x.id === id); if (o) openResend(o); }
   else if (role === 'ret-resend') { const r = returns.find(x => x.id === id); if (r) openReturnsResend(r); }
   else if (role === 'ret-edit-date') { const r = returns.find(x => x.id === id); if (r) openReturnDateEdit(r); }
-  else if (role === 'ret-delete') { showConfirm('מחיקת תעודת חזרה', 'למחוק את תעודת החזרה הזו? יישמר גיבוי ותוכל לבטל מיד אחרי.', 'מחק', () => delReturn(id)); }
+  else if (role === 'ret-delete') { const rrD = returns.find(x => x.id === id); const linkedNote = (rrD && rrD.shortRetLink && rrD.shortRetLink.receiptId) ? ' התעודה משויכת לחוסר בתעודת קליטה — המחיקה תפתח את החוסר מחדש (שחזור מסל המחזור יחזיר את השיוך).' : ''; showConfirm('מחיקת תעודת חזרה', 'למחוק את תעודת החזרה הזו? יישמר גיבוי ותוכל לבטל מיד אחרי.' + linkedNote, 'מחק', () => delReturn(id)); }
   else if (role === 'ret-merge') { openReturnMergePicker(id); }
   else if (role === 'add-note') addNote();
   else if (role === 'done-note') doneNote(id);
@@ -15313,6 +15569,10 @@ app.addEventListener('click', (e) => {
   else if (role === 'rv-cancel') { returnVerify = null; setView(rvOrigin); }
   else if (role === 'rv-save') saveReturnVerify();
   else if (role === 'rc-short-credit') openShortCreditPrompt(id);
+  else if (role === 'rc-short-link') openShortLinkPicker('receipt', id);
+  else if (role === 'ret-short-link') openShortLinkPicker('return', id);
+  else if (role === 'rc-short-unlink') { const rcL = receipts.find(x => x.id === id); const retId = rcL && rcL.shortRetLink && rcL.shortRetLink.returnId; if (retId) showConfirm('ביטול שיוך', 'לבטל את השיוך בין החוסר לתעודת ההחזרה? החוסר ייפתח מחדש ותעודת ההחזרה תחזור להמתין לאימות זיכוי.', 'בטל שיוך', () => unlinkShortReturn(id, retId)); }
+  else if (role === 'ret-short-unlink') { const rrL = returns.find(x => x.id === id); const rcId = rrL && rrL.shortRetLink && rrL.shortRetLink.receiptId; if (rcId) showConfirm('ביטול שיוך', 'לבטל את השיוך בין תעודת ההחזרה לחוסר בתעודת הקליטה? שני הצדדים ייפתחו מחדש.', 'בטל שיוך', () => unlinkShortReturn(rcId, id)); }
   else if (role === 'ret-edit-items') openReturnItemsEdit(id);
   else if (role === 're-qty-minus') retEditStepQty(parseInt(id, 10), -1);
   else if (role === 're-qty-plus') retEditStepQty(parseInt(id, 10), 1);
@@ -15325,7 +15585,13 @@ app.addEventListener('click', (e) => {
   else if (role === 're-remove') { const rl = (returnEdit && returnEdit.items) ? returnEdit.items[parseInt(id, 10)] : null; showConfirm('מחיקת שורה', 'למחוק את "' + ((rl && rl.name) || 'הפריט') + '" מהתעודה?', 'מחק', () => retEditRemove(parseInt(id, 10))); }
   else if (role === 're-cancel') { const o = returnEdit ? returnEdit.origin : 'returnsHistory'; returnEdit = null; setView(o); }
   else if (role === 're-save') saveReturnItemsEdit();
-  else if (role === 'uncredit') showConfirm('ביטול אימות', 'לפתוח מחדש את התעודה לאימות? הסכום שהוקלד יימחק ותוכל להזין נכון.', 'בטל אימות', () => clearReturnVerification(id));
+  else if (role === 'uncredit') {
+    // גרסה 13: תעודה שאומתה דרך שיוך לחוסר — ביטול האימות חייב לבטל גם את
+    // השיוך, אחרת החוסר בתעודת הקליטה יישאר "מכוסה" על ידי החזרה פתוחה.
+    const rrU = returns.find(x => x.id === id);
+    if (rrU && rrU.shortRetLink && rrU.shortRetLink.receiptId) showConfirm('ביטול שיוך', 'התעודה אומתה דרך שיוך לחוסר בתעודת קליטה — ביטול האימות מבטל גם את השיוך ופותח את החוסר מחדש. להמשיך?', 'בטל שיוך', () => unlinkShortReturn(rrU.shortRetLink.receiptId, id));
+    else showConfirm('ביטול אימות', 'לפתוח מחדש את התעודה לאימות? הסכום שהוקלד יימחק ותוכל להזין נכון.', 'בטל אימות', () => clearReturnVerification(id));
+  }
   else if (role === 'clear-history') showConfirm('ניקוי היסטוריה', 'למחוק את כל היסטוריית ההזמנות? יישמר גיבוי בסל מחזור.', 'מחק הכל', () => clearAllDocs('history'));
   else if (role === 'clear-returns-history') showConfirm('ניקוי היסטוריה', 'למחוק את כל היסטוריית החזרות? יישמר גיבוי בסל מחזור.', 'מחק הכל', () => clearAllDocs('returns'));
   else if (role === 'rc-scan') openReceivingScanner();
