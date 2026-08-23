@@ -14582,6 +14582,9 @@ function promoImportMatchProduct(item) {
   if (barcode) {
     const candidates = findProductsByBarcode(barcode);
     if (candidates.length === 1) return { product: candidates[0], by: 'ברקוד ' + barcode };
+    // במכתבים בלי עמודת קוד (הפריסה של מרץ-אפריל 26) הברקוד הוא הזהות
+    // היחידה — ברקוד שקיים בכמה מוצרים חייב הודעה מבחינה, לא "לא נמצא".
+    if (candidates.length > 1) return { product: null, by: '', ambiguous: 'הברקוד ' + barcode + ' קיים ב-' + candidates.length + ' מוצרים במאגר — שייך ידנית' };
   }
   return { product: null, by: '' };
 }
@@ -14597,7 +14600,7 @@ function promoImportPrepareItem(item) {
   const endIso = item && /^\d{4}-\d{2}-\d{2}$/.test(String(item.validToIso || '')) ? String(item.validToIso) : '';
   const overlap = match.product && startIso && endIso ? promoImportOverlappingPromo(match.product.id, startIso, endIso) : null;
   let blockReason = '';
-  if (!match.product) blockReason = 'לא נמצא במאגר לפי הקוד או הברקוד';
+  if (!match.product) blockReason = match.ambiguous || 'לא נמצא במאגר לפי הקוד או הברקוד';
   else if (!(buyPrice > 0)) blockReason = 'מחיר הקנייה לא נקרא מהמכתב';
   else if (!startIso || !endIso) blockReason = 'תאריכי התוקף לא נקראו בוודאות — הוסף ידנית';
   else if (endIso < startIso) blockReason = 'תאריך הסיום לפני ההתחלה';
