@@ -8724,7 +8724,7 @@ function aiEvaluateInvoiceScan(payload) {
     }
     if (!Array.isArray(doc.rows) || !doc.rows.length) {
       missingDocuments++;
-      if (doc.__tnuvaCredit) errors.push('תעודה ' + (index + 1) + ': חשבונית זיכוי — אינה נקלטת בסריקה. הקלד אותה כתעודת זיכוי בנפרד והסר את צילומיה מכאן.');
+      if (doc.__tnuvaCredit) errors.push('תעודה ' + (index + 1) + ': תעודת החזרה/זיכוי — אינה נקלטת בקליטת סחורה. טפל בה במסך החזרות והסר את צילומיה מכאן.');
       else errors.push('תעודה ' + (index + 1) + ': לא נקראה ממנה אף שורת מוצר — היא אינה משתתפת בהשוואה. צלם אותה שוב.');
     }
     if (Number(doc.pageCount) !== inputDoc.pages.length) errors.push('תעודה ' + (index + 1) + ': מספר העמודים שפוענחו אינו זהה למספר התמונות שצולמו');
@@ -9258,7 +9258,7 @@ function bermanAdaptScanPayload(payload) {
     const isCredit = doc.docType === 'credit';
     if (isCredit) {
       doc.__tnuvaCredit = true; // שם השדה נשמר — הצנרת הוותיקה בודקת אותו בשמו
-      scan.warnings.push('תעודת זיכוי' + (doc.docNumber ? ' ' + doc.docNumber : '') + ' (' + rows.length + ' שורות) — הסריקה אינה קולטת זיכויים. הקלד אותה כתעודת זיכוי בנפרד.');
+      scan.warnings.push('תעודת החזרה/זיכוי' + (doc.docNumber ? ' ' + doc.docNumber : '') + ' (' + rows.length + ' שורות) — הסריקה קולטת רק תעודות משלוח. טפל בה במסך החזרות.');
     }
     const kept = isCredit ? [] : rows;
     doc.rows = kept.map(row => {
