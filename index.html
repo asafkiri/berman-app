@@ -716,7 +716,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '12'; // גרסה 12: שליחה לקבוצה — הטקסט עובר (סכמת whatsapp:// ישירה) + העתקה ללוח כגיבוי
+const APP_VERSION = '13'; // גרסה 13: הבלש לומד את עד השורות + קומת חילוץ לפער שלא נסגר במדויק (v219)
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -5313,6 +5313,51 @@ let detectiveStrictNote = ''; // v35: סיבת הוויתור של הבלש הק
 let detectiveScope = null; // בשלב שאחרי הברקודים: מגביל את החיפוש רק למה שאומת על הנייר
 let detectiveQuestionState = { fingerprint: '', asked: 0, constraints: [] };
 function resetDetectiveQuestions() { detectiveQuestionState = { fingerprint: '', asked: 0, constraints: [] }; }
+// v219: עד השורות. מונה השורות המודפס ("סהכ שורות") הוא עדות קשיחה בדיוק כמו
+// מונה היחידות: כשכל השורות נסרקו (פער שורות 0) — כל חוסר חייב להיות כמות
+// חלקית בשורה שכבר נסרקה, ואף מוצר חדש מהקטלוג לא נכנס לתמונה; כשחסרה שורה
+// אחת — הפתרון חייב להכיל בדיוק מוצר אחד שלא נסרק כלל; וכן הלאה. עד היום
+// העד הזה שימש רק את מסלול תנובה (בלי עוגן יחידות) — מעכשיו הוא מצמצם את
+// מרחב החיפוש של הבלש הרגיל, במקום שהקטלוג המלא יציף אותו בצירופים.
+let detectiveLinesWitness = null; // פער שורות: מודפס פחות נסרק; null = אין עד (לא הוקלד מונה שורות / אחרי ברקודים)
+function detectiveComputeLinesWitness() {
+  if (detectiveScope || receiptNoteLines == null) return null;
+  const scanned = (reconcileData || []).filter(l => !l.isDeposit && (Number(l.received) || 0) > 0).length;
+  return Number(receiptNoteLines) - scanned;
+}
+// תרומת השורות של דרך-שיוך אחת: מוצר חסר שאין לו שורה סרוקה = שורה שהנייר
+// מכיל ואנחנו לא (+1); עודף שמוחק שורה סרוקה במלואה = שורה שסרקנו ואינה
+// בנייר (−1). כמות חלקית בשורה קיימת לא מזיזה את מונה השורות (0).
+function detectiveAllocationLinesDelta(a) {
+  let d = 0;
+  (a.moves || []).forEach(m => {
+    const line = (reconcileData || []).find(x => x.productId === m.productId);
+    if (m.delta > 0 && !(line && (Number(line.received) || 0) > 0)) d += 1;
+    else if (m.delta < 0 && line && (-m.delta) === (Number(line.noteQty) || 0)) d -= 1;
+  });
+  return d;
+}
+// פתרון תקף רק אם קיים צירוף בחירות (אחת מכל רכיב מחיר) שסכום תרומות השורות
+// שלו שווה בדיוק לעד; דרכי-שיוך שלא משתתפות באף צירוף כזה מסולקות. השמרנות
+// מכוונת: הסינון לעולם לא ממציא פתרון — רק פוסל סיפורים שסותרים את הנייר.
+function detectiveFilterComponentsByLinesWitness(components, witness) {
+  const sets = components.map(c => c.allocations.map(detectiveAllocationLinesDelta));
+  const valSets = sets.map(s => Array.from(new Set(s))); // תרומות ∈ {-3..3} — הצירופים זולים
+  function feasible(fixedIdx, fixedVal) {
+    function go(idx, sum) {
+      if (idx === components.length) return sum === witness;
+      if (idx === fixedIdx) return go(idx + 1, sum + fixedVal);
+      return valSets[idx].some(v => go(idx + 1, sum + v));
+    }
+    return go(0, 0);
+  }
+  for (let i = 0; i < components.length; i++) {
+    const kept = components[i].allocations.filter((a, j) => feasible(i, sets[i][j]));
+    if (!kept.length) return false;
+    components[i].allocations = kept;
+  }
+  return true;
+}
 function detectiveQuestionFingerprint() {
   return [receiptNoteTotal, receiptNoteUnits, Number(reconcileSupplierDiscount) || 0]
     .concat((reconcileData || []).map(l => [l.productId, Number(l.received) || 0, Number(l.noteQty) || 0, Number(l.price) || 0].join(':')).sort())
@@ -5579,6 +5624,13 @@ function detectiveStageAllowsDelta(delta, stage) {
 }
 function detectiveActorFitsStage(a, delta, stage) {
   if (!detectiveStageAllowsDelta(delta, stage)) return false;
+  // v219: כשכל השורות נסרקו, עד השורות מצמצם את השלבים הטהורים כבר ברמת
+  // השחקן: חוסר יכול לשבת רק בשורה שנסרקה, ועודף אסור לו למחוק שורה שלמה
+  // (השורה קיימת בנייר). זה גם חוסך את הצפת הקטלוג המלא לתוך החיפוש.
+  if (detectiveLinesWitness === 0 && !detectiveScope) {
+    if (stage === DETECTIVE_SEARCH_PURE_SHORT && delta > 0 && (Number(a.received) || 0) === 0) return false;
+    if (stage === DETECTIVE_SEARCH_PURE_SURPLUS && delta < 0 && (-delta) >= (Number(a.noteQty) || 0)) return false;
+  }
   // reconcileData עשוי להכיל גם שורת חוסר שנוספה לבדיקה (received: 0).
   // עודף טהור חייב להיבדק רק מול מה שנסרק בפועל, ולא מול כל שורה שקיימת במסך.
   if (stage === DETECTIVE_SEARCH_PURE_SURPLUS) return (Number(a.received) || 0) > 0;
@@ -5594,7 +5646,11 @@ function detectivePreferredStages(gapCents, unitGap) {
   const unitSign = Math.sign(unitGap);
   // כסף ויחידות בכיוון הפוך הם בדיוק המקרה המורכב — אין בו "טהור" אמין להתחיל ממנו.
   if (unitSign < 0 && moneySign < 0) return [DETECTIVE_SEARCH_PURE_SURPLUS, DETECTIVE_SEARCH_MIXED];
-  if (unitSign > 0 && moneySign > 0) return [DETECTIVE_SEARCH_PURE_SHORT_COMPLETE, DETECTIVE_SEARCH_PURE_SHORT, DETECTIVE_SEARCH_MIXED];
+  if (unitSign > 0 && moneySign > 0) {
+    // v219: כל השורות נסרקו ⇒ אין בכלל "מוצר שלם שחסר" — מדלגים על השלב.
+    if (detectiveLinesWitness === 0) return [DETECTIVE_SEARCH_PURE_SHORT, DETECTIVE_SEARCH_MIXED];
+    return [DETECTIVE_SEARCH_PURE_SHORT_COMPLETE, DETECTIVE_SEARCH_PURE_SHORT, DETECTIVE_SEARCH_MIXED];
+  }
   return [DETECTIVE_SEARCH_MIXED];
 }
 function detectiveStageMeta(stage, gapCents, unitGap) {
@@ -5605,6 +5661,8 @@ function detectiveStageMeta(stage, gapCents, unitGap) {
     return { step: 'שלב 1 מתוך 2 · חוסר של מוצר שלם', text: 'הבלש בדק קודם רק מוצרים שלא נסרקו כלל, כי זה סוג החוסר הנפוץ אצלך.' };
   }
   if (stage === DETECTIVE_SEARCH_PURE_SHORT) {
+    // v219: כשמונה השורות מלא, הנימוק האמיתי הוא עד השורות — לא "לא נמצא".
+    if (detectiveLinesWitness === 0) return { step: 'שלב 1 מתוך 2 · חוסר בשורה שנסרקה', text: 'כל השורות שבנייר נסרקו, ולכן החוסר חייב להיות כמות חלקית באחת מהן — הבלש חיפש רק שם.' };
     return { step: 'שלב 1 מתוך 2 · חוסר בלבד', text: 'לא נמצא מוצר שלם שחסר, לכן הבלש בדק חוסר בלבד — כולל כמות חלקית של מוצר שנסרק.' };
   }
   if (unitGap == null) {
@@ -5736,6 +5794,11 @@ function detectiveMakeSolution(parts, residualCents, stage) {
     if (!allocations.length) return null;
     components.push({ delta: parts[i].delta, price: parts[i].group.price, priceCents: parts[i].group.priceCents, allocations });
   }
+  // v219: עד השורות פוסל כל סיפור שלא מיישב את מונה השורות המודפס — למשל
+  // "מוצר שלם חסר" כשכל השורות נסרקו, או חוסר חלקי בלבד כשחסרה שורה בנייר.
+  if (detectiveLinesWitness != null && !detectiveScope) {
+    if (!detectiveFilterComponentsByLinesWitness(components, detectiveLinesWitness)) return null;
+  }
   // תשובות לשאלות הממוקדות הן אילוצים קשיחים. "כן" מחייב שהמוצר יהיה בתוך הפתרון;
   // "לא" מסיר רק את דרכי השיוך שמכילות אותו, בלי למחוק חלופות אחרות באותו מחיר.
   if (!detectiveScope) {
@@ -5782,8 +5845,11 @@ function detectivePairDeltas(aPrice, bPrice, targetUnits, targetMoney, tol) {
   }
   return out;
 }
-function detectiveSolveTier(groups, gap, gapCents, unitGap, toleranceCents, searchStage, singlesOnly) {
+function detectiveSolveTier(groups, gap, gapCents, unitGap, toleranceCents, searchStage, maxLevel) {
   searchStage = searchStage || DETECTIVE_SEARCH_MIXED;
+  // v219: תקרת עומק. true נשאר "מוצר בודד בלבד" (התאימות הישנה); מספר
+  // מאפשר לסולם להמשיך לטפס בלי לחזור לקומה שכבר שרפה את תקציב החיפוש.
+  maxLevel = maxLevel === true ? 1 : (Number(maxLevel) || 3);
   // 1) שינוי אחד — היחידות קובעות את הכמות בדיוק.
   if (unitGap !== 0 && detectiveStageAllowsDelta(unitGap, searchStage)) {
     const singles = [];
@@ -5795,7 +5861,14 @@ function detectiveSolveTier(groups, gap, gapCents, unitGap, toleranceCents, sear
     });
     if (singles.length) return detectiveFinishStage(singles, gap, unitGap, 1, toleranceCents, true, searchStage);
   }
-  if (singlesOnly) return null;
+  if (maxLevel < 2) return null;
+
+  // v219: בשלב טהור כל רכיב זז באותו כיוון ולפחות יחידה אחת, ולכן |פער
+  // היחידות| חייב להיות לפחות כמספר הרכיבים. בלי הדילוג הזה, חוסר של יחידה
+  // בודדת שרף את כל תקציב השלשות על צירופים בלתי-אפשריים, החזיר overflow
+  // ריק — וקטע את סולם הסבילויות לפני שהמדרגות הגסות הגיעו לפתרון האמיתי.
+  const pureStage = searchStage !== DETECTIVE_SEARCH_MIXED;
+  if (pureStage && Math.abs(unitGap) < 2) return null;
 
   // 2) שני מחירים — פותר בו-זמנית כסף ויחידות; תומך גם בחוסר+עודף ובחוסר מלא+חלקי.
   const pairs = [], pairSigs = new Set();
@@ -5815,6 +5888,9 @@ function detectiveSolveTier(groups, gap, gapCents, unitGap, toleranceCents, sear
   }
   if (pairTruncated) return detectiveFinishStage(pairs, gap, unitGap, 2, toleranceCents, false, searchStage);
   if (pairs.length) return detectiveFinishStage(pairs, gap, unitGap, 2, toleranceCents, true, searchStage);
+
+  if (maxLevel < 3) return null;
+  if (pureStage && Math.abs(unitGap) < 3) return null; // v219: שלשה טהורה דורשת לפחות 3 יחידות פער
 
   // 3) עד שלושה שינויים. כל מחיר הוא רכיב מתמטי אחד; מוצרים זהים במחיר מקובצים בתוכו.
   const positiveCap = Math.max(0, Number(receiptNoteUnits) || 0); // גבול קשיח: מוצר חסר לא יכול לעבור את כל יחידות הנייר
@@ -5970,6 +6046,9 @@ function detectiveTnuvaStrictSolve(gap, gapCents, groups) {
 function detectiveSolutions() {
   const gap = reconcileGap(), gapCents = Math.round(gap * 10000), unitGap = reconcileUnitsGap();
   if (reconcileIsBalanced()) return null;
+  // v219: עד השורות נטען פעם אחת לכל ריצת פענוח. במסלול תנובה (בלי עוגן
+  // יחידות) הוא נשאר כבוי — שם storyOk הקיים כבר אוכף את מונה השורות.
+  detectiveLinesWitness = unitGap == null ? null : detectiveComputeLinesWitness();
   if (!detectiveScope) detectiveEnsureQuestionState();
   const groups = detectiveBuildPriceGroups();
   if (!groups.length) return null;
@@ -6003,13 +6082,41 @@ function detectiveSolutions() {
       if (result) return result;
     }
   }
-  for (const toleranceCents of DETECTIVE_TOLERANCE_STEPS) {
+  // v219: סולם עמיד. עד היום קומה ששרפה את תקציב החיפוש (overflow ריק)
+  // קטעה את כל הסולם — והמדרגות הגסות, שבהן ישב הפתרון האמיתי, לא נבדקו
+  // מעולם. מעכשיו הצפה רק מנמיכה את תקרת העומק של אותו שלב (סבילות רחבה
+  // יותר רק תציף שוב את אותה קומה) והטיפוס נמשך; פתרונות ממשיכים להיבחר
+  // מהמדויק אל המקורב, בדיוק כמו קודם.
+  let ladder = null;
+  const stageCap = {};
+  outer: for (const toleranceCents of DETECTIVE_TOLERANCE_STEPS) {
     for (const searchStage of detectivePreferredStages(gapCents, unitGap)) {
-      const result = detectiveSolveTier(groups, gap, gapCents, unitGap, toleranceCents, searchStage);
-      if (result) return result;
+      const cap = stageCap[searchStage] != null ? stageCap[searchStage] : 3;
+      if (cap < 1) continue;
+      const result = detectiveSolveTier(groups, gap, gapCents, unitGap, toleranceCents, searchStage, cap);
+      if (!result) continue;
+      if (result.solutions.length) { ladder = result; break outer; }
+      if (!result.complete) { stageCap[searchStage] = Math.max(0, (Number(result.level) || 1) - 1); if (!ladder) ladder = result; }
     }
   }
-  return null;
+  // תוצאה שהזרימה המודרכת באמת יודעת להציג — כמו קודם: פתרון בטוח של מוצר
+  // בודד, או מאגר-שאלות מלא. כל השאר (צירופים "מדויקים" של החלפת מוצרים,
+  // ויתור, overflow ריק) ממשיך לקומת החילוץ.
+  if (ladder && (detectiveIsSimpleSafeResult(ladder) || (ladder.complete && ladder.overflow && ladder.solutions.length))) return ladder;
+  // v219: קומת חילוץ — מוצר בודד בקירוב. כשהיחידות מסמנות בדיוק כמה חסר
+  // ועד השורות כבר צמצם את החשודים, פער שלא נסגר עד אגורה הוא כמעט תמיד
+  // סימן שסכום/מחיר בנייר הוקלד מעט עקום (578.32 במקום 578.38 — 6 אגורות
+  // שהפילו את הבלש כליל). במקום לוותר, מציעים את המחירים הקרובים ביותר
+  // עם סטיית העיגול גלויה, ומבקשים לוודא את הנטו שהוקלד. ההצעה מסומנת
+  // coarse ומוצגת עם אזהרה — לא כפתרון ודאי. זו הרחבה של עקרון v208:
+  // מוצר בודד עם עיגול-שורה עדיף על צירוף "מדויק" — גם כשהעיגול גדול יותר.
+  for (const toleranceCents of [500, 10000]) {
+    for (const searchStage of detectivePreferredStages(gapCents, unitGap)) {
+      const result = detectiveSolveTier(groups, gap, gapCents, unitGap, toleranceCents, searchStage, true);
+      if (result && result.complete && !result.overflow && result.solutions.length) { result.coarse = true; return result; }
+    }
+  }
+  return ladder;
 }
 // התנגשות מבצע: יש מבצע פעיל במערכת שעוד לא בתוך מחירי השורות, וסכומו הצפוי קרוב להפרש (±₪1).
 // הנחת מבצע מקטינה את סכום הנייר מול השורות — לכן זה רלוונטי רק כשהנייר נמוך מהשורות (gap שלילי, "עודף").
@@ -6165,8 +6272,14 @@ function detectiveIsSimpleSafeResult(result) {
     sol.components[0].allocations.some(a => Array.isArray(a.moves) && a.moves.length === 1));
 }
 function detectiveStepForResult(result) {
+  if (detectiveIsSimpleSafeResult(result)) return 'detective';
+  // v219: תוצאת חילוץ — מוצר בודד שסוגר את הפער רק בקירוב. מוצגת כהצעה עם
+  // אזהרת "בדוק את הסכום שהוקלד", במקום ויתור מוחלט של "לא הצליח לזהות".
+  if (result && result.coarse && result.complete && !result.overflow && result.level === 1 &&
+      Array.isArray(result.solutions) && result.solutions.length && result.solutions.length <= 4 &&
+      result.solutions.every(sol => sol.components.length === 1 && sol.components[0].allocations.some(a => a.moves.length === 1))) return 'detective';
   // ברמן: תשתית ה-AI רדומה (אין שרת) — פער מורכב עובר לבדיקה ידנית מודרכת
-  return detectiveIsSimpleSafeResult(result) ? 'detective' : (AI_SCAN_ENABLED ? 'ai' : 'choose');
+  return AI_SCAN_ENABLED ? 'ai' : 'choose';
 }
 function postBarcodeSolutions() {
   if (!noteCheckRes || receiptNoteUnits == null || noteCheckForceQty) return null;
@@ -6235,10 +6348,16 @@ function detectiveSolutionsHtml(result, opts) {
       '<button data-role="' + buttonRole + '" data-i="' + si + '" class="btn-tap w-full bg-indigo-600 text-white rounded-xl py-2.5 font-black text-sm mt-2"><i class="fa-solid fa-check"></i> ' + (result.unitGap == null ? 'בדקתי מול הנייר — זה מה שקרה' : 'זה מה שקרה — אשר') + '</button>' +
     '</div>';
   }).join('');
+  // v219: הצעת חילוץ — הפער לא נסגר עד אגורה, כנראה בגלל סכום/מחיר שהוקלד
+  // מעט עקום. מציגים את המועמדים הקרובים ביותר, עם בקשה לוודא את הנטו בנייר.
+  const coarseCard = result.coarse
+    ? '<div class="bg-amber-50 border-2 border-amber-300 rounded-xl p-2.5 mt-2 text-[11px] font-black text-amber-800 leading-relaxed"><i class="fa-solid fa-triangle-exclamation"></i> אף מחיר לא סוגר את הפער במדויק — אלו ההצעות הקרובות ביותר, וכל אחת מציגה את סטיית העיגול שלה. לפני שמאשרים: ודא מול הנייר שסכום "נטו לחיוב" ומונה היחידות הוקלדו בדיוק.</div>'
+    : '';
   return '<div class="bg-white rounded-2xl border-2 border-indigo-200 p-4 shadow-sm mb-24">' +
     '<div class="text-xs font-black text-slate-400 mb-1">' + (opts.postBarcode ? 'אחרי הברקודים · הבלש בדק שוב' : stageMeta.step) + '</div>' +
-    '<div class="font-black text-lg text-slate-800"><i class="fa-solid fa-magnifying-glass text-indigo-500"></i> ' + (result.unitGap == null ? ('הבלש מצביע על ' + result.solutions.length + ' כיוונים שסוגרים את הסכום — בדוק מול הנייר') : ('נמצאו ' + result.solutions.length + ' אפשרויות שסוגרות גם סכום וגם יחידות')) + '</div>' +
+    '<div class="font-black text-lg text-slate-800"><i class="fa-solid fa-magnifying-glass text-indigo-500"></i> ' + (result.unitGap == null ? ('הבלש מצביע על ' + result.solutions.length + ' כיוונים שסוגרים את הסכום — בדוק מול הנייר') : (result.coarse ? ('הבלש מצא ' + result.solutions.length + ' חשודים קרובים — הפער לא נסגר במדויק') : ('נמצאו ' + result.solutions.length + ' אפשרויות שסוגרות גם סכום וגם יחידות'))) + '</div>' +
     '<div class="text-xs text-slate-500 font-bold mt-1">' + (opts.postBarcode ? 'החיפוש הוגבל רק למוצרים שאומתו בתעודת הנייר. אין צורך להקליד כמויות אם אחת האפשרויות נכונה.' : stageMeta.text + ' האפשרויות מסודרות מהסבירה ביותר.') + '</div>' +
+    coarseCard +
     (opts.postBarcode ? '' : promoCard) +
     rows +
     (opts.postBarcode
