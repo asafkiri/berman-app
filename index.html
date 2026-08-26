@@ -718,7 +718,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '18'; // גרסה 18: אייפון תמיד במסלול ה-WASM המכויל (עוקף BarcodeDetector חלקי של ספארי) + אבחון מלא (v224)
+const APP_VERSION = '19'; // גרסה 19: תיקון טעינת מנוע הסריקה באייפון — CDN פותר-תלויות + חימום מוקדם (v225)
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -3840,11 +3840,25 @@ let scanStream = null, scanTimer = null, barcodeDetector = null;
 let zxingReader = null, zxingActive = false;
 let wasmDetectorCls = null;
 let scanUsingWasm = false, scanRoiCanvas = null, scanTickCount = 0;
-// מנוע סריקה חזק (zxing-cpp ב-WASM) לאייפון/ספארי — חושף ממשק BarcodeDetector זהה למובנה
+// מנוע סריקה חזק (zxing-cpp ב-WASM) לאייפון/ספארי — חושף ממשק BarcodeDetector זהה למובנה.
+// חובה לטעון דרך CDN שפותר תלויות (esm.run/esm.sh): קובץ ה-dist הרגיל מכיל import
+// למזהה חבילה עירום ("zxing-wasm") שהדפדפן לא פותר — הייבוא נכשל בשקט והסורק נפל
+// למנוע הגיבוי הישן. זה בדיוק מה שקרה באייפון (אובחן משורת האבחון בשטח)
 async function ensureWasmDetector() {
   if (wasmDetectorCls) return;
-  const mod = await import('https://cdn.jsdelivr.net/npm/barcode-detector@3/dist/es/pure.min.js');
-  wasmDetectorCls = mod.BarcodeDetector;
+  const sources = [
+    'https://esm.run/barcode-detector@3/pure',
+    'https://esm.sh/barcode-detector@3/pure',
+    'https://cdn.jsdelivr.net/npm/barcode-detector@3/dist/es/pure.min.js'
+  ];
+  let lastErr = null;
+  for (const src of sources) {
+    try {
+      const mod = await import(src);
+      if (mod && mod.BarcodeDetector) { wasmDetectorCls = mod.BarcodeDetector; return; }
+    } catch (e) { lastErr = e; console.error('scanner module load failed:', src, e); }
+  }
+  throw lastErr || new Error('wasm detector load failed');
 }
 function nativeScanSupported() { return typeof window.BarcodeDetector !== 'undefined'; }
 // באייפון תמיד משתמשים במסלול ה-WASM המכויל שלנו: גם אם ספארי חושף BarcodeDetector
@@ -3852,6 +3866,16 @@ function nativeScanSupported() { return typeof window.BarcodeDetector !== 'undef
 function isIOSDevice() {
   return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
+// חימום מוקדם באייפון: טוענים את מודול הסריקה ואת קובץ ה-WASM ברקע כבר בעליית
+// האפליקציה, כדי שפתיחת הסורק הראשונה תהיה מיידית ולא תיפול לגיבוי בגלל רשת איטית
+if (isIOSDevice()) setTimeout(async () => {
+  try {
+    await ensureWasmDetector();
+    const warm = new wasmDetectorCls({ formats: ['ean_13'] });
+    const c = document.createElement('canvas'); c.width = 4; c.height = 4;
+    await warm.detect(c);
+  } catch (e) {}
+}, 1500);
 // זיהוי מכשיר סמסונג — ה-UA בכרום לאנדרואיד מוקפא (מדווח דגם "K"), לכן שואלים את ה-API הייעודי
 async function isSamsungDevice() {
   try {
