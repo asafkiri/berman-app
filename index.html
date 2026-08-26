@@ -716,7 +716,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '15'; // גרסה 15: סורק אייפון — רזולוציית 4K, תיקון הדפסה מרוחה ואזור שקט רחב יותר (v221)
+const APP_VERSION = '16'; // גרסה 16: סורק אייפון — בינאריזציה אדפטיבית להדפסה מרוחה, מאומת על ברקוד מהשטח (v222)
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -3977,6 +3977,26 @@ function scanRoiVariant(canvas, thin) {
   } catch (e) {}
   return canvas;
 }
+// בינאריזציה בסף כהה: בהדפסה מרוחה הקווים "משמינים" עד שהמנוע לא מפענח. סף נמוך
+// משאיר רק את הליבה הכהה של כל קו ומחזיר את הפרופורציות לתקן. הסף אדפטיבי —
+// אחוזון בהירות של אזור הסריקה — כך שלא תלוי בתאורה (אומת על ברקוד אמיתי מהשטח)
+function scanRoiBinarize(canvas, pct) {
+  try {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const w = canvas.width, h = canvas.height;
+    const img = ctx.getImageData(0, 0, w, h);
+    const d = img.data, n = w * h;
+    const hist = new Uint32Array(256);
+    const g = new Uint8ClampedArray(n);
+    for (let i = 0, p = 0; i < n; i++, p += 4) { const v = (d[p] * 3 + d[p + 1] * 6 + d[p + 2]) / 10 | 0; g[i] = v; hist[v]++; }
+    let acc = 0, t = 128; const target = n * pct;
+    for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= target) { t = v; break; } }
+    t = Math.max(40, Math.min(140, t));
+    for (let i = 0, p = 0; i < n; i++, p += 4) { const val = g[i] > t ? 255 : 0; d[p] = d[p + 1] = d[p + 2] = val; }
+    ctx.putImageData(img, 0, 0);
+  } catch (e) {}
+  return canvas;
+}
 // פריים מלא מוקטן — ב-4K פענוח הפריים המלא יקר; להקטנה אין מחיר כי הוא משמש רק
 // כגיבוי לברקוד גדול שמוחזק מחוץ למסגרת
 let scanFullCanvas = null;
@@ -3999,18 +4019,20 @@ function scanTick() {
   let src = v;
   if (scanUsingWasm) {
     // אייפון: המנוע רץ בתוכנה, ופענוח פריים מלא איטי ומפספס. סורקים רק את אזור
-    // המסגרת — תמונה קטנה שנפענחת מהר ואמין — ובקצב מהיר. מחזור של 6 טיקים:
-    // רוב הזמן ROI רגיל, טיק אחד עם הדקת קווים, אחד עם עיבוי, ואחד פריים מלא
-    // (מוקטן) למקרה שהברקוד מוחזק מחוץ למסגרת
+    // המסגרת — תמונה קטנה שנפענחת מהר ואמין — ובקצב מהיר. מחזור של 8 טיקים:
+    // רוב הזמן ROI רגיל, שני טיקים עם בינאריזציה כהה (הדפסה מרוחה — הפתרון
+    // המוכח לברקודים של שקיות הלחם), טיק עם הדקת קווים, ואחד פריים מלא (מוקטן)
+    // למקרה שהברקוד מוחזק מחוץ למסגרת
     scanTickCount++;
-    const mode = scanTickCount % 6;
+    const mode = scanTickCount % 8;
     if (mode === 0) {
       src = grabFullFrame(v);
     } else {
       const roi = grabScanRoi(v);
       if (roi) {
-        if (mode === 3) src = scanRoiVariant(roi, true);
-        else if (mode === 5) src = scanRoiVariant(roi, false);
+        if (mode === 3) src = scanRoiBinarize(roi, 0.2);
+        else if (mode === 5) src = scanRoiBinarize(roi, 0.3);
+        else if (mode === 7) src = scanRoiVariant(roi, true);
         else src = roi;
       }
     }
