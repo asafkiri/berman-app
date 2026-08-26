@@ -211,7 +211,9 @@
         </div>
         <div class="absolute bottom-0 inset-x-0 p-8 text-center">
           <p id="scanHint" class="text-white font-bold" style="text-shadow:0 1px 3px rgba(0,0,0,.6)">כוון את הברקוד אל תוך המסגרת</p>
+          <p id="scanDiag" class="text-white/60 text-[10px] font-bold mt-1" style="text-shadow:0 1px 3px rgba(0,0,0,.6)"></p>
         </div>
+        <button id="scanTorch" class="btn-tap hidden absolute bottom-24 left-5 w-14 h-14 rounded-full bg-black/60 text-white flex items-center justify-center text-xl" title="פנס"><i class="fa-solid fa-bolt"></i></button>
       </div>
     </div>
 
@@ -716,7 +718,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '16'; // גרסה 16: סורק אייפון — בינאריזציה אדפטיבית להדפסה מרוחה, מאומת על ברקוד מהשטח (v222)
+const APP_VERSION = '17'; // גרסה 17: סורק אייפון — פנס נגד מריחת תנועה, שער חדות ושורת אבחון (v223)
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -3866,6 +3868,37 @@ function applyScanFocus(stream) {
   } catch (e) {}
 }
 function setScanHint(t) { const h = $('scanHint'); if (h) h.textContent = t; }
+// פנס — תאורה חזקה מקצרת את זמן החשיפה של המצלמה ומעלימה את מריחת התנועה
+// שמכשילה את הפענוח בתאורת פנים. הכפתור מוצג רק כשהמצלמה תומכת
+let scanTorchOn = false;
+function setupScanTorch(stream) {
+  const btn = $('scanTorch'); if (!btn) return;
+  scanTorchOn = false;
+  btn.classList.add('hidden'); btn.classList.remove('bg-amber-400', 'text-black');
+  try {
+    const track = stream && stream.getVideoTracks && stream.getVideoTracks()[0];
+    if (!track || !track.getCapabilities || !track.applyConstraints) return;
+    const caps = track.getCapabilities();
+    if (!caps.torch) return;
+    btn.classList.remove('hidden');
+    btn.onclick = () => {
+      scanTorchOn = !scanTorchOn;
+      track.applyConstraints({ advanced: [{ torch: scanTorchOn }] }).catch(() => {});
+      btn.classList.toggle('bg-amber-400', scanTorchOn);
+      btn.classList.toggle('text-black', scanTorchOn);
+      btn.classList.toggle('bg-black/60', !scanTorchOn);
+    };
+  } catch (e) {}
+}
+// שורת אבחון קטנה במסך הסריקה (מסלול האייפון) — איזו רזולוציה וזום המצלמה באמת נתנה
+function setScanDiag(stream) {
+  const el = $('scanDiag'); if (!el) return;
+  try {
+    const track = stream && stream.getVideoTracks && stream.getVideoTracks()[0];
+    const s = track && track.getSettings ? track.getSettings() : {};
+    el.textContent = (s.width && s.height ? s.width + '×' + s.height : '') + (s.zoom ? ' · זום ×' + s.zoom : '');
+  } catch (e) {}
+}
 // זום אוטומטי — נקרא רק במסלול האייפון. פותר את בעיית הפוקוס הקרוב של עדשות האייפון:
 // מחזיקים את הטלפון רחוק יותר (איפה שהעדשה מתמקדת) והזום "מקרב" את הברקוד
 function applyAutoZoom(stream) {
@@ -3895,6 +3928,7 @@ async function openScanner() {
       applyScanFocus(scanStream);
       // זום אוטומטי רק בסמסונג (בעיית פוקוס קרוב) — שיאומי ושאר האנדרואידים ללא שינוי
       if (await isSamsungDevice()) applyAutoZoom(scanStream);
+      setupScanTorch(scanStream);
       setScanHint(readyHint);
       scanTimer = setTimeout(scanTick, 400);
     } else {
@@ -3910,6 +3944,9 @@ async function openScanner() {
         const v = $('scanVideo'); v.srcObject = scanStream; await v.play();
         applyScanFocus(scanStream);
         applyAutoZoom(scanStream);
+        setupScanTorch(scanStream);
+        setScanDiag(scanStream);
+        scanSharpMax = 0;
         setScanHint(readyHint);
         scanTimer = setTimeout(scanTick, 400);
       } catch (err) {
@@ -3977,6 +4014,28 @@ function scanRoiVariant(canvas, thin) {
   } catch (e) {}
   return canvas;
 }
+// מדד חדות זול (אנרגיית גרדיאנט אופקי על רשת דלילה) — פריים מרוח מטשטוש תנועה
+// לא יפוענח לעולם, ועדיף לדלג עליו מהר ולחכות לפריים חד במקום לבזבז עליו פענוח
+let scanSharpMax = 0;
+function roiSharpness(canvas) {
+  try {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const w = canvas.width, h = canvas.height;
+    const img = ctx.getImageData(0, 0, w, h).data;
+    let sum = 0, cnt = 0;
+    const stepY = Math.max(2, h >> 5);
+    for (let y = stepY >> 1; y < h; y += stepY) {
+      const row = y * w * 4;
+      let prev = img[row] * 3 + img[row + 1] * 6 + img[row + 2];
+      for (let x = 2; x < w; x += 2) {
+        const p = row + x * 4;
+        const cur = img[p] * 3 + img[p + 1] * 6 + img[p + 2];
+        const d = cur - prev; sum += d * d; prev = cur; cnt++;
+      }
+    }
+    return cnt ? sum / cnt : 0;
+  } catch (e) { return 0; }
+}
 // בינאריזציה בסף כהה: בהדפסה מרוחה הקווים "משמינים" עד שהמנוע לא מפענח. סף נמוך
 // משאיר רק את הליבה הכהה של כל קו ומחזיר את הפרופורציות לתקן. הסף אדפטיבי —
 // אחוזון בהירות של אזור הסריקה — כך שלא תלוי בתאורה (אומת על ברקוד אמיתי מהשטח)
@@ -4030,6 +4089,14 @@ function scanTick() {
     } else {
       const roi = grabScanRoi(v);
       if (roi) {
+        // שער חדות: פריים מרוח מדולג מיד (40ms) במקום לבזבז עליו פענוח יקר —
+        // כך הניסיונות מתרכזים בפריימים החדים. כל טיק רביעי עובר בלי שער, כרשת ביטחון
+        const sharp = roiSharpness(roi);
+        scanSharpMax = Math.max(sharp, scanSharpMax * 0.995);
+        if (sharp < scanSharpMax * 0.5 && (scanTickCount & 3) !== 0) {
+          scanTimer = setTimeout(scanTick, 40);
+          return;
+        }
         if (mode === 3) src = scanRoiBinarize(roi, 0.2);
         else if (mode === 5) src = scanRoiBinarize(roi, 0.3);
         else if (mode === 7) src = scanRoiVariant(roi, true);
@@ -4063,7 +4130,7 @@ async function startZxing() {
     $('scanVideo'),
     (result) => { if (result && zxingActive) { const t = result.getText ? result.getText() : (result.text || ''); if (t) onScanned(t); } }
   );
-  const vEl = $('scanVideo'); if (vEl && vEl.srcObject) { applyScanFocus(vEl.srcObject); applyAutoZoom(vEl.srcObject); }
+  const vEl = $('scanVideo'); if (vEl && vEl.srcObject) { applyScanFocus(vEl.srcObject); applyAutoZoom(vEl.srcObject); setupScanTorch(vEl.srcObject); }
 }
 function onScanned(val) {
   val = (val || '').toString().trim();
@@ -4109,6 +4176,9 @@ function closeScanner() {
   if (restoreProductEditor) {
     const pm = $('prodModal'); if (pm) { pm.classList.remove('hidden'); pm.classList.add('flex'); }
   }
+  const tb = $('scanTorch'); if (tb) { tb.classList.add('hidden'); tb.classList.remove('bg-amber-400', 'text-black'); }
+  scanTorchOn = false;
+  const dg = $('scanDiag'); if (dg) dg.textContent = '';
   const ov = $('scanOverlay'); if (ov) ov.classList.add('hidden');
   const m = $('scanModal'); if (m) { m.classList.add('hidden'); m.classList.remove('flex'); }
   scanPurpose = 'field';
