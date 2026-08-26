@@ -716,7 +716,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '14'; // גרסה 14: סורק מהיר באייפון — פענוח ממוקד באזור המסגרת בקצב גבוה (v220)
+const APP_VERSION = '15'; // גרסה 15: סורק אייפון — רזולוציית 4K, תיקון הדפסה מרוחה ואזור שקט רחב יותר (v221)
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -3904,7 +3904,9 @@ async function openScanner() {
         await ensureWasmDetector();
         scanUsingWasm = true; scanTickCount = 0;
         if (!barcodeDetector) barcodeDetector = new wasmDetectorCls({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'qr_code'] });
-        scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+        // רזולוציה גבוהה (4K כשאפשר): יותר פיקסלים לכל קו בברקוד — המנוע התוכנתי מתמודד
+        // הרבה יותר טוב עם הדפסה מרוחה/צפופה. במכשירים ישנים הדפדפן יורד לבד ל-1080p
+        scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } } });
         const v = $('scanVideo'); v.srcObject = scanStream; await v.play();
         applyScanFocus(scanStream);
         applyAutoZoom(scanStream);
@@ -3936,7 +3938,8 @@ function grabScanRoi(v) {
     const scale = Math.max(box.width / v.videoWidth, box.height / v.videoHeight);
     const offX = (v.videoWidth - box.width / scale) / 2;
     const offY = (v.videoHeight - box.height / scale) / 2;
-    const pad = 30; // שוליים סלחניים סביב המסגרת (בפיקסלים של המסך)
+    const pad = 50; // שוליים סלחניים סביב המסגרת — חשוב גם כדי לא לחתוך את "אזור השקט"
+                    // הלבן שהמנוע דורש משני צידי ברקוד שממלא את המסגרת עד הקצה
     let sx = offX + (fr.left - box.left - pad) / scale;
     let sy = offY + (fr.top - box.top - pad) / scale;
     let sw = (fr.width + pad * 2) / scale;
@@ -3951,6 +3954,44 @@ function grabScanRoi(v) {
     return scanRoiCanvas;
   } catch (e) { return null; }
 }
+// תיקון איכות הדפסה: קווים שנמרחים בדפוס מתמזגים והמנוע לא מפענח. מסנן מורפולוגי
+// אופקי של פיקסל אחד — thin מדקק קווים כהים (הדפסה "שמנה"), עיבוי הפוך להדפסה דהויה
+function scanRoiVariant(canvas, thin) {
+  try {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const w = canvas.width, h = canvas.height;
+    const img = ctx.getImageData(0, 0, w, h);
+    const d = img.data;
+    const g = new Uint8ClampedArray(w * h);
+    for (let i = 0, p = 0; i < g.length; i++, p += 4) g[i] = (d[p] * 3 + d[p + 1] * 6 + d[p + 2]) / 10;
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      for (let x = 0; x < w; x++) {
+        const a = g[row + (x > 0 ? x - 1 : 0)], b = g[row + x], c = g[row + (x < w - 1 ? x + 1 : x)];
+        const val = thin ? Math.max(a, b, c) : Math.min(a, b, c);
+        const p = (row + x) * 4;
+        d[p] = d[p + 1] = d[p + 2] = val;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  } catch (e) {}
+  return canvas;
+}
+// פריים מלא מוקטן — ב-4K פענוח הפריים המלא יקר; להקטנה אין מחיר כי הוא משמש רק
+// כגיבוי לברקוד גדול שמוחזק מחוץ למסגרת
+let scanFullCanvas = null;
+function grabFullFrame(v) {
+  try {
+    if (v.videoWidth <= 1440) return v;
+    const scale = 1280 / v.videoWidth;
+    if (!scanFullCanvas) scanFullCanvas = document.createElement('canvas');
+    scanFullCanvas.width = Math.round(v.videoWidth * scale);
+    scanFullCanvas.height = Math.round(v.videoHeight * scale);
+    const ctx = scanFullCanvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(v, 0, 0, scanFullCanvas.width, scanFullCanvas.height);
+    return scanFullCanvas;
+  } catch (e) { return v; }
+}
 function scanTick() {
   if (!scanStream || !barcodeDetector) return;
   const v = $('scanVideo');
@@ -3958,10 +3999,21 @@ function scanTick() {
   let src = v;
   if (scanUsingWasm) {
     // אייפון: המנוע רץ בתוכנה, ופענוח פריים מלא איטי ומפספס. סורקים רק את אזור
-    // המסגרת — תמונה קטנה פי ~10 שנפענחת מהר ואמין — ובקצב מהיר; כל טיק שלישי
-    // נסרק הפריים המלא, למקרה שהברקוד מוחזק מחוץ למסגרת
+    // המסגרת — תמונה קטנה שנפענחת מהר ואמין — ובקצב מהיר. מחזור של 6 טיקים:
+    // רוב הזמן ROI רגיל, טיק אחד עם הדקת קווים, אחד עם עיבוי, ואחד פריים מלא
+    // (מוקטן) למקרה שהברקוד מוחזק מחוץ למסגרת
     scanTickCount++;
-    if (scanTickCount % 3 !== 0) { const roi = grabScanRoi(v); if (roi) src = roi; }
+    const mode = scanTickCount % 6;
+    if (mode === 0) {
+      src = grabFullFrame(v);
+    } else {
+      const roi = grabScanRoi(v);
+      if (roi) {
+        if (mode === 3) src = scanRoiVariant(roi, true);
+        else if (mode === 5) src = scanRoiVariant(roi, false);
+        else src = roi;
+      }
+    }
   }
   barcodeDetector.detect(src).then(codes => {
     if (!scanStream) return;
