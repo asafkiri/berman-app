@@ -718,7 +718,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '17'; // גרסה 17: סורק אייפון — פנס נגד מריחת תנועה, שער חדות ושורת אבחון (v223)
+const APP_VERSION = '18'; // גרסה 18: אייפון תמיד במסלול ה-WASM המכויל (עוקף BarcodeDetector חלקי של ספארי) + אבחון מלא (v224)
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -3847,6 +3847,11 @@ async function ensureWasmDetector() {
   wasmDetectorCls = mod.BarcodeDetector;
 }
 function nativeScanSupported() { return typeof window.BarcodeDetector !== 'undefined'; }
+// באייפון תמיד משתמשים במסלול ה-WASM המכויל שלנו: גם אם ספארי חושף BarcodeDetector
+// "מובנה", הוא עלול להיות חלקי (למשל QR בלבד) — ואז שום ברקוד מוצר לא נקלט
+function isIOSDevice() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
 // זיהוי מכשיר סמסונג — ה-UA בכרום לאנדרואיד מוקפא (מדווח דגם "K"), לכן שואלים את ה-API הייעודי
 async function isSamsungDevice() {
   try {
@@ -3890,14 +3895,21 @@ function setupScanTorch(stream) {
     };
   } catch (e) {}
 }
-// שורת אבחון קטנה במסך הסריקה (מסלול האייפון) — איזו רזולוציה וזום המצלמה באמת נתנה
-function setScanDiag(stream) {
+// שורת אבחון קטנה במסך הסריקה — איזה מנוע רץ, איזו רזולוציה וזום המצלמה באמת
+// נתנה, ומונה ניסיונות חי (מוכיח שלולאת הסריקה רצה ובאיזה קצב)
+let scanDiagBase = '';
+function setScanDiag(stream, engineLabel) {
   const el = $('scanDiag'); if (!el) return;
   try {
     const track = stream && stream.getVideoTracks && stream.getVideoTracks()[0];
     const s = track && track.getSettings ? track.getSettings() : {};
-    el.textContent = (s.width && s.height ? s.width + '×' + s.height : '') + (s.zoom ? ' · זום ×' + s.zoom : '');
+    scanDiagBase = engineLabel + (s.width && s.height ? ' · ' + s.width + '×' + s.height : '') + (s.zoom ? ' · זום ×' + s.zoom : '');
+    el.textContent = scanDiagBase;
   } catch (e) {}
+}
+function bumpScanDiag() {
+  if (scanTickCount % 25 !== 0) return;
+  const el = $('scanDiag'); if (el && scanDiagBase) el.textContent = scanDiagBase + ' · נ' + scanTickCount;
 }
 // זום אוטומטי — נקרא רק במסלול האייפון. פותר את בעיית הפוקוס הקרוב של עדשות האייפון:
 // מחזיקים את הטלפון רחוק יותר (איפה שהעדשה מתמקדת) והזום "מקרב" את הברקוד
@@ -3914,13 +3926,14 @@ function applyAutoZoom(stream) {
 async function openScanner() {
   ensureScanAudio();
   acquireScreenWakeLock();
+  scanTickCount = 0;
   const m = $('scanModal'); m.classList.remove('hidden'); m.classList.add('flex');
   const continuous = (scanPurpose === 'receiving' || scanPurpose === 'returns' || scanPurpose === 'promo' || scanPurpose === 'signprod');
   const ov = $('scanOverlay'); if (ov) ov.classList.toggle('hidden', !continuous);
   const readyHint = continuous ? 'סרוק פריטים — לחץ ✕ לסיום' : 'כוון את הברקוד אל תוך המסגרת';
   setScanHint(continuous ? readyHint : 'מבקש גישה למצלמה...');
   try {
-    if (nativeScanSupported()) {
+    if (nativeScanSupported() && !isIOSDevice()) {
       scanUsingWasm = false;
       if (!barcodeDetector) barcodeDetector = new window.BarcodeDetector();
       scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
@@ -3929,6 +3942,7 @@ async function openScanner() {
       // זום אוטומטי רק בסמסונג (בעיית פוקוס קרוב) — שיאומי ושאר האנדרואידים ללא שינוי
       if (await isSamsungDevice()) applyAutoZoom(scanStream);
       setupScanTorch(scanStream);
+      setScanDiag(scanStream, 'מובנה');
       setScanHint(readyHint);
       scanTimer = setTimeout(scanTick, 400);
     } else {
@@ -3936,7 +3950,7 @@ async function openScanner() {
       setScanHint('טוען מנוע סריקה...');
       try {
         await ensureWasmDetector();
-        scanUsingWasm = true; scanTickCount = 0;
+        scanUsingWasm = true;
         if (!barcodeDetector) barcodeDetector = new wasmDetectorCls({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'qr_code'] });
         // רזולוציה גבוהה (4K כשאפשר): יותר פיקסלים לכל קו בברקוד — המנוע התוכנתי מתמודד
         // הרבה יותר טוב עם הדפסה מרוחה/צפופה. במכשירים ישנים הדפדפן יורד לבד ל-1080p
@@ -3945,7 +3959,7 @@ async function openScanner() {
         applyScanFocus(scanStream);
         applyAutoZoom(scanStream);
         setupScanTorch(scanStream);
-        setScanDiag(scanStream);
+        setScanDiag(scanStream, 'WASM');
         scanSharpMax = 0;
         setScanHint(readyHint);
         scanTimer = setTimeout(scanTick, 400);
@@ -4075,6 +4089,8 @@ function scanTick() {
   if (!scanStream || !barcodeDetector) return;
   const v = $('scanVideo');
   if (!v || v.readyState < 2) { scanTimer = setTimeout(scanTick, 200); return; }
+  scanTickCount++;
+  bumpScanDiag();
   let src = v;
   if (scanUsingWasm) {
     // אייפון: המנוע רץ בתוכנה, ופענוח פריים מלא איטי ומפספס. סורקים רק את אזור
@@ -4082,7 +4098,6 @@ function scanTick() {
     // רוב הזמן ROI רגיל, שני טיקים עם בינאריזציה כהה (הדפסה מרוחה — הפתרון
     // המוכח לברקודים של שקיות הלחם), טיק עם הדקת קווים, ואחד פריים מלא (מוקטן)
     // למקרה שהברקוד מוחזק מחוץ למסגרת
-    scanTickCount++;
     const mode = scanTickCount % 8;
     if (mode === 0) {
       src = grabFullFrame(v);
@@ -4130,7 +4145,7 @@ async function startZxing() {
     $('scanVideo'),
     (result) => { if (result && zxingActive) { const t = result.getText ? result.getText() : (result.text || ''); if (t) onScanned(t); } }
   );
-  const vEl = $('scanVideo'); if (vEl && vEl.srcObject) { applyScanFocus(vEl.srcObject); applyAutoZoom(vEl.srcObject); setupScanTorch(vEl.srcObject); }
+  const vEl = $('scanVideo'); if (vEl && vEl.srcObject) { applyScanFocus(vEl.srcObject); applyAutoZoom(vEl.srcObject); setupScanTorch(vEl.srcObject); setScanDiag(vEl.srcObject, 'גיבוי'); }
 }
 function onScanned(val) {
   val = (val || '').toString().trim();
