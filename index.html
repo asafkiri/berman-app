@@ -683,12 +683,10 @@ let reconcileDetectiveRoundingGap = null; // סטיית עיגול זעירה ש
 // v178: האם באמת הוזנו נתוני נייר (הקלדה ידנית / החלת סריקת AI) על noteQty.
 // עד שזה קורה, noteQty הוא עותק של מה שנסרק — והכותרת חייבת לומר את זה.
 let reconcilePaperEntered = false;
-// v13: הלקוח כבר מותאם לשרת berman-ai-scan (עוגני יחידות+שורות, מתאם ברמן,
-// ייבוא מבצעים מצילום). מדליקים בשני צעדים אחרי שהשרת נפרס ל-Cloud Run:
-// 1) ממלאים כאן את כתובת השירות + '/scan'  2) הופכים את הדגל ל-true.
-// עד אז שום דבר באפליקציה לא מושפע.
-const AI_SCAN_WORKER_URL = ''; // לדוגמה: 'https://berman-ai-scan-XXXX.europe-west1.run.app/scan'
-const AI_SCAN_ENABLED = false; // מדליקים רק אחרי שהשרת נפרס ונבדק
+// v14: השרת נפרס ל-Cloud Run ואומת (24.8) — /health מחזיר keyConfigured:true,
+// keyStatus:"ready". הסריקה דולקת מכאן.
+const AI_SCAN_WORKER_URL = 'https://berman-ai-scan-701905665767.europe-west1.run.app/scan';
+const AI_SCAN_ENABLED = true;
 let aiScanDocuments = [];        // תמונות בזיכרון בלבד — אינן נשמרות בטיוטה או בענן
 let aiScanBusy = false;
 let aiScanProgressText = '';
@@ -720,7 +718,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '13'; // גרסה 13: חיבור לשרת הסריקה של ברמן — עוגני יחידות+שורות, מתאם ברמן, וייבוא מבצעים מצילום (רדום עד הפריסה)
+const APP_VERSION = '14'; // גרסה 14: סריקת AI פעילה — השרת נפרס ואומת, AI_SCAN_ENABLED דלוק
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
