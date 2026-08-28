@@ -720,7 +720,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '20'; // גרסה 20: מיזוג — סריקת AI פעילה (שרת ברמן פרוס ומאומת) על גבי תיקוני מנוע הסריקה לאייפון של גרסה 19
+const APP_VERSION = '21'; // גרסה 21: בחירת תמונה מהגלריה לסריקה ולייבוא מבצעים — בלי מצלמה כפויה (התעודות והמכתבים מגיעים בוואטסאפ)
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10611,7 +10611,9 @@ function aiInvoiceCaptureHtml() {
     const pages = doc.pages.map((p, pi) => '<div class="relative w-28 h-28 shrink-0 rounded-lg overflow-hidden border-2 ' + (p.orientationConfirmed ? 'border-emerald-400' : 'border-amber-400') + ' bg-white"><button data-role="ai-review-page" data-doc="' + i + '" data-page="' + pi + '" class="absolute inset-0 w-full h-full"><img src="' + p.dataUrl + '" class="w-full h-full object-contain" alt="פתח בדיקת כיוון"></button><button data-role="ai-remove-page" data-doc="' + i + '" data-page="' + pi + '" aria-label="מחק עמוד" class="absolute top-1 left-1 w-7 h-7 rounded-full bg-rose-600 text-white text-xs shadow z-10"><i class="fa-solid fa-xmark"></i></button><button data-role="ai-review-page" data-doc="' + i + '" data-page="' + pi + '" aria-label="פתח תמונה גדולה וסובב" class="absolute top-1 right-1 w-7 h-7 rounded-full bg-blue-600 text-white text-xs shadow z-10"><i class="fa-solid fa-expand"></i></button><div class="absolute bottom-0 inset-x-0 ' + (p.orientationConfirmed ? 'bg-emerald-700/90' : 'bg-amber-600/95') + ' text-white text-[9px] font-black text-center py-1 pointer-events-none">' + (p.orientationConfirmed ? '✓ הכיוון אושר' : 'דרוש אישור') + ' · עמוד ' + (pi + 1) + ((Number(p.rotation) || 0) ? ' · ' + (Number(p.rotation) || 0) + '°' : '') + (p.cropped ? ' · נחתך' : '') + '</div></div>').join('');
     return '<div class="rounded-2xl border-2 border-slate-200 p-3 mb-3"><div class="flex items-center justify-between gap-2"><div><div class="font-black text-slate-800">תעודה ' + (i + 1) + '</div><div class="text-[11px] font-bold text-slate-500">' + noteText + '</div></div><span class="text-xs font-black ' + (doc.pages.length ? 'text-emerald-700' : 'text-rose-600') + '">' + doc.pages.length + ' עמודים</span></div>' +
       (pages ? '<div class="flex gap-2 overflow-x-auto py-3">' + pages + '</div>' : '<div class="rounded-xl bg-amber-50 border border-amber-200 p-2 text-xs font-bold text-amber-800 my-3">צלם את כל דפי התעודה. צילום אחד ברור לכל דף.</div>') +
-      '<input id="aiDocFile_' + i + '" data-role="ai-file" data-doc="' + i + '" type="file" accept="image/*" capture="environment" multiple class="hidden">' +
+      // v21: בלי capture — התעודות מגיעות לעיתים כתמונה בוואטסאפ; בורר המערכת
+      // מציע גם "צלם" וגם גלריה, במקום מצלמה כפויה.
+      '<input id="aiDocFile_' + i + '" data-role="ai-file" data-doc="' + i + '" type="file" accept="image/*" multiple class="hidden">' +
       '<button data-role="ai-add-photo" data-doc="' + i + '" class="btn-tap w-full bg-slate-100 text-slate-700 rounded-xl py-2.5 font-black"><i class="fa-solid fa-camera"></i> ' + (doc.pages.length ? 'הוסף עמוד נוסף' : 'צלם תעודה') + '</button></div>';
   }).join('');
   const ready = aiAllPagesOrientationConfirmed();
@@ -14014,7 +14016,9 @@ function renderPromos() {
   if (promoImportState) { app.innerHTML = promoImportHtml(); return; } // v13: מסך אישור הייבוא מצילום
   const head = '<div class="flex items-center justify-between px-1 py-1 mb-2"><h2 class="font-black text-2xl text-slate-800">מבצעים</h2></div>' +
     '<button data-role="promo-new" class="btn-tap w-full bg-rose-600 text-white rounded-2xl py-3.5 font-black text-base flex items-center justify-center gap-2 mb-2"><i class="fa-solid fa-plus"></i> מבצע חדש</button>' +
-    (promoImportAvailable() ? '<input id="promoSheetFile" type="file" accept="image/*" capture="environment" multiple class="hidden">' +
+    // v21: בלי capture — מכתב המבצעים מגיע בוואטסאפ, ולכן חייבים את בורר
+    // התמונות של המערכת (גלריה/צילום/קבצים), לא מצלמה כפויה.
+    (promoImportAvailable() ? '<input id="promoSheetFile" type="file" accept="image/*" multiple class="hidden">' +
       '<button data-role="promo-import" class="btn-tap w-full bg-white border-2 border-violet-300 text-violet-700 rounded-2xl py-3 font-black text-sm flex items-center justify-center gap-2 mb-2"><i class="fa-solid fa-wand-magic-sparkles"></i> ייבוא מבצעים מצילום</button>' : '') +
     (promos.length ? '<button data-role="sign-start" class="btn-tap w-full bg-white border-2 border-rose-200 text-rose-700 rounded-2xl py-3 font-black text-sm flex items-center justify-center gap-2 mb-2"><i class="fa-solid fa-print"></i> הכן שלט למבצעים</button>' : '') +
     '<button data-role="sign-start-internal" class="btn-tap w-full bg-white border-2 border-amber-300 text-amber-700 rounded-2xl py-3 font-black text-sm flex items-center justify-center gap-2 mb-3"><i class="fa-solid fa-tag"></i> שלט למבצע פנימי של החנות</button>';
