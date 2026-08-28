@@ -720,7 +720,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '21'; // גרסה 21: בחירת תמונה מהגלריה לסריקה ולייבוא מבצעים — בלי מצלמה כפויה (התעודות והמכתבים מגיעים בוואטסאפ)
+const APP_VERSION = '22'; // גרסה 22: סבילות עיגול לכסף המחושב מול "נטו לחיוב" — אגורה לשורה (נתפס בתעודה האמיתית הראשונה: 394.42 מול 394.43)
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -9042,6 +9042,12 @@ function aiEvaluateInvoiceScan(payload) {
     else returned.set(idx, doc);
   });
   let extractedTotalCents = 0, extractedUnits = 0, rowTotalCents = 0, verifiedDocumentDiscountCents = 0;
+  // v22 ברמן: כסף השורות מחושב מהקטלוג (על הנייר אין סכומי שורה), והמרכזת של
+  // ברמן מעגלת כל שורה בדרכה. נתפס בתעודה האמיתית הראשונה (28.8): 9 שורות,
+  // 394.42 מחושב מול 394.43 "נטו לחיוב" — אגורה אחת חסמה תעודה מושלמת.
+  // הסבילות: אגורה לשורה (מינ' 2, מקס' 15 לתעודה) — רחוקה בסדר גודל מהמוצר
+  // הזול ביותר (132 אג'), כך שהיא לא יכולה להסתיר שורה או יחידה אמיתית.
+  let roundingSlackCents = 0;
   // v178: תעודה שלא חזר עבורה פענוח — או שחזרה בלי שורות מוצר — נספרת במפורש.
   // בלי הספירה הזאת אין לה שורות "שלא שויכו" ואין לה שורות פגומות, ולכן
   // basketComplete נשאר אמת והמערכת הכריזה "עודף" על כל מה שנסרק מהתעודה החסרה.
@@ -9183,7 +9189,14 @@ function aiEvaluateInvoiceScan(payload) {
       if (recoveredCents > 0) { docRowsCents += recoveredCents; rowTotalCents += recoveredCents; }
     }
     const printedDiscountCents = aiMoneyCents(doc.documentDiscountExVat);
-    const impliedDiscountCents = subtotalCents == null ? null : docRowsCents - subtotalCents;
+    // v22: הפרש עיגול מותר בין הכסף המחושב ל"נטו לחיוב" המודפס — אגורה לשורה.
+    const docRoundingTolCents = Math.min(15, Math.max(2, Array.isArray(doc.rows) ? doc.rows.length : 0));
+    roundingSlackCents += docRoundingTolCents;
+    const impliedRawCents = subtotalCents == null ? null : docRowsCents - subtotalCents;
+    const impliedDiscountCents = impliedRawCents != null && impliedRawCents !== 0 && Math.abs(impliedRawCents) <= docRoundingTolCents ? 0 : impliedRawCents;
+    if (impliedRawCents != null && impliedRawCents !== 0 && impliedDiscountCents === 0) {
+      warnings.push('תעודה ' + (index + 1) + ': הפרש עיגול של ' + Math.abs(impliedRawCents) + ' אג\' בין סכום השורות המחושב (₪' + fmtMoney(docRowsCents / 100) + ') ל"נטו לחיוב" (₪' + fmtMoney(subtotalCents / 100) + ') — תקין בנייר של ברמן, הספק מעגל כל שורה בדרכו');
+    }
     if (impliedDiscountCents != null) {
       if (impliedDiscountCents < 0) errors.push('תעודה ' + (index + 1) + ': סכום השורות נמוך מסכום התעודה — כנראה חסרה שורה או תוספת שלא נקראה');
       else if (impliedDiscountCents === 0) {
@@ -9238,7 +9251,9 @@ function aiEvaluateInvoiceScan(payload) {
   const netMoneyProven = (() => {
     const expected = aiMoneyCents(receiptNoteTotal);
     if (expected == null || extractedTotalCents !== expected) return false;
-    return (rowTotalCents - extractedTotalCents) === verifiedDocumentDiscountCents;
+    // v22: "נטו לחיוב" המודפס מול הסכום שהוקלד נשאר מדויק לאגורה; הסבילות
+    // חלה רק על ההשוואה לכסף המחושב מהקטלוג, שם העיגול של הספק שונה משלנו.
+    return Math.abs((rowTotalCents - extractedTotalCents) - verifiedDocumentDiscountCents) <= roundingSlackCents;
   })();
   if (netMoneyProven && pendingList.length) {
     const stillOpen = [];
@@ -9277,7 +9292,9 @@ function aiEvaluateInvoiceScan(payload) {
   if (expectedTotalCents != null && extractedTotalCents !== expectedTotalCents) errors.push('סך כל המסמכים אינו זהה באגורות לסכום שהוקלד בתחילת הקליטה');
   if (receiptNoteUnits != null && extractedUnits !== Number(receiptNoteUnits)) errors.push('סך היחידות שנקרא (' + extractedUnits + ') אינו זהה ל-' + receiptNoteUnits + ' שהוקלדו בתחילת הקליטה');
   const documentDiscountCents = rowTotalCents - extractedTotalCents;
-  if (documentDiscountCents !== verifiedDocumentDiscountCents) errors.push('סך הנחות המסמך שנקראו אינו סוגר בדיוק את סכום כל השורות');
+  // v22: אותה סבילות עיגול גם ברמת המשלוח כולו — הפער המותר הוא סכום
+  // הסבילויות של התעודות שנקראו.
+  if (Math.abs(documentDiscountCents - verifiedDocumentDiscountCents) > roundingSlackCents) errors.push('סך הנחות המסמך שנקראו אינו סוגר בדיוק את סכום כל השורות');
   // הצגת הצלבת כמות למועמד לפי שם נעשית על סכום כל הופעות המוצר, ולא על
   // שורה בודדת. זו ראיית חיזוק בלבד; היא אינה הופכת שם לברקוד ואינה מחילה דבר.
   const suggestedQtyByProduct = new Map();
