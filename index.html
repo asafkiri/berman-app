@@ -724,7 +724,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '39'; // גרסה 39: כשכל הפער מוסבר בשורה שהגיעה במחירון מלא — הסבר גדול בראש המסך שאומר למשתמש שאפשר לסגור בביטחון
+const APP_VERSION = '40'; // גרסה 40: תעודה שהפער בה מוסבר וממתין לקיזוז המרכזת מסומנת "ממתינה למרכזת" ואינה נספרת כבעיה פתוחה
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10505,6 +10505,31 @@ function aiPriceGapContext(ev) {
 // למעלה, לפני כל רשימת בעיות. משתמש שרואה פער של ₪41 ולא מבין למה נעצר;
 // משתמש שקורא "השורה הזאת הגיעה בלי ההנחה, המבצע יקזז את זה במרכזת, המחיר
 // הסופי שלך זהה" — סוגר את התעודה בביטחון וממשיך לעבוד.
+// v40: תיעוד ההסבר על התעודה עצמה. בלעדיו התעודה נשמרת עם פער לא מוסבר
+// והופכת ל"בעיה פתוחה" ברשימה — בזמן שהיא כלל אינה בעיה אלא ממתינה לקיזוז
+// המרכזת. הרשומה נבנית מאותו aiPriceGapContext שמייצר את ההסבר במסך, כך
+// ששניהם לעולם לא יוכלו לומר דברים שונים.
+function aiMonthEndPendingRecord(ev) {
+  const ctx = aiPriceGapContext(ev);
+  if (!ctx || !ctx.fullListRow) return null;
+  const r = ctx.fullListRow, promo = r.activePromo;
+  if (!promo) return null; // בלי מבצע אין קיזוז צפוי — זו באמת בעיה פתוחה
+  const fixed = promoFixedPrice(promo);
+  if (!(fixed > 0)) return null;
+  return {
+    productId: String(r.product.id),
+    name: String(r.product.name || '').slice(0, 160),
+    qty: Number(r.qty) || 0,
+    listPrice: r2(r.catalogList),
+    expectedNet: r2(r.net),
+    gap: r2(ctx.gap),
+    promoName: String(promo.name || '').slice(0, 160),
+    promoFixedPrice: r2(fixed),
+    expectedRebate: r2((r.catalogList - fixed) * r.qty),
+    finalUnitPrice: r2(fixed),
+    recordedAt: Date.now()
+  };
+}
 function aiFullListExplanationHtml(ev) {
   const ctx = aiPriceGapContext(ev);
   if (!ctx || !ctx.fullListRow) return '';
@@ -12203,13 +12228,16 @@ function saveReconciledReceipt(opts) {
   const unresolvedAmountGap = reconcileMoneyBalanced() ? 0 : reconcileGap();
   const unresolvedUnitsGap = (reconcileUnitsGap() != null && reconcileUnitsGap() !== 0) ? reconcileUnitsGap() : 0;
   const aiAudit = reconcileAiAudit ? cloneSafe(reconcileAiAudit) : null;
+  // v40: הפער שמוסבר במלואו בשורה שהגיעה במחירון מלא על מוצר במבצע —
+  // נשמר כהמתנה לקיזוז המרכזת, לא כבעיה פתוחה.
+  const monthEndPending = aiScanEvaluation ? aiMonthEndPendingRecord(aiScanEvaluation) : null;
   const supplierCreditClaim = reconcileSupplierCreditClaim ? cloneSafe(reconcileSupplierCreditClaim) : null;
   const effectiveInfo = receiptDiscrepancyInfo({ items: lines, noteParts: receiptNotes.slice(), unresolvedAmountGap, unresolvedUnitsGap, supplierCreditClaim, aiAudit });
   const open = effectiveInfo.open;
   const payableEx = receiptNoteTotal != null
     ? r2(Math.max(0, Number(receiptNoteTotal) - (Number(effectiveInfo.shortValRaw) || 0)))
     : r2(Math.max(0, ex - (Number(effectiveInfo.overVal) || 0)));
-  pendingReceipt = { lines, ex: payableEx, calculatedEx, receivedEx: ex, roundingAdjustment, grossEx, supplierDiscount, supplierPromoItems: reconcileSupplierPromoItems.slice(), supplierPromoMismatchItems: reconcilePromoMismatchItems.slice(), supplierCreditClaim, aiAudit, noteTotal: receiptNoteTotal, status: open ? 'open' : 'ok', noteParts: receiptNotes.slice(), unresolvedAmountGap, unresolvedUnitsGap };
+  pendingReceipt = { lines, ex: payableEx, calculatedEx, receivedEx: ex, roundingAdjustment, grossEx, supplierDiscount, supplierPromoItems: reconcileSupplierPromoItems.slice(), supplierPromoMismatchItems: reconcilePromoMismatchItems.slice(), supplierCreditClaim, aiAudit, monthEndPending, noteTotal: receiptNoteTotal, status: open ? 'open' : 'ok', noteParts: receiptNotes.slice(), unresolvedAmountGap, unresolvedUnitsGap };
   presentReconcileSummary(lines, payableEx, open, { calculatedEx, receivedEx: ex, roundingAdjustment, grossEx, supplierDiscount, supplierPromoItems: reconcileSupplierPromoItems.slice(), supplierPromoMismatchItems: reconcilePromoMismatchItems.slice(), supplierCreditClaim, aiAudit, internalOffsets: effectiveInfo.priceOffsets || [] });
 }
 function presentReconcileSummary(lines, ex, open, extra) {
@@ -12486,12 +12514,12 @@ async function saveReceiptFix() {
 }
 async function confirmReceipt() {
   if (!pendingReceipt) { hideReceiptSummary(); return; }
-  const { lines, ex, calculatedEx, roundingAdjustment, grossEx, supplierDiscount, supplierPromoItems, supplierPromoMismatchItems, supplierCreditClaim, aiAudit, noteTotal, status, noteParts, unresolvedAmountGap, unresolvedUnitsGap } = pendingReceipt;
+  const { lines, ex, calculatedEx, roundingAdjustment, grossEx, supplierDiscount, supplierPromoItems, supplierPromoMismatchItems, supplierCreditClaim, aiAudit, monthEndPending, noteTotal, status, noteParts, unresolvedAmountGap, unresolvedUnitsGap } = pendingReceipt;
   const opId = pendingReceipt.operationId || receiptDraftId || (pendingReceipt.operationId = makeOperationId('receipt'));
   const creditClaim = supplierCreditClaim ? { ...cloneSafe(supplierCreditClaim), createdAt: supplierCreditClaim.createdAt || Date.now() } : null;
   const docDate = receiptDocDate || todayStr();
   const receiptVatRate = vatRateForNewDocument(docDate);
-  const data = { timestamp: Date.now(), date: todayStr(), docDate, vatPct: r2(receiptVatRate * 100), items: lines, count: lines.length, totalExVat: ex, totalIncVat: r2(ex * (1 + receiptVatRate)), receivedExVat: (calculatedEx != null ? calculatedEx : ex), calculatedExVat: (calculatedEx != null ? calculatedEx : ex), roundingAdjustment: r2(Number(roundingAdjustment) || 0), grossExVat: (grossEx != null ? grossEx : (calculatedEx != null ? calculatedEx : ex)), supplierDiscount: r2(Number(supplierDiscount) || 0), supplierPromoItems: (Array.isArray(supplierPromoItems) ? supplierPromoItems : []), supplierPromoMismatchItems: (Array.isArray(supplierPromoMismatchItems) ? supplierPromoMismatchItems : []), supplierCreditClaim: creditClaim, aiAudit: aiAudit ? cloneSafe(aiAudit) : null, noteTotalInc: (noteTotal != null ? noteTotal : null), noteParts: (Array.isArray(noteParts) ? noteParts : []), monthEndRebates: monthEndSnapshotForLines(lines, docDate), unresolvedAmountGap: r2(Number(unresolvedAmountGap) || 0), unresolvedUnitsGap: Number(unresolvedUnitsGap) || 0, status: status || 'ok', operationId: opId };
+  const data = { timestamp: Date.now(), date: todayStr(), docDate, vatPct: r2(receiptVatRate * 100), items: lines, count: lines.length, totalExVat: ex, totalIncVat: r2(ex * (1 + receiptVatRate)), receivedExVat: (calculatedEx != null ? calculatedEx : ex), calculatedExVat: (calculatedEx != null ? calculatedEx : ex), roundingAdjustment: r2(Number(roundingAdjustment) || 0), grossExVat: (grossEx != null ? grossEx : (calculatedEx != null ? calculatedEx : ex)), supplierDiscount: r2(Number(supplierDiscount) || 0), supplierPromoItems: (Array.isArray(supplierPromoItems) ? supplierPromoItems : []), supplierPromoMismatchItems: (Array.isArray(supplierPromoMismatchItems) ? supplierPromoMismatchItems : []), supplierCreditClaim: creditClaim, aiAudit: aiAudit ? cloneSafe(aiAudit) : null, noteTotalInc: (noteTotal != null ? noteTotal : null), noteParts: (Array.isArray(noteParts) ? noteParts : []), monthEndRebates: monthEndSnapshotForLines(lines, docDate), monthEndPending: (monthEndPending || null), unresolvedAmountGap: r2(Number(unresolvedAmountGap) || 0), unresolvedUnitsGap: Number(unresolvedUnitsGap) || 0, status: status || 'ok', operationId: opId };
   const saved = await runCloudTask('save receipt before clearing draft', { op: 'set', path: dataPath('receipts', opId), data, operationId: opId });
   if (!saved) return;
   hideReceiptSummary();
@@ -12902,7 +12930,14 @@ function receiptDiscrepancyInfo(rc, opts) {
   const linesVerified = paperLines != null && paperLines === docLineCount;
   const amountGapCents = Math.abs(Math.round(unresolvedAmountGap * 100));
   const amountToleranceCents = ((paperUnits != null && unresolvedUnitsGap === 0) || (paperUnits == null && linesVerified)) ? RECEIPT_ROUNDING_TOLERANCE_CENTS : 0;
-  const amountGapOpen = amountGapCents > amountToleranceCents;
+  // v40: פער שמוסבר במלואו בשורה שהגיעה במחירון מלא על מוצר במבצע אינו בעיה
+  // פתוחה — הוא ממתין לקיזוז המרכזת. התעודה מסומנת ככזו ואינה נספרת בחוסרים,
+  // אבל רק כשהסכום השמור תואם לפער בפועל: רשומה שאינה מסבירה את מה שיש
+  // בתעודה עכשיו אינה מבטלת דבר.
+  const pendingRec = rc && rc.monthEndPending && typeof rc.monthEndPending === 'object' ? rc.monthEndPending : null;
+  const monthEndWaiting = !!(pendingRec && Number(pendingRec.expectedRebate) > 0
+    && Math.abs(Math.round((Number(pendingRec.gap) || 0) * 100) - Math.round(unresolvedAmountGap * 100)) <= 1);
+  const amountGapOpen = amountGapCents > amountToleranceCents && !monthEndWaiting;
   if (amountGapOpen && Math.round(unresolvedAmountGap * 100) > 0) shortVal += unresolvedAmountGap;
   else if (amountGapOpen && Math.round(unresolvedAmountGap * 100) < 0) overVal += -unresolvedAmountGap;
   // v203: חוסר יכול להיסגר גם בזיכוי כספי מהספק, לא רק בהשלמת סחורה.
@@ -12927,7 +12962,7 @@ function receiptDiscrepancyInfo(rc, opts) {
   // חוסר) נבלע גם הוא בזיכוי. עודף, פער יחידות וממצאי AI אינם נסגרים בכסף.
   const shortSideOpen = (finalShort.length > 0 || (amountGapOpen && Math.round(unresolvedAmountGap * 100) > 0)) && !shortFullyCredited;
   const overSideOpen = finalOver.length > 0 || (amountGapOpen && Math.round(unresolvedAmountGap * 100) < 0);
-  return { open: !!(shortSideOpen || overSideOpen || unresolvedUnitsGap !== 0 || aiAuditOpen || creditOpen), shortItems: finalShort, overItems: finalOver, priceOffsets, externalOffsets, shortVal: r2(shortVal), overVal: r2(overVal), shortValRaw, shortCreditEx, shortCreditNotes, shortFullyCredited, unresolvedAmountGap, unresolvedUnitsGap, amountGapOpen, amountToleranceCents, aiAuditOpen };
+  return { open: !!(shortSideOpen || overSideOpen || unresolvedUnitsGap !== 0 || aiAuditOpen || creditOpen), monthEndWaiting, monthEndPending: pendingRec, shortItems: finalShort, overItems: finalOver, priceOffsets, externalOffsets, shortVal: r2(shortVal), overVal: r2(overVal), shortValRaw, shortCreditEx, shortCreditNotes, shortFullyCredited, unresolvedAmountGap, unresolvedUnitsGap, amountGapOpen, amountToleranceCents, aiAuditOpen };
 }
 function receiptsBalance() {
   let bal = 0, n = 0;
@@ -13337,6 +13372,12 @@ function renderReceiptsHistory() {
     } else if (di.shortFullyCredited) {
       statusTxt = '<i class="fa-solid fa-circle-check"></i> אומתה · החוסר נסגר בזיכוי';
       metaStatus = ' · <span class="text-emerald-700 font-black">נסגר בזיכוי</span>';
+    } else if (di.monthEndWaiting) {
+      // v40: אינה בעיה פתוחה — ההפרש כבר מוסבר וממתין לקיזוז המרכזת.
+      barCls = 'bg-violet-600 text-white';
+      borderCls = 'border-violet-300';
+      statusTxt = '<i class="fa-solid fa-hourglass-half"></i> אומתה · ממתינה למרכזת';
+      metaStatus = ' · <span class="text-violet-700 font-black">ממתינה למרכזת</span>';
     } else if ((Number(rc.supplierDiscount) || 0) > 0) {
       statusTxt = '<i class="fa-solid fa-circle-check"></i> אומתה · מבצע ספק';
       metaStatus = ' · <span class="text-emerald-700 font-black">מבצע ספק</span>';
@@ -13363,6 +13404,15 @@ function renderReceiptsHistory() {
         '<div class="bg-slate-50 rounded-xl p-3 border border-slate-100">' + rows + '</div>' +
         '<div class="flex items-center justify-end mt-2 text-xs text-slate-500 font-bold px-1"><span>שווי שנסרק: ₪' + fmtMoney(rc.receivedExVat != null ? rc.receivedExVat : (rc.calculatedExVat != null ? rc.calculatedExVat : rc.totalExVat)) + ' · לתשלום: ₪' + fmtMoney(payableEx) + '</span></div>' +
         (rc.noteTotalInc != null ? '<div class="text-[11px] text-slate-500 font-bold mt-1 px-1"><i class="fa-solid fa-file-invoice"></i> ' + (rc.noteParts && rc.noteParts.length > 1 ? rc.noteParts.length + ' תעודות ספק: ' + rc.noteParts.map(x => '₪' + fmtMoney(normNote(x).amount)).join(' + ') + ' = ₪' + fmtMoney(rc.noteTotalInc) : 'תעודת ספק: ₪' + fmtMoney(rc.noteTotalInc)) + '</div>' : '') +
+        (di.monthEndWaiting && di.monthEndPending ? (function () {
+          // v40: מי שפותח את התעודה חודש אחרי כן צריך לראות בשנייה למה היא
+          // אינה "בעיה" — עם השם, הסכום, והמחיר הסופי שכבר ידוע.
+          const mp = di.monthEndPending;
+          return '<div class="mt-2 bg-violet-50 border border-violet-200 rounded-xl p-2.5 text-xs">' +
+            '<div class="font-black text-violet-800 mb-1"><i class="fa-solid fa-hourglass-half"></i> ממתינה לקיזוז המרכזת \u2014 לא נדרש טיפול</div>' +
+            '<div class="font-bold text-violet-900 leading-relaxed">' + htmlEscape(String(mp.name || '')) + ' חויב בתעודה במחירון מלא \u20aa' + fmtMoney(mp.listPrice) + ' במקום \u20aa' + fmt3(mp.expectedNet) + ' \u2014 הפרש של \u20aa' + fmtMoney(mp.gap) + '.<br>' +
+            'המוצר במבצע (\u20aa' + fmt3(mp.promoFixedPrice) + ' ליח\u05f3), והקיזוז הצפוי במרכזת \u20aa' + fmtMoney(mp.expectedRebate) + ' על ' + mp.qty + ' יח\u05f3 \u2014 כך שהמחיר הסופי נשאר \u20aa' + fmt3(mp.finalUnitPrice) + ' ליחידה.</div></div>';
+        })() : '') +
         (effectiveOpen ? '<div class="mt-2 bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs">' +
           '<div class="font-black text-rose-700 mb-1"><i class="fa-solid fa-triangle-exclamation"></i> הפרשים מול התעודה</div>' +
           di.shortItems.map(s => receiptDiffRowHtml(rc, s, 'short')).join('') +
