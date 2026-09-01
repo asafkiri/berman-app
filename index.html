@@ -724,7 +724,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '37'; // גרסה 37: מוצר במבצע פעיל מסומן בפירוט המחירים — הסיבה שהספק מחייב אותו במחירון מלא בתעודה ומקזז במרכזת
+const APP_VERSION = '38'; // גרסה 38: שורת המבצע מתוקנת לפי הנתונים — המחיר בתעודה נשאר מחיר ההנחה, וקיזוז המרכזת מוצג בכסף
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10507,7 +10507,7 @@ function aiPriceBreakdownHtml(ev) {
         (r.listMismatch ? '⚠ ' : '') + 'נייר ' + printed + ' · מחירון ' + (r.catalogList > 0 ? '₪' + fmtMoney(r.catalogList) : '—') +
         ' · הנחה ' + pctTxt(r.pct) + '% → ₪' + fmt3(r.net) + ' ליח׳' +
       '</div>' +
-      (r.activePromo ? '<div class="text-[10px] font-black text-violet-700 mt-0.5"><i class="fa-solid fa-tag ml-1"></i>מבצע פעיל: \u20aa' + fmt3(promoFixedPrice(r.activePromo)) + ' ליח\u05f3 \u2014 יורד במרכזת, לא בתעודה. הספק עשוי לחייב כאן מחירון מלא (\u20aa' + fmtMoney(r.catalogList) + ') במקום מחיר ההנחה.</div>' : '') +
+      (r.activePromo ? '<div class="text-[10px] font-black text-violet-700 mt-0.5"><i class="fa-solid fa-tag ml-1"></i>\u05de\u05d1\u05e6\u05e2 \u05e4\u05e2\u05d9\u05dc: \u20aa' + fmt3(promoFixedPrice(r.activePromo)) + ' \u05dc\u05d9\u05d7\u05f3. \u05d4\u05e9\u05d5\u05e8\u05d4 \u05d1\u05ea\u05e2\u05d5\u05d3\u05d4 \u05e0\u05e9\u05d0\u05e8\u05ea \u05d1\u05de\u05d7\u05d9\u05e8 \u05d4\u05d4\u05e0\u05d7\u05d4 \u05d4\u05e8\u05d2\u05d9\u05dc, \u05d5\u05d4\u05e4\u05e8\u05e9 \u05e2\u05d3 \u05de\u05d7\u05d9\u05e8 \u05d4\u05de\u05d1\u05e6\u05e2 \u05e0\u05e8\u05e9\u05dd \u05db\u05e7\u05d9\u05d6\u05d5\u05d6 \u05dc\u05de\u05e8\u05db\u05d6\u05ea: \u20aa' + fmtMoney(Math.max(0, r2((r.net - promoFixedPrice(r.activePromo)) * r.qty))) + ' \u05d1\u05e9\u05d5\u05e8\u05d4 \u05d4\u05d6\u05d0\u05ea.</div>' : '') +
       (r.netDrift ? '<div class="text-[10px] font-black text-rose-700 mt-0.5">⚠ המחיר במאגר אינו מחירון פחות הנחה: לפי ' + pctTxt(r.pct) + '% היה צריך לצאת ₪' + fmt3(r.expectedNet) + ', ובפועל מחושב ₪' + fmt3(r.net) + ' (' + (r.netDrift > 0 ? '+' : '−') + '₪' + fmtMoney(Math.abs(r.netDrift)) + ' בשורה)</div>' : '') +
     '</div>';
   }).join('');
@@ -10567,7 +10567,7 @@ function aiPriceBreakdownHtml(ev) {
   // כשההנחות תקינות היא הייתה שולחת לחפש במקום הלא נכון.
   const suspectHtml = (suspects.length && quantitiesAnchored && !driftRows.length)
     ? '<div class="mt-2"><div class="text-[11px] font-black text-slate-600 mb-1">איזו הנחה הייתה סוגרת את הפער — אם שורה אחת בלבד אחראית לו:</div>' +
-      suspects.slice(0, 5).map(s => '<div class="flex items-center justify-between gap-2 py-1 border-t border-black/5 text-[11px] font-bold text-slate-700"><span class="min-w-0">' + htmlEscape(String(s.name || '')) + ' <span class="text-slate-400">(' + s.qty + ' יח׳)</span></span><span class="shrink-0 font-black">' + pctTxt(s.from) + '% ← ' + pctTxt(s.to) + '%</span></div>' + (s.promo && s.round ? '<div class="text-[10px] font-black text-violet-800 bg-violet-50 border border-violet-200 rounded p-1.5 mt-1">\u25c0 המוצר הזה נמצא במבצע פעיל, והאחוז שיוצא עגול. ההסבר הסביר: הספק חייב אותו במחירון מלא בתעודה, והמבצע יקוזז במרכזת.</div>' : '')).join('') +
+      suspects.slice(0, 5).map(s => '<div class="flex items-center justify-between gap-2 py-1 border-t border-black/5 text-[11px] font-bold text-slate-700"><span class="min-w-0">' + htmlEscape(String(s.name || '')) + ' <span class="text-slate-400">(' + s.qty + ' יח׳)</span></span><span class="shrink-0 font-black">' + pctTxt(s.from) + '% ← ' + pctTxt(s.to) + '%</span></div>' + (s.promo && s.round ? '<div class="text-[10px] font-black text-violet-800 bg-violet-50 border border-violet-200 rounded p-1.5 mt-1">\u25c0 המוצר הזה במבצע פעיל והאחוז שיוצא עגול. ייתכן שהספק חרג והשורה הגיעה במחירון מלא. הכסף לא אובד — קיזוז המרכזת גדל בהתאם והמחיר הסופי ליחידה זהה — אבל שווה לברר מולו.</div>' : '')).join('') +
       '<div class="text-[10px] font-bold text-slate-400 mt-1">רשימת חשודים לבדיקה מול מה שסוכם — לא קביעה. אחוז "עגול" הוא הסימן החזק ביותר.</div></div>'
     : '';
   return '<details class="rounded-xl border border-slate-300 bg-white p-3"' + (open ? ' open' : '') + '>' +
