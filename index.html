@@ -724,7 +724,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '26'; // גרסה 26: פאנל האבחון מציג את כל שורות אי-ההתאמה ואת שיטת השיוך שלהן — חוסר ועודף זהים נראים מייד כשורה שהודבקה למוצר הלא נכון
+const APP_VERSION = '27'; // גרסה 27: שורה ששויכה לפי שם מציגה את כל המוצרים שהשם מתאים להם, וניתן להחליף בלחיצה — ההכרעה השקטה לפי מחיר הפכה גלויה
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -8695,6 +8695,15 @@ function aiResolveInvoiceBarcode(row) {
       if (sourceReadType !== 'full' || !aiBarcodeOneDigitDifference(sourceObserved, resolved) || correctionMatches.length !== 1 || correctionMatches[0].barcode !== resolved) return { error: 'אישור המשתמש אינו תואם לקריאת ברקוד יחידה' };
     } else if (sourceMethod === 'suggested_name_only') {
       if (String(row && row.barcodeUserConfirmedFromCatalogHintId || '') !== String(matches[0].product.id)) return { error: 'אישור המשתמש אינו תואם למועמד השם שהוצג' };
+    } else if (sourceMethod === 'name_match_override') {
+      // v27: החלפה ידנית של שיוך שנעשה לפי שם. הרשימה המותרת נבנית מחדש
+      // מהקטלוג בכל אימות — בחירה שכבר אינה אחת מאפשרויות השם נפסלת.
+      const alternatives = aiNameMatchAlternatives(row);
+      const selectedId = String(row && row.barcodeUserConfirmedFromCatalogHintId || '');
+      const selected = alternatives.find(alt => String(alt.product && alt.product.id) === selectedId);
+      if (alternatives.length < 2 || !selected || selected.barcode !== resolved || String(matches[0].product.id) !== selectedId) {
+        return { error: 'הבחירה אינה תואמת עוד לאפשרויות השם של השורה' };
+      }
     } else if (sourceMethod === 'suggested_name_multiple') {
       const nameCandidates = aiLocalSuggestedNameCandidates(row);
       const selectedId = String(row && row.barcodeUserConfirmedFromCatalogHintId || '');
@@ -8858,6 +8867,128 @@ function aiNameFitScore(description, productName) {
   });
   // התאמה מדויקת שווה יותר מחלקית; עודף אסימונים בקטלוג מרחיק מהנייר.
   return exact * 4 + partial - Math.abs(nameTokens.length - descTokens.length) * 0.25;
+}
+// ===== v27: שקיפות והחלפה בשורות ששויכו לפי שם =====
+// שורה שהברקוד שלה לא נקרא נשענת על השם המודפס, וההכרעה בין מוצרים בעלי
+// שם תואם נעשית בשקט לפי המחיר. כשבקטלוג יש יותר ממוצר אחד שהשם המודפס
+// מתאים לו, זו החלטה שיש בה מקום לטעות — והיא חייבת להיות גלויה ולהתחלף.
+// הרשימה נבנית מחדש מהקטלוג המקומי בכל קריאה, כולל באימות הבחירה, ולכן
+// היא לעולם אינה נשענת על מה שהוצג במסך או על מזהה שהגיע מה-DOM.
+const AI_NAME_LED_METHODS = ['verified_name_price', 'verified_suffix_name', 'verified_pattern_name', 'verified_one_digit_name'];
+const AI_NAME_LED_CONFIRM_SOURCES = ['name_match_override', 'suggested_name_only', 'suggested_name_multiple'];
+function aiNameMatchAlternatives(row) {
+  const printed = String(row && row.description || '').trim();
+  if (!printed) return [];
+  // ברקוד שאינו ייחודי במאגר אינו זהות, ולכן אינו יכול להיות אפשרות בחירה.
+  const barcodeCounts = new Map();
+  products.forEach(product => {
+    const barcode = normalizeBarcode(product && product.barcode || '');
+    if (!aiCatalogBarcodeIsSafe(barcode)) return;
+    barcodeCounts.set(barcode, (barcodeCounts.get(barcode) || 0) + 1);
+  });
+  const seen = new Set(), output = [];
+  products.forEach(product => {
+    const barcode = normalizeBarcode(product && product.barcode || '');
+    if (!aiCatalogBarcodeIsSafe(barcode) || barcodeCounts.get(barcode) !== 1) return;
+    if (seen.has(String(product.id)) || !aiPrintedNameMatchesProduct(printed, product.name)) return;
+    seen.add(String(product.id));
+    output.push({ product, barcode, score: aiNameFitScore(printed, product.name) });
+  });
+  output.sort((left, right) => (right.score - left.score) || String(left.product.name || '').localeCompare(String(right.product.name || ''), 'he'));
+  return output.slice(0, 6);
+}
+function aiNameMatchedRowsForReview() {
+  const documents = aiScanResponse && aiScanResponse.scan && Array.isArray(aiScanResponse.scan.documents)
+    ? aiScanResponse.scan.documents
+    : [];
+  const output = [];
+  documents.forEach((doc, documentIndex) => {
+    (Array.isArray(doc && doc.rows) ? doc.rows : []).forEach((row, rowIndex) => {
+      const resolution = aiResolveInvoiceBarcode(row);
+      if (!resolution || resolution.error || !resolution.product) return;
+      const method = String(resolution.method || '');
+      const sourceMethod = String(row.barcodeUserConfirmedFromMethod || '');
+      const nameLed = AI_NAME_LED_METHODS.includes(method) ||
+        (method === 'user_confirmed' && AI_NAME_LED_CONFIRM_SOURCES.includes(sourceMethod));
+      if (!nameLed) return;
+      const alternatives = aiNameMatchAlternatives(row);
+      if (alternatives.length < 2) return; // השם מצביע על מוצר יחיד — אין מה להחליט
+      // המוצר שנבחר חייב להופיע ברשימה עצמה, אחרת הכרטיס היה מציג אפשרויות
+      // בלי לסמן מה נבחר — ושום החלפה לא הייתה ניתנת לביטול.
+      if (!alternatives.some(alt => String(alt.product.id) === String(resolution.product.id))) return;
+      const qtyRaw = row.quantity == null || row.quantity === '' ? NaN : Number(row.quantity);
+      output.push({
+        documentIndex: Number.isInteger(Number(doc.noteIndex)) ? Number(doc.noteIndex) : documentIndex,
+        rowIndex,
+        lineNumber: row.lineNumber == null ? null : Number(row.lineNumber),
+        printedDescription: String(row.description || '').trim(),
+        quantity: Number.isFinite(qtyRaw) ? qtyRaw : null,
+        product: resolution.product,
+        userChose: method === 'user_confirmed',
+        alternatives
+      });
+    });
+  });
+  return output;
+}
+function aiOverrideNameMatch(documentIndex, rowIndex, candidateProductId) {
+  if (!aiScanResponse || !aiScanResponse.scan || !Array.isArray(aiScanResponse.scan.documents)) return false;
+  const doc = aiScanResponse.scan.documents.find(item => Number(item && item.noteIndex) === Number(documentIndex));
+  const row = doc && Array.isArray(doc.rows) ? doc.rows[Number(rowIndex)] : null;
+  if (!row) { showToast('שורת התעודה כבר אינה זמינה — הפעל את הסריקה מחדש', null, null, 3400); return false; }
+  const current = aiResolveInvoiceBarcode(row);
+  const currentMethod = String(current && current.method || '');
+  const currentSource = String(row.barcodeUserConfirmedFromMethod || '');
+  if (!current || current.error || !current.product ||
+      !(AI_NAME_LED_METHODS.includes(currentMethod) || (currentMethod === 'user_confirmed' && AI_NAME_LED_CONFIRM_SOURCES.includes(currentSource)))) {
+    showToast('השורה הזאת לא שויכה לפי שם — אין מה להחליף בה', null, null, 3600); return false;
+  }
+  // אין אמון במזהה שהגיע מה-DOM: הרשימה המותרת נבנית מחדש מהקטלוג.
+  const alternatives = aiNameMatchAlternatives(row);
+  const selectedId = String(candidateProductId == null ? '' : candidateProductId);
+  const selected = alternatives.find(alt => String(alt.product && alt.product.id) === selectedId);
+  if (alternatives.length < 2 || !selected) {
+    showToast('המוצר שנבחר אינו אחת האפשרויות התקינות של השורה', null, null, 3800); return false;
+  }
+  const exactMatches = aiCatalogBarcodeMatches(selected.barcode, false);
+  if (exactMatches.length !== 1 || String(exactMatches[0].product && exactMatches[0].product.id) !== selectedId) {
+    showToast('הברקוד של המוצר שנבחר אינו ייחודי עוד במאגר', null, null, 3800); return false;
+  }
+  const previousName = String(current.product.name || '');
+  const qtyRaw = row.quantity == null || row.quantity === '' ? NaN : Number(row.quantity);
+  const quantity = Number.isFinite(qtyRaw) ? qtyRaw : null;
+  const lineTotal = aiLineTotal(row, quantity);
+  row.barcodeUserConfirmedFromObserved = row.barcodeObserved;
+  row.barcodeUserConfirmedFromReadType = row.barcodeReadType;
+  row.barcodeUserConfirmedFromMethod = 'name_match_override';
+  row.barcodeUserConfirmedFromCatalogHintId = selectedId;
+  row.barcodeUserConfirmedCandidateIds = alternatives.map(alt => String(alt.product.id));
+  row.barcodeUserConfirmedCrossCheck = {
+    quantity,
+    lineTotalExVat: lineTotal == null ? null : r2(lineTotal),
+    arithmeticVerified: quantity != null && aiRowHasArithmeticProof(row, quantity),
+    replacedProductName: previousName.slice(0, 160),
+    replacedFromMethod: currentMethod === 'user_confirmed' ? currentSource : currentMethod
+  };
+  row.barcode = selected.barcode;
+  row.barcodeMatchMethod = 'user_confirmed';
+  row.barcodeSuggested = null;
+  row.barcodeSuggestedProductId = null;
+  row.barcodeSuggestedProductName = null;
+  row.userConfirmedAt = Date.now();
+  aiRefreshScanEvaluation();
+  aiScanError = aiScanEvaluation.valid ? '' : 'הפענוח עדיין דורש בדיקה — התעודה לא שונתה.';
+  logAction('ai', 'החלפת שיוך שנעשה לפי שם', 'שורה ' + (row.lineNumber == null ? '?' : row.lineNumber) + ': ' + previousName + ' ← ' + String(selected.product.name || ''), {
+    requestId: aiScanResponse && aiScanResponse.requestId || null,
+    printedDescription: String(row.description || '').slice(0, 160),
+    fromProductName: previousName.slice(0, 160),
+    toProductId: selectedId,
+    toProductName: String(selected.product.name || '').slice(0, 160),
+    candidateCount: alternatives.length
+  });
+  if (currentView === 'reconcile') renderReconcile();
+  showToast('השורה שויכה מחדש. התוצאות חושבו מחדש.', null, null, 2600);
+  return true;
 }
 function aiAutoResolveMethodHe(method) {
   if (method === 'auto_local_name_price') return 'שם ומחיר תואמים בקטלוג';
@@ -10475,6 +10606,50 @@ function aiMultipleNameSuggestionHtml(suggestion) {
     '<div class="mt-3 space-y-2" role="group" aria-label="בחר את המוצר שמופיע בשורת התעודה">' + candidateButtons + '</div>' +
   '</details>';
 }
+// v27: השורות ששויכו לפי השם המודפס, עם כל המוצרים בקטלוג שהשם מתאים
+// להם. המוצר שנבחר מסומן, וכל אחד מהאחרים ניתן להחלפה בלחיצה. הכרטיס
+// נפתח מעצמו כשהשורה הזאת היא גם מקור לחוסר או לעודף — שם הטעות עולה כסף.
+function aiNameMatchReviewHtml(ev) {
+  const rows = aiNameMatchedRowsForReview();
+  if (!rows.length) return '';
+  const flagged = new Set((Array.isArray(ev && ev.findings) ? ev.findings : [])
+    .filter(finding => finding && ['shortage', 'surplus', 'price', 'promo_missing'].includes(String(finding.type || '')))
+    .map(finding => String(finding.productId || '')));
+  const anyFlagged = rows.some(item => flagged.has(String(item.product.id)));
+  const cards = rows.map(item => {
+    const isFlagged = flagged.has(String(item.product.id));
+    const options = item.alternatives.map(alt => {
+      const chosen = String(alt.product.id) === String(item.product.id);
+      const price = Number(alt.product.price) || 0;
+      const meta = '<span class="shrink-0 text-[10px] font-bold text-slate-400">₪' + fmtMoney(price) + '</span>';
+      if (chosen) {
+        return '<div class="w-full flex items-center justify-between gap-2 rounded-lg border-2 border-emerald-300 bg-emerald-50 px-3 py-2.5 text-right font-black text-slate-800">' +
+          '<span class="min-w-0 text-sm">' + htmlEscape(alt.product.name || '') + '</span>' +
+          '<span class="shrink-0 text-[10px] font-black text-emerald-700">' + (item.userChose ? 'בחרת' : 'נבחר אוטומטית') + ' · ₪' + fmtMoney(price) + '</span></div>';
+      }
+      return '<button data-role="ai-name-override" data-doc="' + item.documentIndex + '" data-row="' + item.rowIndex + '" data-candidate-id="' + htmlEscape(String(alt.product.id)) + '" class="btn-tap w-full flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-right font-black text-slate-800">' +
+        '<span class="min-w-0 text-sm">' + htmlEscape(alt.product.name || '') + '</span>' + meta + '<span class="shrink-0 text-[10px] font-black text-violet-700">החלף לזה</span></button>';
+    }).join('');
+    const head = htmlEscape(item.printedDescription || 'השם המודפס לא נקרא') +
+      (item.quantity == null ? '' : ' · ' + item.quantity + ' יח׳') +
+      (item.lineNumber == null ? '' : ' · שורה ' + item.lineNumber);
+    return '<details class="py-2 border-t border-black/5 first:border-t-0"' + (isFlagged ? ' open' : '') + '>' +
+      '<summary class="cursor-pointer list-none flex items-start justify-between gap-3">' +
+        '<span class="min-w-0"><span class="block text-sm font-black text-slate-800">' + head + '</span>' +
+        '<span class="block text-[10px] font-bold text-slate-500 mt-0.5">שויך ל: ' + htmlEscape(item.product.name || '') + (isFlagged ? ' · מופיע בחוסר/עודף' : '') + '</span></span>' +
+        '<span class="shrink-0 text-[11px] font-black text-violet-700">' + item.alternatives.length + ' אפשרויות</span>' +
+      '</summary>' +
+      '<div class="mt-2 space-y-2" role="group" aria-label="בחר את המוצר שמופיע בשורת התעודה">' + options + '</div>' +
+    '</details>';
+  }).join('');
+  return '<details class="mt-3 rounded-xl border border-violet-200 bg-violet-50 p-3"' + (anyFlagged ? ' open' : '') + '>' +
+    '<summary class="cursor-pointer list-none flex items-center justify-between gap-2">' +
+      '<span class="font-black text-violet-900 text-sm"><i class="fa-solid fa-font ml-1"></i>' + rows.length + ' שורות שויכו לפי שם, לא לפי ברקוד</span>' +
+      '<span class="shrink-0 text-[10px] font-black text-violet-700">' + (anyFlagged ? 'אחת מהן בחוסר/עודף' : 'לבדיקה') + '</span>' +
+    '</summary>' +
+    '<div class="text-[11px] font-bold text-violet-800 mt-1 mb-1">בשורות האלה הברקוד לא נקרא מהצילום, ובקטלוג יש יותר ממוצר אחד שהשם המודפס מתאים לו. ההכרעה נעשתה לפי המחיר — אם היא שגויה, בחר כאן את המוצר הנכון והתוצאות יחושבו מחדש.</div>' +
+    '<div>' + cards + '</div></details>';
+}
 function aiUnknownProductSuggestionHtml(suggestion) {
   const name = suggestion && (suggestion.unknownProductName || suggestion.printedDescription) || 'מוצר חדש';
   const barcode = normalizeBarcode(suggestion && suggestion.unknownBarcode || '');
@@ -10697,7 +10872,7 @@ function aiInvoiceCaptureHtml() {
     // v178: פאנל האבחון היה תלוי בקיום ממצא פעיל, ולכן נעלם בדיוק במצב
     // שבו הוא הכי נחוץ (רק שאריות, או רק שגיאות). עכשיו הוא תמיד מוצג.
     const analyzerLed = ev.analyzerLed === true && aiAnalyzeResult && aiAnalyzeResult.accepted === true;
-    const findingsHtml = (!analyzerLed && actionableFindings.length ? aiActionableFindingsHtml(actionableFindings) : '') + residualLines + unknownCards + aiAnalyzeHtml(ev) + aiScanDiagnosticsHtml(ev);
+    const findingsHtml = (!analyzerLed && actionableFindings.length ? aiActionableFindingsHtml(actionableFindings) : '') + residualLines + unknownCards + aiNameMatchReviewHtml(ev) + aiAnalyzeHtml(ev) + aiScanDiagnosticsHtml(ev);
     const allGood = ev.valid && !hasProblems;
     const statusHtml = allGood
       ? '<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-3 font-black text-emerald-800"><i class="fa-solid fa-circle-check ml-1"></i>הכול תואם — לא נמצאו חוסר, עודף או בעיית מחיר/מבצע.</div>'
@@ -10845,7 +11020,7 @@ function aiConfirmedMappingsAudit() {
         productName: String(resolution.product.name || '').slice(0, 160),
         barcode: resolution.barcode,
         confirmationSource: sourceMethod,
-        nameOnly: sourceMethod === 'suggested_name_only' || multipleNameChoice,
+        nameOnly: sourceMethod === 'suggested_name_only' || multipleNameChoice || sourceMethod === 'name_match_override',
         sourceReadType: String(row.barcodeUserConfirmedFromReadType || '').slice(0, 32),
         sourceObserved: String(row.barcodeUserConfirmedFromObserved == null ? '' : row.barcodeUserConfirmedFromObserved).slice(0, 64),
         catalogHintId: String(row.barcodeUserConfirmedFromCatalogHintId == null ? '' : row.barcodeUserConfirmedFromCatalogHintId).slice(0, 160) || null,
@@ -15911,6 +16086,7 @@ app.addEventListener('click', (e) => {
   if (role === 'ai-open-suggestion-page') { aiOpenBarcodeSuggestionPage(parseInt(t.dataset.doc, 10), parseInt(t.dataset.page, 10)); return; }
   if (role === 'ai-confirm-barcode-suggestion') { aiConfirmBarcodeSuggestion(parseInt(t.dataset.doc, 10), parseInt(t.dataset.row, 10)); return; }
   if (role === 'ai-confirm-name-candidate') { aiConfirmNameCandidate(parseInt(t.dataset.doc, 10), parseInt(t.dataset.row, 10), t.dataset.candidateId); return; }
+  if (role === 'ai-name-override') { aiOverrideNameMatch(parseInt(t.dataset.doc, 10), parseInt(t.dataset.row, 10), t.dataset.candidateId); return; } // v27: החלפת שיוך שנעשה לפי שם
   if (role === 'ai-add-unknown-product') { aiOpenUnknownProduct(parseInt(t.dataset.doc, 10), parseInt(t.dataset.row, 10)); return; }
   if (role === 'ai-confirm-findings') { if (aiScanEvaluation) { aiScanEvaluation.userConfirmedFindings = true; renderReconcile(); } return; }
   if (role === 'ai-apply') { aiApplyInvoiceResult(); return; }
