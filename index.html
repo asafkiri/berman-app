@@ -724,7 +724,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '31'; // גרסה 31: קוד פריט שסותר את הברקוד המודפס באותה שורה מוכרע לפי המחירון — הבריוש 10 שנקרא כקוד 220 לא ייתבע יותר כשישייה
+const APP_VERSION = '32'; // גרסה 32: גם כשהסריקה לא נסגרת לאגורה אפשר לסגור עם הפרש מתועד ולטפל אחר כך — אין יותר מבוי סתום במסך התוצאות
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10780,7 +10780,12 @@ function aiInvoiceCaptureHtml() {
       actionsHtml = '<div class="mt-4 space-y-2">' +
         (ev.valid
           ? '<button data-role="ai-apply" class="btn-tap w-full bg-violet-600 text-white rounded-xl py-3.5 font-black"><i class="fa-solid fa-file-circle-check"></i> סגור תעודה עם החוסרים</button>'
-          : '<div class="rounded-xl bg-slate-100 text-slate-400 text-center py-3.5 font-black text-sm"><i class="fa-solid fa-lock ml-1"></i>סגירת תעודה תיפתח אחרי שכל השורות ייסגרו</div>' +
+          // v32: המצב הזה היה מבוי סתום — הממצאים אושרו, הקריאה לא נסגרה
+          // לאגורה (למשל מחירון שהשתנה אצל הספק), וההצעה היחידה הייתה
+          // "חזרה לצילומים" שלא תשנה את הנייר. הדרך שקיימת בכל שאר השלבים —
+          // סגירה עם הפרש מתועד שמטופל אחר כך — חוזרת גם לכאן.
+          : '<div class="rounded-xl bg-slate-100 text-slate-500 text-center py-3 px-3 font-black text-xs"><i class="fa-solid fa-lock ml-1"></i>סגירה מלאה נעולה — הקריאה מהנייר לא נסגרה לאגורה. הסיבות ב"מה לא נסגר?" למעלה.</div>' +
+            '<button data-role="rc-recon-save" class="btn-tap w-full bg-blue-600 text-white rounded-xl py-3.5 font-black"><i class="fa-solid fa-file-circle-exclamation"></i> סגור עם הפרש ואטפל אחר כך</button>' +
             '<button data-role="ai-edit-images" class="btn-tap w-full bg-white border-2 border-violet-300 text-violet-700 rounded-xl py-3 font-black"><i class="fa-solid fa-camera-rotate"></i> תיקון תעודה — חזרה לצילומים</button>') +
         // v45: הכפתור הזה היה כפילות של "חזור לסריקה" שבסרגל התחתון הקבוע
         // (אותו data-role בדיוק) — שני כפתורים זהים זה מתחת לזה. הוסר.
