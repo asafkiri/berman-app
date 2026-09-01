@@ -724,7 +724,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '35'; // גרסה 35: מבחן ההנחות — ההנחה שהספק נתן בנייר מול ההנחה שבמאגר, ובכך נחתך אם הפער במחירים או בקריאת השורות
+const APP_VERSION = '36'; // גרסה 36: איתור מחיר במאגר שאינו מחירון פחות הנחה — הסטייה השקטה שאינה סותרת "ההנחות לא משתנות"
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10439,10 +10439,17 @@ function aiPriceBreakdownRows() {
       const printedList = row.printedListUnitPrice == null || row.printedListUnitPrice === '' ? null : Number(row.printedListUnitPrice);
       const catalogList = productListPrice(product);
       const net = Number(product.price) || 0;
+      // v36: המחיר שהאפליקציה מחשבת בו הוא p.price — שדה נפרד מהמחירון ומאחוז
+      // ההנחה, ולא נגזר מהם בכל קריאה. saveReconciledReceipt כותב אותו בחזרה
+      // ("save price from reconcile") בלי לגעת ב-listPrice או ב-discountPct,
+      // ולכן הוא יכול לסטות מהם בשקט: ההנחה עדיין אומרת 30% בזמן שהחישוב רץ
+      // על מחיר אחר לגמרי. זו הסטייה היחידה שאינה סותרת "ההנחות לא משתנות".
+      const expectedNet = catalogList > 0 ? finalUnitPrice(catalogList, productDiscountPct(product)) : null;
       out.push({
-        product, qty, printedList, catalogList, net,
+        product, qty, printedList, catalogList, net, expectedNet,
         pct: productDiscountPct(product),
         lineTotal: lineTotalFromUnit(net, qty),
+        netDrift: expectedNet != null && Math.abs(net - expectedNet) > 0.005 ? r2((net - expectedNet) * qty) : 0,
         listMismatch: printedList != null && isFinite(printedList) && catalogList > 0
           && Math.abs(aiMoneyCents(printedList) - aiMoneyCents(catalogList)) > 2
       });
@@ -10485,6 +10492,7 @@ function aiPriceBreakdownHtml(ev) {
         (r.listMismatch ? '⚠ ' : '') + 'נייר ' + printed + ' · מחירון ' + (r.catalogList > 0 ? '₪' + fmtMoney(r.catalogList) : '—') +
         ' · הנחה ' + pctTxt(r.pct) + '% → ₪' + fmt3(r.net) + ' ליח׳' +
       '</div>' +
+      (r.netDrift ? '<div class="text-[10px] font-black text-rose-700 mt-0.5">⚠ המחיר במאגר אינו מחירון פחות הנחה: לפי ' + pctTxt(r.pct) + '% היה צריך לצאת ₪' + fmt3(r.expectedNet) + ', ובפועל מחושב ₪' + fmt3(r.net) + ' (' + (r.netDrift > 0 ? '+' : '−') + '₪' + fmtMoney(Math.abs(r.netDrift)) + ' בשורה)</div>' : '') +
     '</div>';
   }).join('');
   // v35: מה שחותך בין "טעות בקריאה" ל"טעות במחיר" אינו השוואת ההנחות —
@@ -10508,6 +10516,16 @@ function aiPriceBreakdownHtml(ev) {
   const quantitiesAnchored = unitsMatch === true && linesMatch !== false;
   const anchorText = (unitsMatch == null ? 'לא הוקלד מונה יחידות' : ('יחידות ' + readUnits + '/' + anchors.units))
     + (linesMatch == null ? '' : ' · שורות ' + rows.length + '/' + anchors.lines);
+  // v36: סטייה בין המחיר המחושב למחירון-פחות-הנחה קודמת לכל חשד אחר —
+  // היא ניתנת לתיקון במאגר, בלי לברר דבר מול הספק.
+  const driftRows = rows.filter(r => r.netDrift);
+  const driftMoney = r2(driftRows.reduce((sum, r) => sum + r.netDrift, 0));
+  const driftHtml = driftRows.length
+    ? '<div class="rounded-lg bg-rose-50 border-2 border-rose-300 p-2 mt-2 text-[11px] font-bold text-rose-900">' +
+      '<div class="font-black">' + driftRows.length + ' שורות שבהן המחיר במאגר אינו מחירון פחות ההנחה</div>' +
+      '<div class="mt-1">ההנחות עצמן לא השתנו — המחיר המחושב הוא שדה נפרד, והוא נדרס בשלב כלשהו (למשל שמירת תעודה עם מחיר ידני). בשורות האלה זה שווה <b>' + (driftMoney > 0 ? '+' : '−') + '₪' + fmtMoney(Math.abs(driftMoney)) + '</b> בתעודה הזאת.</div>' +
+      '<div class="mt-1 text-[10px]">התיקון: פתח כל מוצר כזה במסך המוצרים והחזר את המחיר לפי המחירון והאחוז.</div></div>'
+    : '';
   const verdictHtml = (paperTotal == null || Math.abs(gap) <= 0.05) ? '' :
     '<div class="rounded-lg border p-2 mt-2 ' + (quantitiesAnchored ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-rose-50 border-rose-200 text-rose-900') + '">' +
       '<div class="text-[11px] font-black">' + (quantitiesAnchored
@@ -10524,14 +10542,14 @@ function aiPriceBreakdownHtml(ev) {
     (paperTotal == null ? '' :
       '<div class="flex items-center justify-between"><span>"נטו לחיוב" בנייר</span><span>₪' + fmtMoney(paperTotal) + '</span></div>' +
       '<div class="flex items-center justify-between ' + (Math.abs(gap) <= 0.05 ? 'text-emerald-700' : 'text-rose-700') + '"><span>' + (gap >= 0 ? 'הספק מחייב יותר' : 'הספק מחייב פחות') + '</span><span>₪' + fmtMoney(Math.abs(gap)) + '</span></div>') +
-    verdictHtml +
+    verdictHtml + driftHtml +
   '</div>';
   const listNote = listMismatches.length
     ? '<div class="rounded-lg bg-rose-50 border border-rose-200 p-2 mt-2 text-[11px] font-bold text-rose-800">' + listMismatches.length + ' שורות שבהן המחיר המודפס בנייר אינו מחיר המחירון שבמאגר — שם המחירון עצמו התעדכן, וזה התיקון הראשון שצריך לעשות.</div>'
     : '';
   // v35: רשימת החשודים בהנחה מוצגת רק כשהמבחן המכריע אכן הצביע על ההנחות.
   // כשההנחות תקינות היא הייתה שולחת לחפש במקום הלא נכון.
-  const suspectHtml = (suspects.length && quantitiesAnchored)
+  const suspectHtml = (suspects.length && quantitiesAnchored && !driftRows.length)
     ? '<div class="mt-2"><div class="text-[11px] font-black text-slate-600 mb-1">איזו הנחה הייתה סוגרת את הפער — אם שורה אחת בלבד אחראית לו:</div>' +
       suspects.slice(0, 5).map(s => '<div class="flex items-center justify-between gap-2 py-1 border-t border-black/5 text-[11px] font-bold text-slate-700"><span class="min-w-0">' + htmlEscape(String(s.name || '')) + ' <span class="text-slate-400">(' + s.qty + ' יח׳)</span></span><span class="shrink-0 font-black">' + pctTxt(s.from) + '% ← ' + pctTxt(s.to) + '%</span></div>').join('') +
       '<div class="text-[10px] font-bold text-slate-400 mt-1">רשימת חשודים לבדיקה מול מה שסוכם — לא קביעה. אחוז "עגול" הוא הסימן החזק ביותר.</div></div>'
