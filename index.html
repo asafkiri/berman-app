@@ -724,7 +724,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '32'; // גרסה 32: גם כשהסריקה לא נסגרת לאגורה אפשר לסגור עם הפרש מתועד ולטפל אחר כך — אין יותר מבוי סתום במסך התוצאות
+const APP_VERSION = '33'; // גרסה 33: אזהרות הקריאה מוצגות במסך (ביניהן "המחיר המודפס שונה מהמחירון במאגר"), והאבחון מדווח על ברקודים כפולים במאגר
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10330,6 +10330,18 @@ function aiScanDiagnosticsHtml(ev) {
     if (codeIndex) {
       const sample = codeIndex.map.size ? (() => { const [c, p] = codeIndex.map.entries().next().value; return ' · דוגמה: ' + c + '←' + String(p.name || '').slice(0, 20); })() : '';
       lines.push('אינדקס קודים: ' + codeIndex.map.size + ' מוצרים ניתנים להתאמה · התנגשויות: ' + codeIndex.ambiguous.size + sample);
+      // v33: התנגשות ברקודים אינה נבדקת בשום מקום, ובקטלוג ברמן יש כאלה
+      // (ברקוד אחד על חמישה מוצרים). הן אינן שוברות זיהוי — הקוד הוא המפתח —
+      // אבל הן משביתות בשקט כל הצלבה שנשענת על הברקוד המודפס.
+      const barcodeCounts = new Map();
+      (products || []).forEach(p => {
+        const b = normalizeBarcode(p && p.barcode || '');
+        if (b) barcodeCounts.set(b, (barcodeCounts.get(b) || 0) + 1);
+      });
+      const dupBarcodes = Array.from(barcodeCounts.entries()).filter(entry => entry[1] > 1);
+      if (dupBarcodes.length) {
+        lines.push('ברקודים כפולים במאגר: ' + dupBarcodes.length + ' — ' + dupBarcodes.slice(0, 3).map(entry => entry[0] + ' על ' + entry[1] + ' מוצרים').join(' · ') + ' (הזיהוי נשען על קוד הפריט, אך הצלבת ברקוד מושבתת בהם)');
+      }
     }
     (Array.isArray(ev.residuals) ? ev.residuals : []).slice(0, 6).forEach(r => {
       if (!r || !r.raw) return;
@@ -10402,6 +10414,25 @@ function aiScanDiagnosticsHtml(ev) {
 // בלי לומר אם הרשימה בכלל מסבירה את הפער. זה בדיוק המקום שבו נראה שה-AI
 // "טועה": ארבעה ממצאים נכונים שמסבירים חצי מהכסף נראים כמו תשובה שלמה.
 // closure כבר מחושב בכל הערכה — כאן הוא רק נאמר בקול, במספרים.
+// v33: אזהרות הקריאה חושבו מאז ומתמיד (uniqueWarnings) והוחזרו בהערכה — אבל
+// לא הוצגו בשום מקום במסך. ביניהן בדיוק האזהרה שמצביעה על מקור פער כספי
+// שאינו חוסר: "המחיר המודפס בתעודה שונה ממחיר המחירון במאגר". בלעדיה פער
+// שנובע ממחירון שהתעדכן אצל הספק אינו ניתן לאבחון מתוך המסך.
+function aiScanWarningsHtml(ev) {
+  const warnings = Array.isArray(ev && ev.warnings) ? ev.warnings.filter(Boolean) : [];
+  if (!warnings.length) return '';
+  const open = ev.valid !== true;
+  return '<details class="rounded-xl border border-amber-200 bg-amber-50 p-3"' + (open ? ' open' : '') + '>' +
+    '<summary class="cursor-pointer list-none flex items-center justify-between gap-2">' +
+      '<span class="font-black text-amber-900 text-sm"><i class="fa-solid fa-circle-info ml-1"></i>' + warnings.length + ' הערות מקריאת הנייר</span>' +
+      '<span class="shrink-0 text-[10px] font-black text-amber-700">' + (open ? 'פתוח' : 'הצג') + '</span>' +
+    '</summary>' +
+    '<ul class="list-disc pr-5 mt-2 space-y-1 text-[11px] font-bold text-amber-900">' +
+      warnings.slice(0, 12).map(w => '<li>' + htmlEscape(String(w)) + '</li>').join('') +
+    '</ul>' +
+    (warnings.length > 12 ? '<div class="text-[10px] font-bold text-amber-700 mt-1">ועוד ' + (warnings.length - 12) + ' הערות</div>' : '') +
+  '</details>';
+}
 function aiFindingsBalanceHtml(ev) {
   const closure = ev && ev.closure;
   if (!closure) return '';
@@ -10757,7 +10788,7 @@ function aiInvoiceCaptureHtml() {
     // שבו הוא הכי נחוץ (רק שאריות, או רק שגיאות). עכשיו הוא תמיד מוצג.
     const analyzerLed = ev.analyzerLed === true && aiAnalyzeResult && aiAnalyzeResult.accepted === true;
     const balanceHtml = (!analyzerLed && ev.findingsReady === true && (actionableFindings.length || !(ev.closure && ev.closure.ok))) ? aiFindingsBalanceHtml(ev) : '';
-    const findingsHtml = (!analyzerLed && actionableFindings.length ? aiActionableFindingsHtml(actionableFindings) : '') + balanceHtml + residualLines + unknownCards + aiAnalyzeHtml(ev) + aiScanDiagnosticsHtml(ev);
+    const findingsHtml = (!analyzerLed && actionableFindings.length ? aiActionableFindingsHtml(actionableFindings) : '') + balanceHtml + aiScanWarningsHtml(ev) + residualLines + unknownCards + aiAnalyzeHtml(ev) + aiScanDiagnosticsHtml(ev);
     const allGood = ev.valid && !hasProblems;
     const statusHtml = allGood
       ? '<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-3 font-black text-emerald-800"><i class="fa-solid fa-circle-check ml-1"></i>הכול תואם — לא נמצאו חוסר, עודף או בעיית מחיר/מבצע.</div>'
