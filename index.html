@@ -724,7 +724,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '40'; // גרסה 40: תעודה שהפער בה מוסבר וממתין לקיזוז המרכזת מסומנת "ממתינה למרכזת" ואינה נספרת כבעיה פתוחה
+const APP_VERSION = '41'; // גרסה 41: תיקון מסך תקוע אחרי סריקה — driftHtml אבד בריפקטור, וכל כרטיס תצוגה עטוף כך שלא יפיל את המסך
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -9948,7 +9948,15 @@ async function aiRunInvoiceScan() {
   } catch (error) { aiScanError = error && error.message ? error.message : 'הסריקה החכמה נכשלה'; }
   finally {
     aiScanBusy = false; aiScanProgressText = '';
-    if (currentView === 'reconcile') renderReconcile();
+    // v41: רשת ביטחון אחרונה. גם אם רינדור נופל בכל זאת, אסור שהמסך יישאר
+    // על הספינר — המשתמש נשאר אז בלי שום דרך להתקדם, וזה בדיוק מה שקרה.
+    try { if (currentView === 'reconcile') renderReconcile(); }
+    catch (renderError) {
+      try { console.error('renderReconcile failed after scan', renderError); } catch (logError) {}
+      aiScanError = 'התצוגה נכשלה אחרי הסריקה (' + ((renderError && renderError.message) || 'שגיאה') + '). התוצאות נשמרו — צא וחזור למסך.';
+      try { if (currentView === 'reconcile') renderReconcile(); } catch (secondError) {}
+      try { showToast(aiScanError, null, null, 6000); } catch (toastError) {}
+    }
     // v188: המנתח רץ מעצמו מיד אחרי הסריקה, בלי לחיצה — אבל רק כשיש מה
     // להסביר. תעודה שנסגרה נקייה אינה שולחת בקשה מיותרת.
     const ev = aiScanEvaluation;
@@ -10475,6 +10483,17 @@ function aiPriceBreakdownRows() {
 // v39: ההקשר המשותף של פער המחירים — סכומים, עוגן הכמויות, והשורה שנראה
 // שהגיעה במחירון מלא. חושב פעם אחת ומשמש גם את הפירוט וגם את כרטיס ההסבר,
 // כדי ששניהם לא יוכלו לומר דברים שונים על אותה תעודה.
+// v41: עוטף כרטיס תצוגה. חישוב שנופל מחזיר פתק קטן במקומו במקום להפיל את
+// כל הרינדור — כי הרינדור הזה נקרא מתוך ה-finally של הסריקה, ונפילה בו
+// משאירה את המשתמש מול ספינר נצחי בלי שום דרך להתקדם.
+function aiSafeBlock(label, build) {
+  try { return build() || ''; }
+  catch (blockError) {
+    try { console.error('ai block failed: ' + label, blockError); } catch (logError) {}
+    return '<div class="rounded-xl border border-slate-300 bg-slate-50 p-2 text-[10px] font-bold text-slate-500">' +
+      htmlEscape(label) + ': התצוגה נכשלה (' + htmlEscape(String((blockError && blockError.message) || 'שגיאה')) + '). שאר המסך תקין.</div>';
+  }
+}
 function aiPriceGapContext(ev) {
   const rows = aiPriceBreakdownRows();
   if (!rows.length) return null;
@@ -10613,6 +10632,17 @@ function aiPriceBreakdownHtml(ev) {
   const paperGross = grossKnown ? r2(rows.reduce((sum, r) => sum + lineTotalFromUnit(r.printedList, r.qty), 0)) : null;
   const catalogDiscount = r2(rows.reduce((sum, r) => sum + lineTotalFromUnit(r.catalogList, r.qty), 0) - appTotal);
   const quantitiesAnchored = ctx.quantitiesAnchored, anchorText = ctx.anchorText;
+  // v41: הגוש הזה אבד בריפקטור של v39 (נמחק יחד עם חישוב העוגן שעבר
+  // ל-aiPriceGapContext), אבל driftHtml ו-driftRows נשארו בשימוש למטה.
+  // התוצאה: ReferenceError בכל רינדור של תוצאות סריקה, ומסך תקוע על הספינר.
+  const driftRows = rows.filter(r => r.netDrift);
+  const driftMoney = r2(driftRows.reduce((sum, r) => sum + r.netDrift, 0));
+  const driftHtml = driftRows.length
+    ? '<div class="rounded-lg bg-rose-50 border-2 border-rose-300 p-2 mt-2 text-[11px] font-bold text-rose-900">' +
+      '<div class="font-black">' + driftRows.length + ' שורות שבהן המחיר במאגר אינו מחירון פחות ההנחה</div>' +
+      '<div class="mt-1">ההנחות עצמן לא השתנו — המחיר המחושב הוא שדה נפרד, והוא נדרס בשלב כלשהו. בשורות האלה זה שווה <b>' + (driftMoney > 0 ? '+' : '\u2212') + '\u20aa' + fmtMoney(Math.abs(driftMoney)) + '</b> בתעודה הזאת.</div>' +
+      '<div class="mt-1 text-[10px]">התיקון: פתח כל מוצר כזה במסך המוצרים והחזר את המחיר לפי המחירון והאחוז.</div></div>'
+    : '';
   const verdictHtml = (paperTotal == null || Math.abs(gap) <= 0.05) ? '' :
     '<div class="rounded-lg border p-2 mt-2 ' + (quantitiesAnchored ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-rose-50 border-rose-200 text-rose-900') + '">' +
       '<div class="text-[11px] font-black">' + (quantitiesAnchored
@@ -11017,10 +11047,13 @@ function aiInvoiceCaptureHtml() {
     // v178: פאנל האבחון היה תלוי בקיום ממצא פעיל, ולכן נעלם בדיוק במצב
     // שבו הוא הכי נחוץ (רק שאריות, או רק שגיאות). עכשיו הוא תמיד מוצג.
     const analyzerLed = ev.analyzerLed === true && aiAnalyzeResult && aiAnalyzeResult.accepted === true;
-    const balanceHtml = (!analyzerLed && ev.findingsReady === true && (actionableFindings.length || !(ev.closure && ev.closure.ok))) ? aiFindingsBalanceHtml(ev) : '';
+    const balanceHtml = (!analyzerLed && ev.findingsReady === true && (actionableFindings.length || !(ev.closure && ev.closure.ok))) ? aiSafeBlock('מאזן הממצאים', () => aiFindingsBalanceHtml(ev)) : '';
     // v39: ההסבר הגדול קודם לכל רשימת בעיות — הוא זה שקובע אם המשתמש נבהל או סוגר בביטחון.
-    const gapExplanationHtml = analyzerLed ? '' : aiFullListExplanationHtml(ev);
-    const findingsHtml = gapExplanationHtml + (!analyzerLed && actionableFindings.length ? aiActionableFindingsHtml(actionableFindings) : '') + balanceHtml + aiScanWarningsHtml(ev) + aiPriceBreakdownHtml(ev) + residualLines + unknownCards + aiAnalyzeHtml(ev) + aiScanDiagnosticsHtml(ev);
+    // v41: כל תוספת תצוגה כאן נכנסת דרך aiSafeBlock. באג בכרטיס אחד הפיל את
+    // renderReconcile כולו מתוך ה-finally של הסריקה, והמסך נשאר תקוע על
+    // הספינר בלי דרך החוצה. מעכשיו כרטיס שנופל מדווח על עצמו והשאר ממשיך.
+    const gapExplanationHtml = analyzerLed ? '' : aiSafeBlock('הסבר הפער', () => aiFullListExplanationHtml(ev));
+    const findingsHtml = gapExplanationHtml + (!analyzerLed && actionableFindings.length ? aiActionableFindingsHtml(actionableFindings) : '') + balanceHtml + aiSafeBlock('הערות הקריאה', () => aiScanWarningsHtml(ev)) + aiSafeBlock('פירוט המחירים', () => aiPriceBreakdownHtml(ev)) + residualLines + unknownCards + aiSafeBlock('המנתח', () => aiAnalyzeHtml(ev)) + aiSafeBlock('נתוני אבחון', () => aiScanDiagnosticsHtml(ev));
     const allGood = ev.valid && !hasProblems;
     const statusHtml = allGood
       ? '<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-3 font-black text-emerald-800"><i class="fa-solid fa-circle-check ml-1"></i>הכול תואם — לא נמצאו חוסר, עודף או בעיית מחיר/מבצע.</div>'
