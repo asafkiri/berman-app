@@ -727,7 +727,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '44'; // גרסה 44: שלב האישור הכפול הוסר — כפתור אחד מאשר וקולט את התעודה
+const APP_VERSION = '45'; // גרסה 45: התעודה השמורה מציגה מה בדיוק חסר, לא רק פער כספי סתום
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10556,6 +10556,32 @@ function aiMonthEndPendingRecord(ev) {
 // v43: המסך שמשתמש רגיל רואה. משפט אחד גדול שאומר מה קרה, רשימה קצרה
 // בכתב גדול אם יש הבדלים, וזהו. כל השאר — מאזן, מחירים, אבחון — נשאר
 // זמין, אבל מאחורי "רוצה הסבר?" ולא מונח על המסך.
+// v45: הסריקה יודעת בדיוק מה חסר ומה עודף, והמסך מציג את זה בכתב גדול —
+// אבל השמירה זרקה את המידע. saveReconciledReceipt כותב noteQty לשורה רק
+// כשהוא שונה מהכמות שנסרקה, ובלי החלה הוא לעולם אינו שונה. התוצאה: תעודה
+// שנשמרה עם "פער סכום שטרם שויך ₪52.52" במקום "פרנה — חסר 1".
+// כאן נכתבות כמויות הנייר של הממצאים שהוצגו, ותו לא: המחירים לא נגעים,
+// שורות שאין להן ממצא לא נגעות, וההחלה המלאה (aiApplyInvoiceResult) נשארת
+// מסלול נפרד עם הבדיקות הטרנזקציוניות שלה.
+function aiRecordFindingsAsPaperQty(ev) {
+  if (!ev || !Array.isArray(reconcileData)) return 0;
+  const findings = (Array.isArray(ev.findings) ? ev.findings : [])
+    .filter(f => f && ['shortage', 'surplus'].includes(String(f.type)) && f.productId != null);
+  let written = 0;
+  findings.forEach(finding => {
+    const line = reconcileData.find(l => l && String(l.productId) === String(finding.productId));
+    if (!line) return;
+    const received = Number(line.received) || 0;
+    const qty = Math.max(0, Number(finding.qty) || 0);
+    if (!qty) return;
+    const paperQty = String(finding.type) === 'shortage' ? received + qty : Math.max(0, received - qty);
+    if (paperQty === received) return;
+    line.noteQty = paperQty;
+    written++;
+  });
+  if (written) reconcilePaperEntered = true;
+  return written;
+}
 function aiSimpleSummaryHtml(ev, opts) {
   opts = opts || {};
   const findings = (Array.isArray(ev && ev.findings) ? ev.findings : []).filter(aiIsActionableFinding);
@@ -11154,8 +11180,8 @@ function aiInvoiceCaptureHtml() {
     const primaryHtml = ev.valid
       ? '<button data-role="ai-apply" class="btn-tap w-full bg-emerald-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-check ml-1"></i>קלוט את התעודה</button>'
       : (gapExplanationHtml
-        ? '<button data-role="rc-recon-save" class="btn-tap w-full bg-emerald-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-circle-check ml-1"></i>קלוט את התעודה</button>'
-        : '<button data-role="rc-recon-save" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-file-circle-exclamation ml-1"></i>קלוט ותטפל בהפרש אחר כך</button>');
+        ? '<button data-role="ai-close-receipt" class="btn-tap w-full bg-emerald-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-circle-check ml-1"></i>קלוט את התעודה</button>'
+        : '<button data-role="ai-close-receipt" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-file-circle-exclamation ml-1"></i>קלוט ותטפל בהפרש אחר כך</button>');
     const actionsHtml = '<div class="mt-4 space-y-2">' + primaryHtml +
       '<button data-role="ai-edit-images" class="btn-tap w-full bg-white border border-slate-200 text-slate-500 rounded-2xl py-3 font-black text-sm"><i class="fa-solid fa-camera-rotate ml-1"></i>לא נכון — צלם שוב</button></div>';
     // v43: שתי שכבות. למעלה — משפט אחד גדול וכפתור אחד גדול, וזה כל מה שרוב
@@ -13058,7 +13084,7 @@ function receiptDiscrepancyInfo(rc, opts) {
   // בתעודה עכשיו אינה מבטלת דבר.
   const pendingRec = rc && rc.monthEndPending && typeof rc.monthEndPending === 'object' ? rc.monthEndPending : null;
   const monthEndWaiting = !!(pendingRec && Number(pendingRec.expectedRebate) > 0
-    && Math.abs(Math.round((Number(pendingRec.gap) || 0) * 100) - Math.round(unresolvedAmountGap * 100)) <= 1);
+    && Math.abs(Math.round((Number(pendingRec.gap) || 0) * 100) - Math.round(unresolvedAmountGap * 100)) <= 5);
   const amountGapOpen = amountGapCents > amountToleranceCents && !monthEndWaiting;
   if (amountGapOpen && Math.round(unresolvedAmountGap * 100) > 0) shortVal += unresolvedAmountGap;
   else if (amountGapOpen && Math.round(unresolvedAmountGap * 100) < 0) overVal += -unresolvedAmountGap;
@@ -16391,6 +16417,8 @@ app.addEventListener('click', (e) => {
   if (role === 'ai-add-unknown-product') { aiOpenUnknownProduct(parseInt(t.dataset.doc, 10), parseInt(t.dataset.row, 10)); return; }
   if (role === 'ai-toggle-details') { aiDetailsOpen = !aiDetailsOpen; renderReconcile(); return; } // v43
   if (role === 'ai-apply') { aiApplyInvoiceResult(); return; }
+  // v45: סגירה ממסך הסריקה — קודם מתעדים מה בדיוק חסר, ואז שומרים.
+  if (role === 'ai-close-receipt') { aiRecordFindingsAsPaperQty(aiScanEvaluation); saveReconciledReceipt(); return; }
   if (role === 'admin-login') { requireAdmin('כניסת מנהל', () => { if (currentView === 'settings') renderSettings(); }); return; }
   if (role === 'admin-logout') { exitAdminMode(); return; }
   if (role === 'admin-change-pin') { openChangeAdminPinModal(); return; }
