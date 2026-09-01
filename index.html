@@ -724,7 +724,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '41'; // גרסה 41: תיקון מסך תקוע אחרי סריקה — driftHtml אבד בריפקטור, וכל כרטיס תצוגה עטוף כך שלא יפיל את המסך
+const APP_VERSION = '42'; // גרסה 42: הערות הקריאה מקופלות תמיד, הרעש הטכני מקובץ למספר אחד, ורק מה ששווה קריאה מוצג
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10678,19 +10678,46 @@ function aiPriceBreakdownHtml(ev) {
     '</summary>' +
     '<div class="mt-2">' + rowHtml + totalsHtml + listNote + suspectHtml + '</div></details>';
 }
+// v42: רוב ההערות שחוזרות מהקריאה הן רעש טכני — "ביטחון קריאה בינוני",
+// קמטים, סימוני עט. הן נכונות ואין להן שום משמעות כספית, ובכל זאת הוצגו
+// פתוחות ובכתום, 16 במספר, מעל התוצאות. משתמש שרואה את זה חושב שקרה אסון.
+// מעכשיו: הכרטיס תמיד מקופל, הרעש הטכני מקובץ למספר אחד, ומה שבאמת שווה
+// קריאה (מחיר שונה מהמחירון, שיוך שנעשה אחרת) עולה למעלה.
+const AI_SCAN_NOISE_WARNING_PATTERNS = [
+  /ביטחון\s*ה?קריאה/, /מומלץ לבדוק מול התמונה/, /בדוק היטב לפני אישור/,
+  /סימוני עט|קמטים/, /תיאורי פריטים נפגעו/, /אינו נראה בצילום/, /תומללו רק החלקים/
+];
+function aiWarningIsNoise(text) {
+  const value = String(text || '');
+  return AI_SCAN_NOISE_WARNING_PATTERNS.some(pattern => pattern.test(value));
+}
 function aiScanWarningsHtml(ev) {
-  const warnings = Array.isArray(ev && ev.warnings) ? ev.warnings.filter(Boolean) : [];
+  const warnings = Array.isArray(ev && ev.warnings) ? ev.warnings.filter(Boolean).map(String) : [];
   if (!warnings.length) return '';
-  const open = ev.valid !== true;
-  return '<details class="rounded-xl border border-amber-200 bg-amber-50 p-3"' + (open ? ' open' : '') + '>' +
+  const notable = warnings.filter(w => !aiWarningIsNoise(w));
+  const noise = warnings.filter(aiWarningIsNoise);
+  // אין הערה משמעותית אחת? הכרטיס נעשה אפור ושקט — אין כאן מה להיבהל ממנו.
+  const tone = notable.length
+    ? { box: 'border-amber-200 bg-amber-50', head: 'text-amber-900', sub: 'text-amber-700', icon: 'fa-circle-info' }
+    : { box: 'border-slate-200 bg-slate-50', head: 'text-slate-600', sub: 'text-slate-400', icon: 'fa-camera' };
+  const title = notable.length
+    ? notable.length + ' הערות שכדאי לקרוא'
+    : 'הערות טכניות על איכות הצילום (' + noise.length + ')';
+  const notableHtml = notable.length
+    ? '<ul class="list-disc pr-5 mt-2 space-y-1 text-[11px] font-bold ' + tone.head + '">' +
+      notable.slice(0, 10).map(w => '<li>' + htmlEscape(w) + '</li>').join('') + '</ul>' +
+      (notable.length > 10 ? '<div class="text-[10px] font-bold ' + tone.sub + ' mt-1">ועוד ' + (notable.length - 10) + '</div>' : '')
+    : '';
+  const noiseHtml = noise.length
+    ? '<div class="text-[10px] font-bold ' + tone.sub + ' mt-2 leading-relaxed">' +
+      noise.length + ' הערות טכניות על איכות הקריאה (ביטחון בינוני, קמטים בנייר, סימוני עט). הן אינן משפיעות על החישוב — הסכומים והכמויות נבדקו בנפרד מול העוגן המודפס.</div>'
+    : '';
+  // תמיד מקופל: מי שרוצה לראות — פותח.
+  return '<details class="rounded-xl border ' + tone.box + ' p-3">' +
     '<summary class="cursor-pointer list-none flex items-center justify-between gap-2">' +
-      '<span class="font-black text-amber-900 text-sm"><i class="fa-solid fa-circle-info ml-1"></i>' + warnings.length + ' הערות מקריאת הנייר</span>' +
-      '<span class="shrink-0 text-[10px] font-black text-amber-700">' + (open ? 'פתוח' : 'הצג') + '</span>' +
-    '</summary>' +
-    '<ul class="list-disc pr-5 mt-2 space-y-1 text-[11px] font-bold text-amber-900">' +
-      warnings.slice(0, 12).map(w => '<li>' + htmlEscape(String(w)) + '</li>').join('') +
-    '</ul>' +
-    (warnings.length > 12 ? '<div class="text-[10px] font-bold text-amber-700 mt-1">ועוד ' + (warnings.length - 12) + ' הערות</div>' : '') +
+      '<span class="font-black ' + tone.head + ' text-sm"><i class="fa-solid ' + tone.icon + ' ml-1"></i>' + title + '</span>' +
+      '<span class="shrink-0 text-[10px] font-black ' + tone.sub + '">הצג</span>' +
+    '</summary>' + notableHtml + noiseHtml +
   '</details>';
 }
 function aiFindingsBalanceHtml(ev) {
