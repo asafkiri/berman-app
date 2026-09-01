@@ -697,6 +697,10 @@ let aiScanEvaluation = null;
 let aiScanError = '';
 let aiScanAutoRotationNote = '';
 let aiScanAttemptCount = 0;
+// v25: על מה נשענת הסריקה שבזיכרון — חתימת תעודות הספק (סכום/יחידות/שורות)
+// וחתימת הרשימה שנסרקה בקליטה. כל עוד תעודות הספק לא השתנו, יציאה מהמסך
+// וחזרה אליו אינן מוחקות את הצילומים ואת קריאת ה-AI.
+let aiScanBasis = null;
 const AI_SCAN_MAX_AUTO_ROTATION_RETRIES = 2;
 // v179: כשל רשת ("Failed to fetch") הוא זמני כמעט תמיד. עד v178 הבהוב אחד
 // מחק תעודה שלמה מהסריקה בלי ניסיון נוסף. הטיימאאוט המקומי מעט מעל התקרה
@@ -720,7 +724,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '24'; // גרסה 24: "צלם תעודה" פותח מצלמה גם בגלקסי — כפתור צילום עם capture, והגלריה ככפתור נפרד
+const APP_VERSION = '25'; // גרסה 25: הצילומים וקריאת ה-AI נשמרים ביציאה למסך הקליטה וחזרה — אין צורך לצלם את התעודה שוב
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -5495,8 +5499,10 @@ function openReconcile() {
   receivingDepositLines().forEach(dep => {
     reconcileData.push({ productId: 'deposit-recv-' + dep.product.id, name: dep.name, barcode: '', received: dep.qty, noteQty: dep.qty, price: dep.unit, basePrice: dep.unit, promoPct: 0, promoOn: false, checked: true, isDeposit: true });
   });
-  detectiveOpen = false; noteCheckOpen = false; noteCheckAuto = false; noteCheckRows = []; noteCheckRes = null; reconcileCheckMode = false; noteCheckQtyMode = false; rcStep = null; noteCheckForceQty = false; ncPromoResult = null; reconcileSupplierDiscount = 0; reconcileSupplierPromoItems = []; reconcilePromoMismatchItems = []; reconcileSupplierCreditClaim = null; manualSearchTerm = ''; manualAssigned = []; manualSearchOpen = false; manualPromoMarks = {}; reconcilePaperEntered = false; reconcileDetectiveRoundingGap = null;
-  resetAiInvoiceScan();
+  detectiveOpen = false; noteCheckOpen = false; noteCheckAuto = false; noteCheckRows = []; noteCheckRes = null; reconcileCheckMode = false; noteCheckQtyMode = false; rcStep = null; noteCheckForceQty = false; ncPromoResult = null; reconcileSupplierDiscount = 0; reconcileSupplierPromoItems = []; reconcilePromoMismatchItems = []; reconcileSupplierCreditClaim = null; manualSearchTerm = ''; manualAssigned = []; manualSearchOpen = false; manualPromoMarks = {}; reconcilePaperEntered = false; reconcileDetectiveRoundingGap = null; reconcileAiAudit = null; // v25: התיעוד נבנה מחדש בכל החלה, ולכן אינו שורד פתיחה מחדש של המסך
+  // v25: לא מוחקים סריקה קיימת. יצא למסך הקליטה לתקן משהו וחזר לסגור את
+  // התעודה — הצילומים והקריאה מהנייר עדיין כאן, וההשוואה מחושבת מחדש.
+  prepareAiInvoiceScan();
   resetDetectiveQuestions();
   setView('reconcile');
 }
@@ -6463,7 +6469,7 @@ function detectiveQuestionHtml(result, question) {
     '<div class="font-black text-lg text-slate-800"><i class="fa-solid fa-wand-magic-sparkles text-indigo-500"></i> הבלש מצא ' + result.solutions.length + ' אפשרויות</div>' +
     '<div class="text-xs text-slate-500 font-bold mt-1 mb-3">תשובה אחת יכולה לצמצם את האפשרויות בלי להקליד את כל התעודה.</div>' +
     questionUi +
-    '<button data-role="ai-rescan" class="btn-tap w-full text-slate-400 py-2 font-black text-xs underline">לא בטוח — סרוק את התעודות</button>' +
+    '<button data-role="ai-rescan" class="btn-tap w-full text-slate-400 py-2 font-black text-xs underline">לא בטוח — ' + aiScanEntryLabel('סרוק את התעודות') + '</button>' +
   '</div>';
 }
 // הבלש המקומי סוגר רק מקרה פשוט ובטוח: מוצר אחד, חוסר טהור או עודף טהור,
@@ -6585,7 +6591,7 @@ function detectiveSolutionsHtml(result, opts) {
     rows +
     (opts.postBarcode
       ? '<button data-role="nc-force-qty" class="btn-tap w-full bg-white border-2 border-slate-200 text-slate-600 rounded-xl py-2.5 font-black text-sm mt-3">אף אחת — המשך להזנת כמויות</button>'
-      : '<button data-role="ai-rescan" class="btn-tap w-full bg-white border-2 border-slate-200 text-slate-600 rounded-xl py-2.5 font-black text-sm mt-3">אף אחת — סרוק את התעודות</button>') +
+      : '<button data-role="ai-rescan" class="btn-tap w-full bg-white border-2 border-slate-200 text-slate-600 rounded-xl py-2.5 font-black text-sm mt-3">אף אחת — ' + aiScanEntryLabel('סרוק את התעודות') + '</button>') +
   '</div>';
 }
 function detectiveApplyResolvedResult(result, i, selectPrefix) {
@@ -6914,12 +6920,66 @@ function reconcileRowHtml(l) {
 }
 
 // ===== סריקת AI — מופעלת רק לאחר שההתאמה והבלש הפשוט לא פתרו =====
+function aiScanNoteSource() {
+  return receiptNotes.length ? receiptNotes.map(normNote) : [{ amount: receiptNoteTotal, units: receiptNoteUnits, lines: null }];
+}
+// חתימת תעודות הספק: רק אם היא השתנתה (סכום/יחידות/שורות/מספר תעודות)
+// הצילומים הקיימים כבר אינם שייכים לנייר שעל הדלפק ויש למחוק אותם.
+function aiScanNoteSignature() {
+  return JSON.stringify(aiScanNoteSource().map(note => [
+    r2(Number(note.amount) || 0),
+    note.units == null ? null : Number(note.units),
+    note.lines == null ? null : Number(note.lines)
+  ]));
+}
+// חתימת הרשימה שנסרקה בקליטה — הקלט השני של ההשוואה. השתנתה? הקריאה
+// מהנייר עדיין תקפה, אבל ההשוואה מולה חייבת להיות מחושבת מחדש.
+function aiScanLinesSignature() {
+  return JSON.stringify((reconcileData || []).map(line => [
+    String(line.productId),
+    Number(line.received) || 0,
+    Number(line.noteQty) || 0,
+    Number(line.price) || 0,
+    line.promoOn ? 1 : 0
+  ]));
+}
+function aiRefreshScanEvaluation() {
+  aiScanEvaluation = aiEvaluateInvoiceScan(aiScanResponse);
+  aiScanBasis = { notes: aiScanNoteSignature(), lines: aiScanLinesSignature() };
+  return aiScanEvaluation;
+}
 function resetAiInvoiceScan() {
   aiCloseOrientationReview();
-  const source = receiptNotes.length ? receiptNotes.map(normNote) : [{ amount: receiptNoteTotal, units: receiptNoteUnits }];
+  const source = aiScanNoteSource();
   aiScanDocuments = source.map((note, i) => ({ noteIndex: i, amount: note.amount, units: note.units, lines: note.lines, pages: [] })); // v34: מונה השורות = העד השני של תנובה
   aiScanBusy = false; aiScanProgressText = ''; aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; reconcileAiAudit = null; aiUnknownProductCreateContext = null;
   aiAnalyzeBusy = false; aiAnalyzeError = ''; aiAnalyzeResult = null; // v187
+  aiScanBasis = { notes: aiScanNoteSignature(), lines: null };
+}
+// v25: יש בזיכרון עבודה של ממש (צילומים או קריאת AI) ששייכת בדיוק לאותן
+// תעודות ספק? אז יציאה מהמסך אינה מוחקת אותה.
+function aiScanCanResume() {
+  return !!aiScanBasis && aiScanBasis.notes === aiScanNoteSignature() && (aiTotalPages() > 0 || !!aiScanResponse);
+}
+// v25: המשך סריקה קיימת. הצילומים וקריאת ה-AI נשמרים; רק ההשוואה מול
+// הרשימה שנסרקה מחושבת מחדש, וזאת רק אם הרשימה באמת השתנתה בינתיים.
+// כשהיא השתנתה, גם תוצאת המנתח יורדת — היא נשענה על השוואה שכבר אינה קיימת.
+function resumeAiInvoiceScan() {
+  aiCloseOrientationReview();
+  aiScanBusy = false; aiScanProgressText = ''; aiScanError = ''; aiUnknownProductCreateContext = null; aiAnalyzeBusy = false;
+  if (!aiScanResponse) { aiScanBasis = { notes: aiScanNoteSignature(), lines: null }; return; }
+  // ההחלה כבר רצה על התעודה (noteQty מגיע מהנייר) — חישוב מחדש היה משווה
+  // את הנייר לעצמו, ולכן התוצאות נשארות כפי שהן.
+  if (reconcilePaperEntered) return;
+  if (aiScanBasis && aiScanBasis.lines === aiScanLinesSignature()) return; // לא השתנה דבר — התוצאות נשארות בדיוק כפי שהיו
+  aiAnalyzeError = ''; aiAnalyzeResult = null;
+  aiRefreshScanEvaluation();
+}
+function prepareAiInvoiceScan() { if (aiScanCanResume()) resumeAiInvoiceScan(); else resetAiInvoiceScan(); }
+// v25: כשיש כבר עבודה שמורה, הכפתור אינו מזמין לצלם מחדש אלא לחזור אליה.
+function aiScanEntryLabel(fresh) {
+  if (!aiScanCanResume()) return fresh;
+  return aiScanResponse ? 'חזור לתוצאות הסריקה' : 'המשך את הסריקה — ' + aiTotalPages() + ' צילומים שמורים';
 }
 function aiTotalPages() { return aiScanDocuments.reduce((sum, d) => sum + d.pages.length, 0); }
 function aiDataUrlBytes(dataUrl) {
@@ -9861,7 +9921,7 @@ async function aiRunInvoiceScan() {
         ? { docIndex: result.docIndex, ok: true, attempts: result.attempts, requestId: result.requestId, model: result.model, usage: result.usage, barcodeRetry: result.retryAudit }
         : { docIndex: result.docIndex, ok: false, error: result.errorMessage || '' })
     };
-    aiScanEvaluation = aiEvaluateInvoiceScan(aiScanResponse);
+    aiRefreshScanEvaluation();
   } catch (error) { aiScanError = error && error.message ? error.message : 'הסריקה החכמה נכשלה'; }
   finally {
     aiScanBusy = false; aiScanProgressText = '';
@@ -10479,7 +10539,7 @@ function aiConfirmNameCandidate(documentIndex, rowIndex, candidateProductId) {
   row.barcodeSuggestedProductId = null;
   row.barcodeSuggestedProductName = null;
   row.userConfirmedAt = Date.now();
-  aiScanEvaluation = aiEvaluateInvoiceScan(aiScanResponse);
+  aiRefreshScanEvaluation();
   aiScanError = aiScanEvaluation.valid ? '' : 'הפענוח עדיין דורש בדיקה — התעודה לא שונתה.';
   if (currentView === 'reconcile') renderReconcile();
   showToast('המוצר שבחרת אושר. התוצאות חושבו מחדש.', null, null, 2600);
@@ -10552,7 +10612,7 @@ function aiCompleteUnknownProduct(savedProduct, createContext) {
     row.userConfirmedAt = confirmedAt;
   });
   aiUnknownProductCreateContext = null;
-  aiScanEvaluation = aiEvaluateInvoiceScan(aiScanResponse);
+  aiRefreshScanEvaluation();
   aiScanError = aiScanEvaluation.valid ? '' : 'הפענוח עדיין דורש בדיקה — התעודה לא שונתה.';
   if (currentView === 'reconcile') renderReconcile();
   const rowCountText = verifiedRows.length > 1 ? (' · שויכו ' + verifiedRows.length + ' שורות') : '';
@@ -10584,7 +10644,7 @@ function aiConfirmBarcodeSuggestion(documentIndex, rowIndex) {
   row.barcodeSuggestedProductId = null;
   row.barcodeSuggestedProductName = null;
   row.userConfirmedAt = Date.now();
-  aiScanEvaluation = aiEvaluateInvoiceScan(aiScanResponse);
+  aiRefreshScanEvaluation();
   aiScanError = aiScanEvaluation.valid ? '' : 'הפענוח עדיין דורש בדיקה — התעודה לא שונתה.';
   if (currentView === 'reconcile') renderReconcile();
   showToast('המוצר אושר. התוצאות חושבו מחדש.', null, null, 2400);
@@ -10661,8 +10721,13 @@ function aiInvoiceCaptureHtml() {
       '<button data-role="ai-add-photo-gallery" data-doc="' + i + '" class="btn-tap w-full bg-white border border-slate-200 text-slate-500 rounded-xl py-2 font-black text-xs mt-2"><i class="fa-solid fa-images"></i> או: בחר תמונה מהגלריה</button></div>';
   }).join('');
   const ready = aiAllPagesOrientationConfirmed();
+  // v25: הצילומים שורדים יציאה למסך הקליטה וחזרה. שורה אחת מסבירה למה
+  // התמונות כבר כאן, ולידה הדרך למחוק הכול ולהתחיל לצלם מחדש.
+  const keptNote = aiTotalPages()
+    ? '<div class="rounded-xl bg-slate-50 border border-slate-200 p-2 mb-3 flex items-center justify-between gap-2"><span class="text-[11px] font-black text-slate-600"><i class="fa-solid fa-images"></i> ' + aiTotalPages() + ' צילומים שמורים מהתעודה הזאת</span><button data-role="ai-reset-scan" class="btn-tap text-[11px] font-black text-slate-400 underline shrink-0">צלם הכול מחדש</button></div>'
+    : '';
   return '<div class="bg-white rounded-2xl border-2 border-violet-200 p-4 shadow-sm mb-24"><div class="font-black text-xl text-slate-800"><i class="fa-solid fa-camera-retro text-violet-600"></i> סריקה חכמה של התעודות</div><div class="rounded-xl bg-emerald-50 border-2 border-emerald-300 p-2.5 text-[12px] font-black text-emerald-800 mt-2"><i class="fa-solid fa-circle-check"></i> הסריקה פעילה ומחוברת לשירות הפענוח.</div>' + (detectiveStrictNote ? '<div class="rounded-xl bg-rose-50 border-2 border-rose-300 p-2.5 text-[12px] font-black text-rose-800 mt-2"><i class="fa-solid fa-user-secret"></i> הבלש ויתר בקול: ' + htmlEscape(detectiveStrictNote) + '</div>' : '') + '<div class="text-xs text-slate-500 font-bold leading-relaxed mt-1 mb-2">הבלש הפשוט לא פתר את הפער. צלם פעם אחת כל עמוד מכל תעודה. התמונות נשלחות לפענוח בלבד ואינן נשמרות באפליקציה.</div><div class="rounded-xl bg-blue-50 border border-blue-200 p-2 text-[11px] font-black text-blue-800 mb-3"><i class="fa-solid fa-expand"></i> כל צילום נפתח בגודל גדול. סובב עד שהכותרת למעלה והכתב ישר, ואז אשר. ללא אישור התמונה לא תישלח.</div>' +
-    (aiScanError ? '<div class="rounded-xl bg-rose-50 border border-rose-300 p-2.5 text-xs font-black text-rose-700 mb-3">' + htmlEscape(aiScanError) + '</div>' : '') + docCards +
+    (aiScanError ? '<div class="rounded-xl bg-rose-50 border border-rose-300 p-2.5 text-xs font-black text-rose-700 mb-3">' + htmlEscape(aiScanError) + '</div>' : '') + keptNote + docCards +
     '<button data-role="ai-run" ' + (ready ? '' : 'disabled') + ' class="btn-tap w-full rounded-xl py-3.5 font-black ' + (ready ? 'bg-violet-600 text-white' : 'bg-slate-200 text-slate-400') + '"><i class="fa-solid fa-wand-magic-sparkles"></i> פענח את כל התעודות ב-AI</button>' +
     '<div class="text-[10px] text-slate-400 font-bold text-center mt-2">בדרך כלל מתבצעת קריאת AI אחת. אם הקריאה חסרה או אינה נסגרת מול הסכום והיחידות, המערכת עשויה לנסות עד שתי זוויות נוספות.</div><button data-role="rc-goto-manual" class="btn-tap w-full bg-white border border-slate-200 text-slate-500 rounded-xl py-2 font-bold text-xs mt-2">או: בדיקה ידנית בלי סריקה</button><button data-role="rc-goto-manual" class="btn-tap w-full text-slate-400 py-2 font-black text-xs underline">המשך בלי AI — בדיקה ידנית</button></div>';
 }
@@ -10964,7 +11029,7 @@ function renderReconcile() {
       '<div class="font-black text-lg text-slate-800 mb-1">הבלש לא הצליח לזהות לבד</div>' +
       '<div class="text-xs text-slate-500 font-bold mb-3 leading-relaxed">לא נמצא פתרון שסוגר יחד את הסכום ואת סך היחידות. ודא שהקלדת את שני הנתונים נכון, או בחר איך למצוא את מקור ההפרש:</div>' +
       detectivePromoCardHtml() +
-      (AI_SCAN_ENABLED ? '<button data-role="ai-rescan" class="btn-tap w-full bg-violet-600 text-white rounded-xl py-3.5 font-black mb-2 text-right px-4"><div><i class="fa-solid fa-camera-retro"></i> סרוק את התעודות</div><div class="text-[11px] font-bold opacity-80 mt-0.5">הבלש החכם קורא את הנייר ומוצא לבד את מקור ההפרש</div></button>' : '') +
+      (AI_SCAN_ENABLED ? '<button data-role="ai-rescan" class="btn-tap w-full bg-violet-600 text-white rounded-xl py-3.5 font-black mb-2 text-right px-4"><div><i class="fa-solid fa-camera-retro"></i> ' + aiScanEntryLabel('סרוק את התעודות') + '</div><div class="text-[11px] font-bold opacity-80 mt-0.5">' + (aiScanCanResume() && aiScanResponse ? 'התעודות כבר נקראו — התוצאות שמורות ומחושבות מחדש מול הרשימה' : 'הבלש החכם קורא את הנייר ומוצא לבד את מקור ההפרש') + '</div></button>' : '') +
       '<button data-role="rc-goto-manual" class="btn-tap w-full bg-white border-2 border-slate-200 text-slate-700 rounded-xl py-3.5 font-black text-right px-4"><div><i class="fa-solid fa-hand-pointer"></i> בדיקה ידנית בלי סריקה</div><div class="text-[11px] font-bold text-slate-400 mt-0.5">שייך חוסר/עודף בעצמך ותקן מחירים</div></button>' +
     '</div>';
   }
@@ -10987,7 +11052,7 @@ function renderReconcile() {
       '<div class="text-[11px] text-slate-400 font-bold mb-2">טעות מחיר? עדכן בשדה והמחיר מתעדכן גם במאגר. בעיה במבצע שבמחיר השורה? לחץ על הכפתור ובחר: דרישת זיכוי מהספק או תיקון טעות שלנו.</div>' +
       '<div class="space-y-1.5">' + manualScannedRowsHtml() + '</div>' +
       (marksTotal > 0 ? '<div class="mt-2 rounded-xl bg-amber-50 border border-amber-300 p-2.5 text-xs font-black text-amber-800"><i class="fa-solid fa-hand-holding-dollar"></i> דרישת זיכוי מסומנת: ₪' + fmtMoney(marksTotal) + ' — תירשם לתעודה בסיום ותישאר מודגשת עד אימות</div>' : '') +
-      '<button data-role="ai-rescan" class="btn-tap w-full bg-violet-600 text-white rounded-xl py-2.5 font-black text-sm mt-3"><i class="fa-solid fa-camera-retro"></i> סרוק את התעודות</button>' +
+      '<button data-role="ai-rescan" class="btn-tap w-full bg-violet-600 text-white rounded-xl py-2.5 font-black text-sm mt-3"><i class="fa-solid fa-camera-retro"></i> ' + aiScanEntryLabel('סרוק את התעודות') + '</button>' +
     '</div>';
   }
   else if (rcStep === 'barcodes') {
@@ -12100,7 +12165,7 @@ async function confirmReceipt() {
   if (!saved) return;
   hideReceiptSummary();
   aiCloseOrientationReview();
-  receiptList = []; pendingReceipt = null; receiptNotes = []; receiptDocDate = null; receiptDraftId = null; recomputeNoteTotal(); receiptOpened = false; editingNotes = false; reconcileData = null; reconcileSupplierDiscount = 0; reconcileSupplierPromoItems = []; reconcilePromoMismatchItems = []; reconcileSupplierCreditClaim = null; reconcileAiAudit = null; aiScanDocuments = []; aiScanBusy = false; aiScanProgressText = ''; aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; receiptDupConfirmed = false; receiptLinesConfirmed = false; saveReceiptDraft();
+  receiptList = []; pendingReceipt = null; receiptNotes = []; receiptDocDate = null; receiptDraftId = null; recomputeNoteTotal(); receiptOpened = false; editingNotes = false; reconcileData = null; reconcileSupplierDiscount = 0; reconcileSupplierPromoItems = []; reconcilePromoMismatchItems = []; reconcileSupplierCreditClaim = null; reconcileAiAudit = null; aiScanDocuments = []; aiScanBusy = false; aiScanProgressText = ''; aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; aiScanBasis = null; receiptDupConfirmed = false; receiptLinesConfirmed = false; saveReceiptDraft(); // v25: תעודה שנסגרה משחררת גם את בסיס הסריקה
   setView('receiptsHistory');
   const newOpen = receipts.filter(r => receiptDiscrepancyInfo(r).open).find(r => findOffsetMatch(r));
   if (newOpen) showToast('💡 זוהה קיזוז אפשרי מול תעודה קודמת — ראה בכרטיס התעודה', null, null, 3500);
@@ -15814,7 +15879,9 @@ app.addEventListener('click', (e) => {
   if (role === 'ai-edit-images') { aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; aiAnalyzeResult = null; aiAnalyzeError = ''; renderReconcile(); return; }
   if (role === 'ai-analyze') { aiRunAnalyzer(); return; }
   if (role === 'ai-analyze-copy') { const text = aiAnalyzeClaimsPlainText(); if (!text) return; if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => showToast('הטענות הועתקו', null, null, 2200)).catch(() => showToast('ההעתקה נכשלה', null, null, 2200)); else showToast('ההעתקה אינה נתמכת בדפדפן הזה', null, null, 2600); return; }
-  if (role === 'ai-rescan') { if (!AI_SCAN_ENABLED) { showToast('סריקת התעודות תודלק בהמשך — אין עדיין שרת סריקה לברמן', null, null, 3200); return; } resetAiInvoiceScan(); rcStep = 'ai'; renderReconcile(); return; }
+  if (role === 'ai-rescan') { if (!AI_SCAN_ENABLED) { showToast('סריקת התעודות תודלק בהמשך — אין עדיין שרת סריקה לברמן', null, null, 3200); return; } prepareAiInvoiceScan(); rcStep = 'ai'; renderReconcile(); return; } // v25: ממשיך סריקה קיימת במקום למחוק אותה
+  // v25: התחלה מאפס — רק בבקשה מפורשת, ותמיד עם אישור.
+  if (role === 'ai-reset-scan') { showConfirm('סריקה מחדש', 'למחוק את כל הצילומים ואת תוצאות הקריאה ולהתחיל לצלם מהתחלה?', 'מחק והתחל מחדש', () => { resetAiInvoiceScan(); rcStep = 'ai'; renderReconcile(); }); return; }
   if (role === 'ai-open-suggestion-page') { aiOpenBarcodeSuggestionPage(parseInt(t.dataset.doc, 10), parseInt(t.dataset.page, 10)); return; }
   if (role === 'ai-confirm-barcode-suggestion') { aiConfirmBarcodeSuggestion(parseInt(t.dataset.doc, 10), parseInt(t.dataset.row, 10)); return; }
   if (role === 'ai-confirm-name-candidate') { aiConfirmNameCandidate(parseInt(t.dataset.doc, 10), parseInt(t.dataset.row, 10), t.dataset.candidateId); return; }
@@ -15903,7 +15970,7 @@ app.addEventListener('click', (e) => {
   else if (role === 'ret-crates') { openCratePicker('returns'); }
   else if (role === 'ret-slot') { const de = $('retDocDate'); if (de) returnsDocDate = de.value || ''; switchReturnsSlot(t.dataset.slot); }
   else if (role === 'rc-open') { const en = readNoteEntry(receiptNotes.length === 0); if (en === false) return; if (en) receiptNotes.push(en); receiptDocDate = (($('rcDocDate') || {}).value || '').trim() || null; recomputeNoteTotal(); receiptOpened = true; receiptDupConfirmed = false; receiptLinesConfirmed = false; saveReceiptDraft(); refreshReceipt(); openReceivingScanner(); }
-  else if (role === 'rc-cancel') { showConfirm('ביטול תעודה', 'לבטל את התעודה הנוכחית? כל הפריטים שנסרקו יימחקו.', 'בטל תעודה', () => { receiptList = []; receiptNotes = []; receiptDocDate = null; receiptDraftId = null; recomputeNoteTotal(); receiptOpened = false; editingNotes = false; reconcileData = null; receiptDupConfirmed = false; receiptLinesConfirmed = false; saveReceiptDraft(); setView('receiving'); }); }
+  else if (role === 'rc-cancel') { showConfirm('ביטול תעודה', 'לבטל את התעודה הנוכחית? כל הפריטים שנסרקו יימחקו.', 'בטל תעודה', () => { receiptList = []; receiptNotes = []; receiptDocDate = null; receiptDraftId = null; recomputeNoteTotal(); receiptOpened = false; editingNotes = false; reconcileData = null; receiptDupConfirmed = false; receiptLinesConfirmed = false; resetAiInvoiceScan(); saveReceiptDraft(); setView('receiving'); }); } // v25: ביטול תעודה משחרר גם את צילומי הסריקה
   else if (role === 'rc-note-add') { const en = readNoteEntry(true); if (en === false) return; if (en) { receiptNotes.push(en); recomputeNoteTotal(); saveReceiptDraft(); } refreshReceipt(); const inp = $('rcNoteInput'); if (inp) inp.focus(); }
   else if (role === 'rc-note-remove') { const i = parseInt(t.dataset.idx, 10); if (i >= 0) { receiptNotes.splice(i, 1); recomputeNoteTotal(); saveReceiptDraft(); refreshReceipt(); } }
   else if (role === 'rc-notes-edit') { editingNotes = true; refreshReceipt(); }
@@ -16128,7 +16195,7 @@ app.addEventListener('click', (e) => {
   }
   else if (role === 'rf-add-item') receiptFixAddItem(id);
   else if (role === 'rc-digits-pick') receivingDigitsPick(id);
-  else if (role === 'rc-recon-cancel') { resetAiInvoiceScan(); reconcileData = null; setView('receiving'); }
+  else if (role === 'rc-recon-cancel') { reconcileData = null; setView('receiving'); } // v25: הצילומים והקריאה נשארים בזיכרון עד שהתעודה נסגרת או מבוטלת
   else if (role === 'rc-recon-save') saveReconciledReceipt();
   else if (role === 'rc-fix-open') openReceiptFix(id);
   else if (role === 'rc-offset-choose') openManualOffsetPicker(id, t.dataset.product, t.dataset.dir);
