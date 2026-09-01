@@ -724,7 +724,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '27'; // גרסה 27: שורה ששויכה לפי שם מציגה את כל המוצרים שהשם מתאים להם, וניתן להחליף בלחיצה — ההכרעה השקטה לפי מחיר הפכה גלויה
+const APP_VERSION = '29'; // גרסה 29: מאזן הממצאים אומר גם כמה כסף בתעודה בכלל לא נקרא, ופאנל האבחון מתרגם את שיטות השיוך של ברמן
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10461,6 +10461,7 @@ function aiScanDiagnosticsHtml(ev) {
     // גם *איך* שורת הנייר הודבקה למוצר: חוסר ועודף באותו גודל הם כמעט תמיד
     // שורה שהודבקה למוצר הלא נכון, וזה נראה מייד בשיטת ההתאמה.
     const matchMethodText = {
+      tnuva_code_exact: 'קוד הפריט המודפס', exact_full: 'ברקוד מלא',
       exact_barcode: 'ברקוד מלא', unique_suffix: 'סיפרות סוף ייחודיות', unique_full_pattern: 'תבנית ברקוד ייחודית',
       unique_suffix_pattern: 'תבנית סיפרות סוף', verified_name_price: 'שם + הצלבת מחיר (בלי ברקוד)',
       verified_suffix_name: 'סיפרות סוף + רמז שם', verified_pattern_name: 'תבנית + רמז שם',
@@ -10504,6 +10505,41 @@ function aiScanDiagnosticsHtml(ev) {
     if (aiAnalyzeResult && aiAnalyzeResult.usage) tokenLine('המנתח', aiAnalyzeResult.usage);
     return '<details class="mt-3 bg-slate-50 border border-slate-200 rounded-xl"><summary class="p-2.5 text-[11px] font-black text-slate-500"><i class="fa-solid fa-microscope"></i> נתוני אבחון — צלם מסך כשמשהו נראה מוזר</summary><div class="px-3 pb-3 text-[10px] text-slate-600 leading-relaxed" style="font-family: monospace">' + lines.map(htmlEscape).join('<br>') + '</div></details>';
   } catch (diagError) { return ''; }
+}
+// v28: מאזן הממצאים. עד כה המסך הציג רשימת בעיות ומעליה פער בכסף וביחידות,
+// בלי לומר אם הרשימה בכלל מסבירה את הפער. זה בדיוק המקום שבו נראה שה-AI
+// "טועה": ארבעה ממצאים נכונים שמסבירים חצי מהכסף נראים כמו תשובה שלמה.
+// closure כבר מחושב בכל הערכה — כאן הוא רק נאמר בקול, במספרים.
+function aiFindingsBalanceHtml(ev) {
+  const closure = ev && ev.closure;
+  if (!closure) return '';
+  const ok = closure.ok === true;
+  const unitsLine = closure.expectedUnitsDelta == null
+    ? '<div class="text-[11px] font-bold mt-1">אין עוגן יחידות בתעודה — הסגירה נבדקת בכסף בלבד</div>'
+    : '<div class="text-[11px] font-bold mt-1">' + (closure.unitsOk ? '✓' : '✗') + ' יחידות: הממצאים מסבירים ' + closure.actualUnitsDelta + ' מתוך ' + closure.expectedUnitsDelta + '</div>';
+  const moneyGap = r2(Number(closure.expectedAmountDelta || 0) - Number(closure.actualAmountDelta || 0));
+  const moneyTail = closure.amountOk
+    ? ''
+    : (moneyGap > 0
+      ? ' — נשארו ₪' + fmtMoney(Math.abs(moneyGap)) + ' בלי הסבר'
+      : ' — ₪' + fmtMoney(Math.abs(moneyGap)) + ' יותר ממה שהפער מצדיק');
+  const moneyLine = '<div class="text-[11px] font-bold mt-1">' + (closure.amountOk ? '✓' : '✗') + ' כסף: הממצאים מסבירים ₪' + fmtMoney(closure.actualAmountDelta) + ' מתוך ₪' + fmtMoney(closure.expectedAmountDelta) + moneyTail + '</div>';
+  // v29: כשהשורות שנקראו מהנייר אינן מסתכמות ל"נטו לחיוב" המודפס, זה מקור
+  // הפער האמיתי — ולא שום ממצא ברשימה. השורה הזאת אומרת אותו בכסף, כי בלעדיה
+  // המשתמש מחפש את הטעות בין ארבעה ממצאים נכונים.
+  const paperGaps = (Array.isArray(ev && ev.docSummaries) ? ev.docSummaries : []).map(summary => {
+    if (!summary || summary.subtotal == null) return '';
+    const missing = r2(Number(summary.subtotal) - Number(summary.rowsSum || 0));
+    if (Math.abs(missing) < 0.05) return '';
+    const label = (Array.isArray(ev.docSummaries) && ev.docSummaries.length > 1 ? 'תעודה ' + (Number(summary.noteIndex) + 1) + ': ' : '');
+    return '<div class="text-[11px] font-bold mt-1">✗ ' + label + (summary.rows || 0) + ' השורות שנקראו מהנייר מסתכמות ב-₪' + fmtMoney(summary.rowsSum || 0) + ', והנייר אומר ₪' + fmtMoney(summary.subtotal) + ' — ' + (missing > 0 ? '₪' + fmtMoney(missing) + ' בתעודה לא נקראו' : '₪' + fmtMoney(Math.abs(missing)) + ' נקראו פעמיים או בכמות גדולה מדי') + '</div>';
+  }).join('');
+  const hint = ok ? '' : '<div class="text-[10px] font-bold mt-2 opacity-80">' + (paperGaps
+    ? 'כלומר הבעיה אינה ברשימה שלמעלה אלא בקריאת הנייר עצמו: שורה, כמות או מחיר שלא נקראו נכון. צלם מחדש את התעודה בחדות (או את העמוד החסר) והרץ שוב.'
+    : 'כלומר הרשימה שלמעלה אינה התמונה המלאה: יש עוד שורה בתעודה שלא נקראה נכון, מחיר שונה מהקטלוג, או פריט שנסרק בקליטה תחת מוצר אחר. "הרץ את המנתח" למטה מנסה לסגור בדיוק את השארית הזאת.') + '</div>';
+  return '<div class="rounded-xl border p-3 ' + (ok ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-slate-100 border-slate-300 text-slate-700') + '">' +
+    '<div class="font-black text-sm"><i class="fa-solid fa-scale-balanced ml-1"></i>' + (ok ? 'הממצאים סוגרים את כל הפער' : 'הממצאים אינם סוגרים את כל הפער') + '</div>' +
+    unitsLine + moneyLine + paperGaps + hint + '</div>';
 }
 function aiActionableFindingsHtml(findings) {
   const actionable = (Array.isArray(findings) ? findings : []).filter(aiIsActionableFinding);
@@ -10872,7 +10908,8 @@ function aiInvoiceCaptureHtml() {
     // v178: פאנל האבחון היה תלוי בקיום ממצא פעיל, ולכן נעלם בדיוק במצב
     // שבו הוא הכי נחוץ (רק שאריות, או רק שגיאות). עכשיו הוא תמיד מוצג.
     const analyzerLed = ev.analyzerLed === true && aiAnalyzeResult && aiAnalyzeResult.accepted === true;
-    const findingsHtml = (!analyzerLed && actionableFindings.length ? aiActionableFindingsHtml(actionableFindings) : '') + residualLines + unknownCards + aiNameMatchReviewHtml(ev) + aiAnalyzeHtml(ev) + aiScanDiagnosticsHtml(ev);
+    const balanceHtml = (!analyzerLed && ev.findingsReady === true && (actionableFindings.length || !(ev.closure && ev.closure.ok))) ? aiFindingsBalanceHtml(ev) : '';
+    const findingsHtml = (!analyzerLed && actionableFindings.length ? aiActionableFindingsHtml(actionableFindings) : '') + balanceHtml + residualLines + unknownCards + aiNameMatchReviewHtml(ev) + aiAnalyzeHtml(ev) + aiScanDiagnosticsHtml(ev);
     const allGood = ev.valid && !hasProblems;
     const statusHtml = allGood
       ? '<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-3 font-black text-emerald-800"><i class="fa-solid fa-circle-check ml-1"></i>הכול תואם — לא נמצאו חוסר, עודף או בעיית מחיר/מבצע.</div>'
