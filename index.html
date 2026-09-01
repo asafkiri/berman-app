@@ -727,7 +727,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '45'; // גרסה 45: התעודה השמורה מציגה מה בדיוק חסר, לא רק פער כספי סתום
+const APP_VERSION = '46'; // גרסה 46: גם מוצר שלא נסרק כלל נרשם כחוסר בתעודה — לא רק מוצרים שהסורק ראה
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10569,8 +10569,26 @@ function aiRecordFindingsAsPaperQty(ev) {
     .filter(f => f && ['shortage', 'surplus'].includes(String(f.type)) && f.productId != null);
   let written = 0;
   findings.forEach(finding => {
-    const line = reconcileData.find(l => l && String(l.productId) === String(finding.productId));
-    if (!line) return;
+    let line = reconcileData.find(l => l && String(l.productId) === String(finding.productId));
+    // v46: מוצר שלא נסרק כלל אינו קיים ב-reconcileData — היא נבנית מהרשימה
+    // שנסרקה בקליטה. בדיוק המקרה של "פרנה — חסר 1": הנייר מכיר אותה, הסורק
+    // מעולם לא ראה אותה, ולכן החוסר שהוצג במסך נעלם בשמירה. aiApplyInvoiceResult
+    // כבר יוצר שורה כזאת; כאן נעשה אותו דבר, בכמות שנסרקה אפס ובלי לגעת בכסף
+    // (סכום השורה יוצא אפס, החוסר בלבד נרשם).
+    if (!line) {
+      if (String(finding.type) !== 'shortage') return;
+      const product = (products || []).find(item => item && String(item.id) === String(finding.productId));
+      const unitPrice = Number(finding.expectedPrice) > 0
+        ? Number(finding.expectedPrice)
+        : (product ? Number(product.price) || 0 : 0);
+      if (!product || !(unitPrice > 0)) return;
+      line = {
+        productId: String(product.id), name: String(product.name || finding.name || ''),
+        barcode: product.barcode || '', received: 0, noteQty: 0,
+        price: unitPrice, basePrice: unitPrice, promoPct: 0, promoOn: false, checked: false
+      };
+      reconcileData.push(line);
+    }
     const received = Number(line.received) || 0;
     const qty = Math.max(0, Number(finding.qty) || 0);
     if (!qty) return;
