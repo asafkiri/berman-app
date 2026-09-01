@@ -724,7 +724,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '38'; // גרסה 38: שורת המבצע מתוקנת לפי הנתונים — המחיר בתעודה נשאר מחיר ההנחה, וקיזוז המרכזת מוצג בכסף
+const APP_VERSION = '39'; // גרסה 39: כשכל הפער מוסבר בשורה שהגיעה במחירון מלא — הסבר גדול בראש המסך שאומר למשתמש שאפשר לסגור בביטחון
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10472,15 +10472,82 @@ function aiPriceBreakdownRows() {
   });
   return out;
 }
-function aiPriceBreakdownHtml(ev) {
+// v39: ההקשר המשותף של פער המחירים — סכומים, עוגן הכמויות, והשורה שנראה
+// שהגיעה במחירון מלא. חושב פעם אחת ומשמש גם את הפירוט וגם את כרטיס ההסבר,
+// כדי ששניהם לא יוכלו לומר דברים שונים על אותה תעודה.
+function aiPriceGapContext(ev) {
   const rows = aiPriceBreakdownRows();
-  if (!rows.length) return '';
+  if (!rows.length) return null;
   const appTotal = r2(rows.reduce((sum, r) => sum + r.lineTotal, 0));
   const summaries = Array.isArray(ev && ev.docSummaries) ? ev.docSummaries : [];
   const paperTotal = summaries.length && summaries.every(s => s && s.subtotal != null)
     ? r2(summaries.reduce((sum, s) => sum + Number(s.subtotal || 0), 0))
     : null;
   const gap = paperTotal == null ? null : r2(paperTotal - appTotal);
+  const readUnits = rows.reduce((sum, r) => sum + r.qty, 0);
+  const docs = aiScanDocuments || [];
+  const unitsKnown = docs.length > 0 && docs.every(d => d && d.units != null);
+  const linesKnown = docs.length > 0 && docs.every(d => d && d.lines != null);
+  const anchorUnits = unitsKnown ? docs.reduce((sum, d) => sum + Number(d.units), 0) : null;
+  const anchorLines = linesKnown ? docs.reduce((sum, d) => sum + Number(d.lines), 0) : null;
+  const unitsMatch = anchorUnits == null ? null : readUnits === anchorUnits;
+  const linesMatch = anchorLines == null ? null : rows.length === anchorLines;
+  const quantitiesAnchored = unitsMatch === true && linesMatch !== false;
+  const anchorText = (unitsMatch == null ? 'לא הוקלד מונה יחידות' : ('יחידות ' + readUnits + '/' + anchorUnits))
+    + (linesMatch == null ? '' : ' · שורות ' + rows.length + '/' + anchorLines);
+  // שורה שהפרש המחירון-פחות-הנחה שלה שווה בדיוק לפער: היא הגיעה במחירון מלא.
+  const fullListRow = (gap == null || Math.abs(gap) <= 0.05 || !quantitiesAnchored) ? null
+    : rows.find(r => r.catalogList > 0 && r.qty > 0 && r.net < r.catalogList
+        && Math.abs(r2((r.catalogList - r.net) * r.qty) - gap) <= 0.05) || null;
+  return { rows, appTotal, paperTotal, gap, quantitiesAnchored, anchorText, fullListRow };
+}
+// v39: כשהפער כולו מוסבר בשורה אחת שהגיעה במחירון מלא — אומרים את זה בגדול,
+// למעלה, לפני כל רשימת בעיות. משתמש שרואה פער של ₪41 ולא מבין למה נעצר;
+// משתמש שקורא "השורה הזאת הגיעה בלי ההנחה, המבצע יקזז את זה במרכזת, המחיר
+// הסופי שלך זהה" — סוגר את התעודה בביטחון וממשיך לעבוד.
+function aiFullListExplanationHtml(ev) {
+  const ctx = aiPriceGapContext(ev);
+  if (!ctx || !ctx.fullListRow) return '';
+  const r = ctx.fullListRow, promo = r.activePromo;
+  const perUnitGap = r2(r.catalogList - r.net);
+  const head = htmlEscape(String(r.product.name || ''));
+  const factsHtml =
+    '<div class="text-[12px] font-bold mt-2 leading-relaxed">' +
+      '<b>' + head + '</b> הגיע בתעודה בלי ההנחה הקבועה: מחירון מלא ₪' + fmtMoney(r.catalogList) +
+      ' ליח׳ במקום ₪' + fmt3(r.net) + ' (הנחה ' + pctTxt(r.pct) + '%).<br>' +
+      r.qty + ' יח׳ × ₪' + fmtMoney(perUnitGap) + ' = <b>₪' + fmtMoney(ctx.gap) + '</b> — כל הפער, עד האגורה.' +
+    '</div>';
+  if (!promo) {
+    return '<div class="rounded-xl border-2 border-rose-300 bg-rose-50 p-3">' +
+      '<div class="font-black text-base text-rose-900"><i class="fa-solid fa-circle-exclamation ml-1"></i>שורה אחת הגיעה בלי ההנחה הקבועה</div>' +
+      factsHtml +
+      '<div class="text-[11px] font-bold text-rose-900 mt-2 bg-white/70 rounded-lg p-2">המוצר הזה <b>אינו במבצע החודש</b>, ולכן אין קיזוז צפוי במרכזת. כדאי לברר מול הספק לפני שסוגרים — ייתכן שחויבת ביתר ב-₪' + fmtMoney(ctx.gap) + '.</div>' +
+    '</div>';
+  }
+  const fixed = promoFixedPrice(promo);
+  const paperLine = r2(r.catalogList * r.qty);
+  const rebate = r2((r.catalogList - fixed) * r.qty);
+  const finalLine = r2(fixed * r.qty);
+  return '<div class="rounded-xl border-2 border-emerald-400 bg-emerald-50 p-3">' +
+    '<div class="font-black text-base text-emerald-900"><i class="fa-solid fa-circle-check ml-1"></i>הפער מוסבר — אפשר לסגור את התעודה</div>' +
+    factsHtml +
+    '<div class="text-[12px] font-bold mt-2 bg-white/80 rounded-lg p-2 leading-relaxed">' +
+      '<div class="font-black text-emerald-900 mb-1">למה זה בסדר: המוצר במבצע החודש (₪' + fmt3(fixed) + ' ליח׳)</div>' +
+      'קיזוז המרכזת מחושב מהמחיר שבתעודה, ולכן דווקא בגלל שחויבת במחירון מלא — הקיזוז יהיה גדול יותר בדיוק באותו סכום:' +
+      '<div class="mt-1 font-black text-slate-800">' +
+        '<div class="flex justify-between"><span>בתעודה · ' + r.qty + ' × ₪' + fmtMoney(r.catalogList) + '</span><span>₪' + fmtMoney(paperLine) + '</span></div>' +
+        '<div class="flex justify-between text-emerald-800"><span>קיזוז במרכזת</span><span>−₪' + fmtMoney(rebate) + '</span></div>' +
+        '<div class="flex justify-between border-t border-emerald-200 mt-1 pt-1"><span>תשלם בסוף</span><span>₪' + fmtMoney(finalLine) + ' (₪' + fmt3(fixed) + ' ליח׳)</span></div>' +
+      '</div>' +
+      '<div class="text-[11px] font-bold text-emerald-800 mt-1">בדיוק אותו סכום שהיית משלם אילו ההנחה כן הייתה מופיעה בתעודה.</div>' +
+    '</div>' +
+    '<div class="text-[11px] font-bold text-emerald-900 mt-2">סגור את התעודה עם ההפרש — הוא יירשם כפתוח וייסגר מול המרכזת.</div>' +
+  '</div>';
+}
+function aiPriceBreakdownHtml(ev) {
+  const ctx = aiPriceGapContext(ev);
+  if (!ctx) return '';
+  const rows = ctx.rows, appTotal = ctx.appTotal, paperTotal = ctx.paperTotal, gap = ctx.gap;
   const listMismatches = rows.filter(r => r.listMismatch);
   const open = ev.valid !== true;
   // ההנחה שהייתה סוגרת את כל הפער אילו השורה הזאת לבדה אחראית לו. אין בזה
@@ -10520,28 +10587,7 @@ function aiPriceBreakdownHtml(ev) {
   const grossKnown = rows.every(r => r.printedList != null && isFinite(r.printedList));
   const paperGross = grossKnown ? r2(rows.reduce((sum, r) => sum + lineTotalFromUnit(r.printedList, r.qty), 0)) : null;
   const catalogDiscount = r2(rows.reduce((sum, r) => sum + lineTotalFromUnit(r.catalogList, r.qty), 0) - appTotal);
-  const readUnits = rows.reduce((sum, r) => sum + r.qty, 0);
-  const anchors = (aiScanDocuments || []).reduce((acc, d) => ({
-    units: d && d.units != null ? acc.units + Number(d.units) : acc.units,
-    unitsKnown: acc.unitsKnown && !!(d && d.units != null),
-    lines: d && d.lines != null ? acc.lines + Number(d.lines) : acc.lines,
-    linesKnown: acc.linesKnown && !!(d && d.lines != null)
-  }), { units: 0, unitsKnown: (aiScanDocuments || []).length > 0, lines: 0, linesKnown: (aiScanDocuments || []).length > 0 });
-  const unitsMatch = anchors.unitsKnown ? readUnits === anchors.units : null;
-  const linesMatch = anchors.linesKnown ? rows.length === anchors.lines : null;
-  const quantitiesAnchored = unitsMatch === true && linesMatch !== false;
-  const anchorText = (unitsMatch == null ? 'לא הוקלד מונה יחידות' : ('יחידות ' + readUnits + '/' + anchors.units))
-    + (linesMatch == null ? '' : ' · שורות ' + rows.length + '/' + anchors.lines);
-  // v36: סטייה בין המחיר המחושב למחירון-פחות-הנחה קודמת לכל חשד אחר —
-  // היא ניתנת לתיקון במאגר, בלי לברר דבר מול הספק.
-  const driftRows = rows.filter(r => r.netDrift);
-  const driftMoney = r2(driftRows.reduce((sum, r) => sum + r.netDrift, 0));
-  const driftHtml = driftRows.length
-    ? '<div class="rounded-lg bg-rose-50 border-2 border-rose-300 p-2 mt-2 text-[11px] font-bold text-rose-900">' +
-      '<div class="font-black">' + driftRows.length + ' שורות שבהן המחיר במאגר אינו מחירון פחות ההנחה</div>' +
-      '<div class="mt-1">ההנחות עצמן לא השתנו — המחיר המחושב הוא שדה נפרד, והוא נדרס בשלב כלשהו (למשל שמירת תעודה עם מחיר ידני). בשורות האלה זה שווה <b>' + (driftMoney > 0 ? '+' : '−') + '₪' + fmtMoney(Math.abs(driftMoney)) + '</b> בתעודה הזאת.</div>' +
-      '<div class="mt-1 text-[10px]">התיקון: פתח כל מוצר כזה במסך המוצרים והחזר את המחיר לפי המחירון והאחוז.</div></div>'
-    : '';
+  const quantitiesAnchored = ctx.quantitiesAnchored, anchorText = ctx.anchorText;
   const verdictHtml = (paperTotal == null || Math.abs(gap) <= 0.05) ? '' :
     '<div class="rounded-lg border p-2 mt-2 ' + (quantitiesAnchored ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-rose-50 border-rose-200 text-rose-900') + '">' +
       '<div class="text-[11px] font-black">' + (quantitiesAnchored
@@ -10947,7 +10993,9 @@ function aiInvoiceCaptureHtml() {
     // שבו הוא הכי נחוץ (רק שאריות, או רק שגיאות). עכשיו הוא תמיד מוצג.
     const analyzerLed = ev.analyzerLed === true && aiAnalyzeResult && aiAnalyzeResult.accepted === true;
     const balanceHtml = (!analyzerLed && ev.findingsReady === true && (actionableFindings.length || !(ev.closure && ev.closure.ok))) ? aiFindingsBalanceHtml(ev) : '';
-    const findingsHtml = (!analyzerLed && actionableFindings.length ? aiActionableFindingsHtml(actionableFindings) : '') + balanceHtml + aiScanWarningsHtml(ev) + aiPriceBreakdownHtml(ev) + residualLines + unknownCards + aiAnalyzeHtml(ev) + aiScanDiagnosticsHtml(ev);
+    // v39: ההסבר הגדול קודם לכל רשימת בעיות — הוא זה שקובע אם המשתמש נבהל או סוגר בביטחון.
+    const gapExplanationHtml = analyzerLed ? '' : aiFullListExplanationHtml(ev);
+    const findingsHtml = gapExplanationHtml + (!analyzerLed && actionableFindings.length ? aiActionableFindingsHtml(actionableFindings) : '') + balanceHtml + aiScanWarningsHtml(ev) + aiPriceBreakdownHtml(ev) + residualLines + unknownCards + aiAnalyzeHtml(ev) + aiScanDiagnosticsHtml(ev);
     const allGood = ev.valid && !hasProblems;
     const statusHtml = allGood
       ? '<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-3 font-black text-emerald-800"><i class="fa-solid fa-circle-check ml-1"></i>הכול תואם — לא נמצאו חוסר, עודף או בעיית מחיר/מבצע.</div>'
@@ -10974,8 +11022,10 @@ function aiInvoiceCaptureHtml() {
           // לאגורה (למשל מחירון שהשתנה אצל הספק), וההצעה היחידה הייתה
           // "חזרה לצילומים" שלא תשנה את הנייר. הדרך שקיימת בכל שאר השלבים —
           // סגירה עם הפרש מתועד שמטופל אחר כך — חוזרת גם לכאן.
-          : '<div class="rounded-xl bg-slate-100 text-slate-500 text-center py-3 px-3 font-black text-xs"><i class="fa-solid fa-lock ml-1"></i>סגירה מלאה נעולה — הקריאה מהנייר לא נסגרה לאגורה. הסיבות ב"מה לא נסגר?" למעלה.</div>' +
-            '<button data-role="rc-recon-save" class="btn-tap w-full bg-blue-600 text-white rounded-xl py-3.5 font-black"><i class="fa-solid fa-file-circle-exclamation"></i> סגור עם הפרש ואטפל אחר כך</button>' +
+          : (gapExplanationHtml ? '' : '<div class="rounded-xl bg-slate-100 text-slate-500 text-center py-3 px-3 font-black text-xs"><i class="fa-solid fa-lock ml-1"></i>סגירה מלאה נעולה — הקריאה מהנייר לא נסגרה לאגורה. הסיבות ב"מה לא נסגר?" למעלה.</div>') +
+            (gapExplanationHtml
+              ? '<button data-role="rc-recon-save" class="btn-tap w-full bg-emerald-600 text-white rounded-xl py-3.5 font-black"><i class="fa-solid fa-circle-check"></i> הבנתי \u2014 קלוט את התעודה</button>'
+              : '<button data-role="rc-recon-save" class="btn-tap w-full bg-blue-600 text-white rounded-xl py-3.5 font-black"><i class="fa-solid fa-file-circle-exclamation"></i> סגור עם הפרש ואטפל אחר כך</button>') +
             '<button data-role="ai-edit-images" class="btn-tap w-full bg-white border-2 border-violet-300 text-violet-700 rounded-xl py-3 font-black"><i class="fa-solid fa-camera-rotate"></i> תיקון תעודה — חזרה לצילומים</button>') +
         // v45: הכפתור הזה היה כפילות של "חזור לסריקה" שבסרגל התחתון הקבוע
         // (אותו data-role בדיוק) — שני כפתורים זהים זה מתחת לזה. הוסר.
