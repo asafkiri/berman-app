@@ -724,7 +724,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '25'; // גרסה 25: הצילומים וקריאת ה-AI נשמרים ביציאה למסך הקליטה וחזרה — אין צורך לצלם את התעודה שוב
+const APP_VERSION = '26'; // גרסה 26: פאנל האבחון מציג את כל שורות אי-ההתאמה ואת שיטת השיוך שלהן — חוסר ועודף זהים נראים מייד כשורה שהודבקה למוצר הלא נכון
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10325,10 +10325,36 @@ function aiScanDiagnosticsHtml(ev) {
     });
     const paperProducts = ev.aggregates instanceof Map ? Array.from(ev.aggregates.values()) : [];
     lines.push('מוצרים שזוהו מהנייר: ' + paperProducts.length + ' · שורות במסך הקליטה: ' + ((reconcileData || []).length));
-    paperProducts.slice(0, 8).forEach(a => {
+    // v26: קודם כל השורות שאינן תואמות — הן הסיבה שפותחים את הפאנל. הקיצוץ
+    // ל-8 הראשונים הסתיר בדיוק אותן בתעודה של 16 שורות. לכל שורה כזאת נדפס
+    // גם *איך* שורת הנייר הודבקה למוצר: חוסר ועודף באותו גודל הם כמעט תמיד
+    // שורה שהודבקה למוצר הלא נכון, וזה נראה מייד בשיטת ההתאמה.
+    const matchMethodText = {
+      exact_barcode: 'ברקוד מלא', unique_suffix: 'סיפרות סוף ייחודיות', unique_full_pattern: 'תבנית ברקוד ייחודית',
+      unique_suffix_pattern: 'תבנית סיפרות סוף', verified_name_price: 'שם + הצלבת מחיר (בלי ברקוד)',
+      verified_suffix_name: 'סיפרות סוף + רמז שם', verified_pattern_name: 'תבנית + רמז שם',
+      verified_one_digit_name: 'ספרה אחת + רמז שם', tnuva_code_repair: 'תיקון ספרה בקוד',
+      net_proven_elimination: 'אלימינציה — הכסף נסגר', user_confirmed: 'אושר ידנית'
+    };
+    const receivedOf = a => {
       const line = (reconcileData || []).find(l => l.productId === a.product.id);
-      lines.push('נייר: ' + String(a.product.name || '').slice(0, 24) + ' ×' + a.qty + ' ↔ נקלט: ' + (line ? (Number(line.received) || 0) : 'אין שורה תואמת'));
+      return line ? (Number(line.received) || 0) : null;
+    };
+    const productTrace = a => {
+      const rows = Array.isArray(a.rows) ? a.rows : [];
+      const methods = Array.from(new Set(rows.map(r => matchMethodText[r.barcodeMatchMethod] || String(r.barcodeMatchMethod || '—'))));
+      const where = rows.map(r => 'ת' + r.document + '/ש' + (r.line == null ? '?' : r.line)).join(',');
+      const seen = rows.map(r => r.barcodeObserved).filter(v => v != null && v !== '');
+      return ' · ' + (where || '—') + ' · שויך לפי: ' + methods.join('+') + (seen.length ? ' · נקרא: ' + seen.slice(0, 3).join('/') : '');
+    };
+    const mismatched = paperProducts.filter(a => receivedOf(a) !== a.qty);
+    const matched = paperProducts.filter(a => receivedOf(a) === a.qty);
+    mismatched.forEach(a => {
+      const got = receivedOf(a);
+      lines.push('≠ נייר: ' + String(a.product.name || '').slice(0, 30) + ' ×' + a.qty + ' ↔ נקלט: ' + (got == null ? 'אין שורה תואמת' : got) + productTrace(a));
     });
+    matched.slice(0, 6).forEach(a => lines.push('= נייר: ' + String(a.product.name || '').slice(0, 30) + ' ×' + a.qty + productTrace(a)));
+    if (matched.length > 6) lines.push('ועוד ' + (matched.length - 6) + ' מוצרים שנייר וקליטה תואמים בהם');
     (Array.isArray(ev.findings) ? ev.findings : []).filter(f => f.type === 'surplus').slice(0, 6).forEach(f => {
       const inPaper = ev.aggregates instanceof Map && ev.aggregates.has(f.productId);
       lines.push('עודף: ' + String(f.name || '').slice(0, 24) + ' ×' + f.qty + ' · בנייר: ' + (inPaper ? ('כן, ×' + ev.aggregates.get(f.productId).qty) : 'לא נמצא'));
