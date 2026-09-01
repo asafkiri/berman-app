@@ -724,7 +724,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '34'; // גרסה 34: פירוט המחירים שורה מול שורה — נייר מול מחירון מול הנחה, והפער נעשה נראה במקום שבו הוא יושב
+const APP_VERSION = '35'; // גרסה 35: מבחן ההנחות — ההנחה שהספק נתן בנייר מול ההנחה שבמאגר, ובכך נחתך אם הפער במחירים או בקריאת השורות
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10487,18 +10487,51 @@ function aiPriceBreakdownHtml(ev) {
       '</div>' +
     '</div>';
   }).join('');
+  // v35: מה שחותך בין "טעות בקריאה" ל"טעות במחיר" אינו השוואת ההנחות —
+  // ההנחה שבנייר וההנחה שבמאגר נגזרות שתיהן מאותן שורות, וההפרש ביניהן
+  // שווה תמיד, אלגברית, לפער עצמו. זו אינה בדיקה אלא הד.
+  // מה שכן חותך הוא העוגן שהוקלד מהנייר עצמו: מונה השורות ומונה היחידות.
+  // נקראו בדיוק כמו שמודפס → הכמויות מאומתות והפער חייב לשבת במחיר.
+  // לא נקראו כך → קודם כול יש לתקן את הקריאה, ואין טעם לחשוד במחירים.
+  const grossKnown = rows.every(r => r.printedList != null && isFinite(r.printedList));
+  const paperGross = grossKnown ? r2(rows.reduce((sum, r) => sum + lineTotalFromUnit(r.printedList, r.qty), 0)) : null;
+  const catalogDiscount = r2(rows.reduce((sum, r) => sum + lineTotalFromUnit(r.catalogList, r.qty), 0) - appTotal);
+  const readUnits = rows.reduce((sum, r) => sum + r.qty, 0);
+  const anchors = (aiScanDocuments || []).reduce((acc, d) => ({
+    units: d && d.units != null ? acc.units + Number(d.units) : acc.units,
+    unitsKnown: acc.unitsKnown && !!(d && d.units != null),
+    lines: d && d.lines != null ? acc.lines + Number(d.lines) : acc.lines,
+    linesKnown: acc.linesKnown && !!(d && d.lines != null)
+  }), { units: 0, unitsKnown: (aiScanDocuments || []).length > 0, lines: 0, linesKnown: (aiScanDocuments || []).length > 0 });
+  const unitsMatch = anchors.unitsKnown ? readUnits === anchors.units : null;
+  const linesMatch = anchors.linesKnown ? rows.length === anchors.lines : null;
+  const quantitiesAnchored = unitsMatch === true && linesMatch !== false;
+  const anchorText = (unitsMatch == null ? 'לא הוקלד מונה יחידות' : ('יחידות ' + readUnits + '/' + anchors.units))
+    + (linesMatch == null ? '' : ' · שורות ' + rows.length + '/' + anchors.lines);
+  const verdictHtml = (paperTotal == null || Math.abs(gap) <= 0.05) ? '' :
+    '<div class="rounded-lg border p-2 mt-2 ' + (quantitiesAnchored ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-rose-50 border-rose-200 text-rose-900') + '">' +
+      '<div class="text-[11px] font-black">' + (quantitiesAnchored
+        ? '✓ הכמויות מאומתות מול המודפס בנייר (' + anchorText + ') — לכן הפער יושב במחיר'
+        : '✗ הכמויות שנקראו אינן תואמות את המודפס בנייר (' + anchorText + ') — הפער הוא בקריאה, לא במחיר') + '</div>' +
+      '<div class="text-[10px] font-bold mt-1 opacity-90">' + (quantitiesAnchored
+        ? 'כל שורה נקראה בכמות הנכונה, ולכן ההפרש של ₪' + fmtMoney(Math.abs(gap)) + ' יכול לבוא רק ממחירון או מהנחה שאינם מה שהספק מחייב בפועל.'
+        : 'צלם את התעודה מחדש בחדות. כל עוד הכמויות אינן נסגרות מול המונים המודפסים, כל חשד למחיר הוא ניחוש.') + '</div>' +
+    '</div>';
   const totalsHtml = '<div class="mt-2 pt-2 border-t-2 border-slate-300 text-[12px] font-black text-slate-800">' +
+    (paperGross == null ? '' : '<div class="flex items-center justify-between text-slate-500"><span>גרוס לפי הנייר (לפני הנחה)</span><span>₪' + fmtMoney(paperGross) + '</span></div>' +
+      '<div class="flex items-center justify-between text-slate-500"><span>סך ההנחה לפי המאגר</span><span>₪' + fmtMoney(catalogDiscount) + '</span></div>') +
     '<div class="flex items-center justify-between"><span>סכום לפי המאגר</span><span>₪' + fmtMoney(appTotal) + '</span></div>' +
     (paperTotal == null ? '' :
       '<div class="flex items-center justify-between"><span>"נטו לחיוב" בנייר</span><span>₪' + fmtMoney(paperTotal) + '</span></div>' +
       '<div class="flex items-center justify-between ' + (Math.abs(gap) <= 0.05 ? 'text-emerald-700' : 'text-rose-700') + '"><span>' + (gap >= 0 ? 'הספק מחייב יותר' : 'הספק מחייב פחות') + '</span><span>₪' + fmtMoney(Math.abs(gap)) + '</span></div>') +
+    verdictHtml +
   '</div>';
   const listNote = listMismatches.length
     ? '<div class="rounded-lg bg-rose-50 border border-rose-200 p-2 mt-2 text-[11px] font-bold text-rose-800">' + listMismatches.length + ' שורות שבהן המחיר המודפס בנייר אינו מחיר המחירון שבמאגר — שם המחירון עצמו התעדכן, וזה התיקון הראשון שצריך לעשות.</div>'
-    : (paperTotal != null && Math.abs(gap) > 0.05
-      ? '<div class="rounded-lg bg-amber-50 border border-amber-200 p-2 mt-2 text-[11px] font-bold text-amber-900">כל מחירי המחירון בנייר תואמים למאגר — כלומר הפער אינו במחירון אלא <b>באחוזי ההנחה</b> שסוכמו מול הספק.</div>'
-      : '');
-  const suspectHtml = suspects.length
+    : '';
+  // v35: רשימת החשודים בהנחה מוצגת רק כשהמבחן המכריע אכן הצביע על ההנחות.
+  // כשההנחות תקינות היא הייתה שולחת לחפש במקום הלא נכון.
+  const suspectHtml = (suspects.length && quantitiesAnchored)
     ? '<div class="mt-2"><div class="text-[11px] font-black text-slate-600 mb-1">איזו הנחה הייתה סוגרת את הפער — אם שורה אחת בלבד אחראית לו:</div>' +
       suspects.slice(0, 5).map(s => '<div class="flex items-center justify-between gap-2 py-1 border-t border-black/5 text-[11px] font-bold text-slate-700"><span class="min-w-0">' + htmlEscape(String(s.name || '')) + ' <span class="text-slate-400">(' + s.qty + ' יח׳)</span></span><span class="shrink-0 font-black">' + pctTxt(s.from) + '% ← ' + pctTxt(s.to) + '%</span></div>').join('') +
       '<div class="text-[10px] font-bold text-slate-400 mt-1">רשימת חשודים לבדיקה מול מה שסוכם — לא קביעה. אחוז "עגול" הוא הסימן החזק ביותר.</div></div>'
