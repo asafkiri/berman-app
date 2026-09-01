@@ -701,6 +701,9 @@ let aiScanAttemptCount = 0;
 // וחתימת הרשימה שנסרקה בקליטה. כל עוד תעודות הספק לא השתנו, יציאה מהמסך
 // וחזרה אליו אינן מוחקות את הצילומים ואת קריאת ה-AI.
 let aiScanBasis = null;
+// v43: המסך נפתח פשוט. כל ההסבר המפורט יושב מאחורי לחיצה אחת, כי מי שעובד
+// עם התעודה בפועל אינו בהכרח מי שבנה את האפליקציה.
+let aiDetailsOpen = false;
 const AI_SCAN_MAX_AUTO_ROTATION_RETRIES = 2;
 // v179: כשל רשת ("Failed to fetch") הוא זמני כמעט תמיד. עד v178 הבהוב אחד
 // מחק תעודה שלמה מהסריקה בלי ניסיון נוסף. הטיימאאוט המקומי מעט מעל התקרה
@@ -724,7 +727,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '42'; // גרסה 42: הערות הקריאה מקופלות תמיד, הרעש הטכני מקובץ למספר אחד, ורק מה ששווה קריאה מוצג
+const APP_VERSION = '43'; // גרסה 43: מסך התוצאות נפתח פשוט — משפט אחד גדול וכפתור אחד, וכל הפירוט מאחורי "רוצה הסבר?"
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -9897,6 +9900,7 @@ async function aiRunInvoiceScan() {
   if (!aiScanDocuments.length || aiScanDocuments.some(d => !d.pages.length)) { showToast('צלם לפחות עמוד אחד מכל תעודה', null, null, 3000); return; }
   if (!aiAllPagesOrientationConfirmed()) { showToast('אשר שכל התמונות ישרות לפני הפענוח', null, null, 3200); aiOpenNextUnconfirmedOrientation(); return; }
   if (!auth || !auth.currentUser) { showToast('עדיין אין חיבור מאובטח — המתן רגע ונסה שוב', null, null, 3000); return; }
+  aiDetailsOpen = false; // v43: כל סריקה מתחילה במסך הפשוט
   aiScanBusy = true; aiScanProgressText = aiScanDocuments.length > 1 ? 'ה-AI קורא ' + aiScanDocuments.length + ' תעודות, אחת אחרי השנייה…' : 'ה-AI קורא את דפי התעודה…'; aiScanError = ''; aiScanResponse = null; aiScanEvaluation = null; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; renderReconcile();
   try {
     const token = await auth.currentUser.getIdToken();
@@ -10549,6 +10553,59 @@ function aiMonthEndPendingRecord(ev) {
     recordedAt: Date.now()
   };
 }
+// v43: המסך שמשתמש רגיל רואה. משפט אחד גדול שאומר מה קרה, רשימה קצרה
+// בכתב גדול אם יש הבדלים, וזהו. כל השאר — מאזן, מחירים, אבחון — נשאר
+// זמין, אבל מאחורי "רוצה הסבר?" ולא מונח על המסך.
+function aiSimpleSummaryHtml(ev, opts) {
+  opts = opts || {};
+  const findings = (Array.isArray(ev && ev.findings) ? ev.findings : []).filter(aiIsActionableFinding);
+  const shortages = findings.filter(f => String(f.type) === 'shortage');
+  const surpluses = findings.filter(f => String(f.type) === 'surplus');
+  const explained = !!opts.gapExplained;
+  const allGood = !!opts.allGood;
+  let tone, icon, title, subtitle;
+  if (allGood) {
+    tone = { box: 'bg-emerald-50 border-emerald-300', head: 'text-emerald-900', sub: 'text-emerald-800' };
+    icon = 'fa-circle-check'; title = 'הכול תקין';
+    subtitle = 'כל מה שקיבלת תואם לתעודה של ברמן. אפשר לקלוט.';
+  } else if (explained && !findings.length) {
+    tone = { box: 'bg-emerald-50 border-emerald-300', head: 'text-emerald-900', sub: 'text-emerald-800' };
+    icon = 'fa-circle-check'; title = 'הכול בסדר';
+    subtitle = opts.explainedLine || 'ההפרש בתעודה מוסבר. אפשר לקלוט.';
+  } else if (findings.length) {
+    tone = { box: 'bg-amber-50 border-amber-300', head: 'text-amber-900', sub: 'text-amber-800' };
+    icon = 'fa-triangle-exclamation'; title = 'יש הבדלים מול הנייר';
+    subtitle = 'ברמן רשם בתעודה כמות אחרת ממה שנסרק בפועל:';
+  } else {
+    tone = { box: 'bg-amber-50 border-amber-300', head: 'text-amber-900', sub: 'text-amber-800' };
+    icon = 'fa-circle-question'; title = 'צריך בדיקה';
+    subtitle = 'החשבון של התעודה לא נסגר. פתח את ההסבר למטה כדי לראות למה.';
+  }
+  const rowHtml = findings.slice(0, 8).map(f => {
+    const isShort = String(f.type) === 'shortage';
+    const label = isShort ? 'חסר' : (String(f.type) === 'surplus' ? 'עודף' : '');
+    if (!label) return '';
+    return '<div class="flex items-center justify-between gap-3 bg-white rounded-xl px-3 py-2.5 mt-2">' +
+      '<span class="min-w-0 text-base font-black text-slate-800">' + htmlEscape(String(f.name || '')) + '</span>' +
+      '<span class="shrink-0 text-base font-black ' + (isShort ? 'text-rose-700' : 'text-amber-700') + '">' + label + ' ' + (Number(f.qty) || 0) + '</span>' +
+    '</div>';
+  }).join('');
+  const priceNote = findings.some(f => ['price', 'promo_missing'].includes(String(f.type)))
+    ? '<div class="text-sm font-bold ' + tone.sub + ' mt-2">יש גם הבדל במחיר — הפירוט בהסבר למטה.</div>' : '';
+  // פער כסף מוסבר לצד חוסרים אמיתיים: שתי אמירות נפרדות, כדי שאחת לא תבטל
+  // את השנייה. הכסף בסדר; החוסר עדיין חוסר.
+  const explainedNote = (explained && findings.length && opts.explainedLine)
+    ? '<div class="rounded-xl bg-emerald-50 border border-emerald-300 p-3 mt-3 text-sm font-bold text-emerald-900 leading-relaxed"><i class="fa-solid fa-circle-check ml-1"></i>' + htmlEscape(String(opts.explainedLine)) + '</div>'
+    : '';
+  return '<div class="rounded-2xl border-2 ' + tone.box + ' p-4">' +
+    '<div class="text-2xl font-black ' + tone.head + ' leading-tight"><i class="fa-solid ' + icon + ' ml-2"></i>' + title + '</div>' +
+    '<div class="text-base font-bold ' + tone.sub + ' mt-1 leading-relaxed">' + htmlEscape(subtitle) + '</div>' +
+    rowHtml + priceNote + explainedNote +
+    (shortages.length || surpluses.length
+      ? '<div class="text-sm font-bold ' + tone.sub + ' mt-3 leading-relaxed">אם זה נכון — לחץ על הכפתור למטה וקלוט את התעודה. ההפרש יישמר ותוכל לטפל בו מול ברמן.</div>'
+      : '') +
+  '</div>';
+}
 function aiFullListExplanationHtml(ev) {
   const ctx = aiPriceGapContext(ev);
   if (!ctx || !ctx.fullListRow) return '';
@@ -11094,32 +11151,52 @@ function aiInvoiceCaptureHtml() {
     // "סגור תעודה עם החוסרים" (כשהחשבון נסגר) או "תיקון תעודה".
     let actionsHtml = '';
     if (allGood) {
-      actionsHtml = '<button data-role="ai-apply" class="btn-tap w-full bg-violet-600 text-white rounded-xl py-3.5 font-black mt-4"><i class="fa-solid fa-check"></i> הכול תואם — המשך</button>';
+      actionsHtml = '<button data-role="ai-apply" class="btn-tap w-full bg-emerald-600 text-white rounded-2xl py-4 font-black text-lg mt-4"><i class="fa-solid fa-check ml-1"></i>קלוט את התעודה</button>';
     } else if (!confirmed) {
       actionsHtml = '<div class="mt-4 space-y-2">' +
-        '<button data-role="ai-confirm-findings" class="btn-tap w-full bg-violet-600 text-white rounded-xl py-3.5 font-black"><i class="fa-solid fa-check-double"></i> אלה אכן הבעיות — אשר</button>' +
-        '<button data-role="ai-edit-images" class="btn-tap w-full bg-white border border-slate-200 text-slate-500 rounded-xl py-2.5 font-black text-xs"><i class="fa-solid fa-camera-rotate"></i> תיקון תעודה — חזרה לצילומים</button></div>';
+        '<button data-role="ai-confirm-findings" class="btn-tap w-full bg-violet-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-check-double ml-1"></i>כן, זה נכון — המשך</button>' +
+        '<button data-role="ai-edit-images" class="btn-tap w-full bg-white border border-slate-200 text-slate-500 rounded-2xl py-3 font-black text-sm"><i class="fa-solid fa-camera-rotate ml-1"></i>לא נכון — צלם שוב</button></div>';
     } else {
       actionsHtml = '<div class="mt-4 space-y-2">' +
         (ev.valid
-          ? '<button data-role="ai-apply" class="btn-tap w-full bg-violet-600 text-white rounded-xl py-3.5 font-black"><i class="fa-solid fa-file-circle-check"></i> סגור תעודה עם החוסרים</button>'
+          ? '<button data-role="ai-apply" class="btn-tap w-full bg-emerald-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-file-circle-check ml-1"></i>קלוט את התעודה</button>'
           // v32: המצב הזה היה מבוי סתום — הממצאים אושרו, הקריאה לא נסגרה
           // לאגורה (למשל מחירון שהשתנה אצל הספק), וההצעה היחידה הייתה
           // "חזרה לצילומים" שלא תשנה את הנייר. הדרך שקיימת בכל שאר השלבים —
           // סגירה עם הפרש מתועד שמטופל אחר כך — חוזרת גם לכאן.
           : (gapExplanationHtml ? '' : '<div class="rounded-xl bg-slate-100 text-slate-500 text-center py-3 px-3 font-black text-xs"><i class="fa-solid fa-lock ml-1"></i>סגירה מלאה נעולה — הקריאה מהנייר לא נסגרה לאגורה. הסיבות ב"מה לא נסגר?" למעלה.</div>') +
             (gapExplanationHtml
-              ? '<button data-role="rc-recon-save" class="btn-tap w-full bg-emerald-600 text-white rounded-xl py-3.5 font-black"><i class="fa-solid fa-circle-check"></i> הבנתי \u2014 קלוט את התעודה</button>'
-              : '<button data-role="rc-recon-save" class="btn-tap w-full bg-blue-600 text-white rounded-xl py-3.5 font-black"><i class="fa-solid fa-file-circle-exclamation"></i> סגור עם הפרש ואטפל אחר כך</button>') +
+              ? '<button data-role="rc-recon-save" class="btn-tap w-full bg-emerald-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-circle-check ml-1"></i>קלוט את התעודה</button>'
+              : '<button data-role="rc-recon-save" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-file-circle-exclamation ml-1"></i>קלוט ותטפל בהפרש אחר כך</button>') +
             '<button data-role="ai-edit-images" class="btn-tap w-full bg-white border-2 border-violet-300 text-violet-700 rounded-xl py-3 font-black"><i class="fa-solid fa-camera-rotate"></i> תיקון תעודה — חזרה לצילומים</button>') +
         // v45: הכפתור הזה היה כפילות של "חזור לסריקה" שבסרגל התחתון הקבוע
         // (אותו data-role בדיוק) — שני כפתורים זהים זה מתחת לזה. הוסר.
         '</div>';
     }
+    // v43: שתי שכבות. למעלה — משפט אחד גדול וכפתור אחד גדול, וזה כל מה שרוב
+    // המשתמשים צריכים לראות. כל הפירוט (מאזן, מחירים, הערות, אבחון) יורד אל
+    // מאחורי "רוצה הסבר מה קרה בתעודה?" ונפתח רק בלחיצה.
+    const explainedName = (function () {
+      try {
+        const ctx = aiPriceGapContext(ev);
+        if (!ctx || !ctx.fullListRow || !ctx.fullListRow.activePromo) return '';
+        return String(ctx.fullListRow.product.name || '');
+      } catch (nameError) { return ''; }
+    })();
+    const simpleHtml = aiSafeBlock('סיכום', () => aiSimpleSummaryHtml(ev, {
+      allGood,
+      gapExplained: !!gapExplanationHtml,
+      explainedLine: explainedName
+        ? explainedName + ' הגיע בלי ההנחה הרגילה, אבל יש עליו מבצע החודש — הכסף יחזור בקיזוז בסוף החודש. אפשר לקלוט.'
+        : ''
+    }));
+    const detailsToggle = '<button data-role="ai-toggle-details" class="btn-tap w-full mt-3 bg-white border-2 border-slate-200 text-slate-600 rounded-2xl py-3 font-black text-base flex items-center justify-center gap-2">' +
+      '<i class="fa-solid fa-circle-question"></i>' + (aiDetailsOpen ? 'סגור את ההסבר' : 'רוצה הסבר מה קרה בתעודה? לחץ כאן') + '</button>';
+    const detailsBody = aiDetailsOpen
+      ? '<div class="space-y-2 mt-3 pt-3 border-t-2 border-slate-100">' + statusHtml + findingsHtml + autoNote + '</div>'
+      : '';
     return '<div class="bg-white rounded-2xl border-2 ' + (ev.valid ? 'border-violet-300' : 'border-amber-300') + ' p-4 shadow-sm mb-24">' +
-      '<div class="font-black text-xl text-slate-800 mb-1"><i class="fa-solid fa-wand-magic-sparkles text-violet-600"></i> תוצאות הסריקה החכמה</div>' +
-      '<div class="text-xs text-slate-500 font-bold mb-3">מוצגות רק הבעיות שנמצאו. ההתאמות הוכרעו מאחורי הקלעים.</div>' +
-      '<div class="space-y-2">' + statusHtml + findingsHtml + autoNote + '</div>' + actionsHtml + '</div>';
+      simpleHtml + actionsHtml + detailsToggle + detailsBody + '</div>';
   }
   const docCards = aiScanDocuments.map((doc, i) => {
     const noteText = 'סכום צפוי: ₪' + fmtMoney(doc.amount || 0) + (doc.units != null ? ' · ' + doc.units + ' יחידות' : '');
@@ -16327,6 +16404,7 @@ app.addEventListener('click', (e) => {
   if (role === 'ai-confirm-barcode-suggestion') { aiConfirmBarcodeSuggestion(parseInt(t.dataset.doc, 10), parseInt(t.dataset.row, 10)); return; }
   if (role === 'ai-confirm-name-candidate') { aiConfirmNameCandidate(parseInt(t.dataset.doc, 10), parseInt(t.dataset.row, 10), t.dataset.candidateId); return; }
   if (role === 'ai-add-unknown-product') { aiOpenUnknownProduct(parseInt(t.dataset.doc, 10), parseInt(t.dataset.row, 10)); return; }
+  if (role === 'ai-toggle-details') { aiDetailsOpen = !aiDetailsOpen; renderReconcile(); return; } // v43
   if (role === 'ai-confirm-findings') { if (aiScanEvaluation) { aiScanEvaluation.userConfirmedFindings = true; renderReconcile(); } return; }
   if (role === 'ai-apply') { aiApplyInvoiceResult(); return; }
   if (role === 'admin-login') { requireAdmin('כניסת מנהל', () => { if (currentView === 'settings') renderSettings(); }); return; }
