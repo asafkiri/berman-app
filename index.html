@@ -724,7 +724,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '33'; // גרסה 33: אזהרות הקריאה מוצגות במסך (ביניהן "המחיר המודפס שונה מהמחירון במאגר"), והאבחון מדווח על ברקודים כפולים במאגר
+const APP_VERSION = '34'; // גרסה 34: פירוט המחירים שורה מול שורה — נייר מול מחירון מול הנחה, והפער נעשה נראה במקום שבו הוא יושב
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10418,6 +10418,98 @@ function aiScanDiagnosticsHtml(ev) {
 // לא הוצגו בשום מקום במסך. ביניהן בדיוק האזהרה שמצביעה על מקור פער כספי
 // שאינו חוסר: "המחיר המודפס בתעודה שונה ממחיר המחירון במאגר". בלעדיה פער
 // שנובע ממחירון שהתעדכן אצל הספק אינו ניתן לאבחון מתוך המסך.
+// v34: "איפה הפער במחירים" — הפירוט שהיה חסר. כל מה שדרוש כדי לענות כבר
+// נקרא מהנייר ונשמר (printedListUnitPrice, "אבחון בלבד"), אבל מעולם לא הוצג
+// לצד מחיר המחירון וההנחה שבמאגר. בלי ההשוואה הזאת פער כספי שאינו חוסר הוא
+// חידה: רואים ₪52 ולא רואים באיזו שורה הם יושבים.
+// שתי שאלות נפרדות שהפירוט מפריד ביניהן:
+// (1) המחירון עצמו השתנה? — "נייר" מול "מחירון".
+// (2) אחוז ההנחה כבר אינו מה שסוכם? — עמודת ההנחה, ולידה ההנחה שהייתה
+//     סוגרת את הפער אילו השורה הזאת לבדה אחראית לו.
+function aiPriceBreakdownRows() {
+  const documents = aiScanResponse && aiScanResponse.scan && Array.isArray(aiScanResponse.scan.documents)
+    ? aiScanResponse.scan.documents : [];
+  const out = [];
+  documents.forEach(doc => {
+    (Array.isArray(doc && doc.rows) ? doc.rows : []).forEach(row => {
+      const resolution = aiResolveInvoiceBarcode(row);
+      const product = resolution && !resolution.error ? resolution.product : null;
+      const qty = row && row.quantity == null ? null : Number(row.quantity);
+      if (!product || qty == null || !isFinite(qty) || qty <= 0) return;
+      const printedList = row.printedListUnitPrice == null || row.printedListUnitPrice === '' ? null : Number(row.printedListUnitPrice);
+      const catalogList = productListPrice(product);
+      const net = Number(product.price) || 0;
+      out.push({
+        product, qty, printedList, catalogList, net,
+        pct: productDiscountPct(product),
+        lineTotal: lineTotalFromUnit(net, qty),
+        listMismatch: printedList != null && isFinite(printedList) && catalogList > 0
+          && Math.abs(aiMoneyCents(printedList) - aiMoneyCents(catalogList)) > 2
+      });
+    });
+  });
+  return out;
+}
+function aiPriceBreakdownHtml(ev) {
+  const rows = aiPriceBreakdownRows();
+  if (!rows.length) return '';
+  const appTotal = r2(rows.reduce((sum, r) => sum + r.lineTotal, 0));
+  const summaries = Array.isArray(ev && ev.docSummaries) ? ev.docSummaries : [];
+  const paperTotal = summaries.length && summaries.every(s => s && s.subtotal != null)
+    ? r2(summaries.reduce((sum, s) => sum + Number(s.subtotal || 0), 0))
+    : null;
+  const gap = paperTotal == null ? null : r2(paperTotal - appTotal);
+  const listMismatches = rows.filter(r => r.listMismatch);
+  const open = ev.valid !== true;
+  // ההנחה שהייתה סוגרת את כל הפער אילו השורה הזאת לבדה אחראית לו. אין בזה
+  // הכרעה — זו רשימת חשודים לבדיקה מול מה שסוכם עם הספק, לא קביעה.
+  const suspects = [];
+  if (gap != null && Math.abs(gap) > 0.05) {
+    rows.forEach(r => {
+      if (!(r.catalogList > 0) || !(r.qty > 0)) return;
+      const neededNet = r.net + gap / r.qty;
+      const neededPct = (1 - neededNet / r.catalogList) * 100;
+      if (!isFinite(neededPct) || neededPct < -0.5 || neededPct > 70) return;
+      suspects.push({ name: r.product.name, from: r.pct, to: neededPct, qty: r.qty });
+    });
+    suspects.sort((a, b) => Math.abs(a.to - Math.round(a.to)) - Math.abs(b.to - Math.round(b.to)));
+  }
+  const rowHtml = rows.map(r => {
+    const printed = r.printedList == null || !isFinite(r.printedList) ? '—' : '₪' + fmtMoney(r.printedList);
+    return '<div class="py-1.5 border-t border-black/5 first:border-t-0">' +
+      '<div class="flex items-start justify-between gap-2">' +
+        '<span class="min-w-0 text-[12px] font-black text-slate-800">' + htmlEscape(String(r.product.name || '')) + '</span>' +
+        '<span class="shrink-0 text-[12px] font-black text-slate-700">' + r.qty + ' יח׳ · ₪' + fmtMoney(r.lineTotal) + '</span>' +
+      '</div>' +
+      '<div class="text-[10px] font-bold mt-0.5 ' + (r.listMismatch ? 'text-rose-700' : 'text-slate-500') + '">' +
+        (r.listMismatch ? '⚠ ' : '') + 'נייר ' + printed + ' · מחירון ' + (r.catalogList > 0 ? '₪' + fmtMoney(r.catalogList) : '—') +
+        ' · הנחה ' + pctTxt(r.pct) + '% → ₪' + fmt3(r.net) + ' ליח׳' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  const totalsHtml = '<div class="mt-2 pt-2 border-t-2 border-slate-300 text-[12px] font-black text-slate-800">' +
+    '<div class="flex items-center justify-between"><span>סכום לפי המאגר</span><span>₪' + fmtMoney(appTotal) + '</span></div>' +
+    (paperTotal == null ? '' :
+      '<div class="flex items-center justify-between"><span>"נטו לחיוב" בנייר</span><span>₪' + fmtMoney(paperTotal) + '</span></div>' +
+      '<div class="flex items-center justify-between ' + (Math.abs(gap) <= 0.05 ? 'text-emerald-700' : 'text-rose-700') + '"><span>' + (gap >= 0 ? 'הספק מחייב יותר' : 'הספק מחייב פחות') + '</span><span>₪' + fmtMoney(Math.abs(gap)) + '</span></div>') +
+  '</div>';
+  const listNote = listMismatches.length
+    ? '<div class="rounded-lg bg-rose-50 border border-rose-200 p-2 mt-2 text-[11px] font-bold text-rose-800">' + listMismatches.length + ' שורות שבהן המחיר המודפס בנייר אינו מחיר המחירון שבמאגר — שם המחירון עצמו התעדכן, וזה התיקון הראשון שצריך לעשות.</div>'
+    : (paperTotal != null && Math.abs(gap) > 0.05
+      ? '<div class="rounded-lg bg-amber-50 border border-amber-200 p-2 mt-2 text-[11px] font-bold text-amber-900">כל מחירי המחירון בנייר תואמים למאגר — כלומר הפער אינו במחירון אלא <b>באחוזי ההנחה</b> שסוכמו מול הספק.</div>'
+      : '');
+  const suspectHtml = suspects.length
+    ? '<div class="mt-2"><div class="text-[11px] font-black text-slate-600 mb-1">איזו הנחה הייתה סוגרת את הפער — אם שורה אחת בלבד אחראית לו:</div>' +
+      suspects.slice(0, 5).map(s => '<div class="flex items-center justify-between gap-2 py-1 border-t border-black/5 text-[11px] font-bold text-slate-700"><span class="min-w-0">' + htmlEscape(String(s.name || '')) + ' <span class="text-slate-400">(' + s.qty + ' יח׳)</span></span><span class="shrink-0 font-black">' + pctTxt(s.from) + '% ← ' + pctTxt(s.to) + '%</span></div>').join('') +
+      '<div class="text-[10px] font-bold text-slate-400 mt-1">רשימת חשודים לבדיקה מול מה שסוכם — לא קביעה. אחוז "עגול" הוא הסימן החזק ביותר.</div></div>'
+    : '';
+  return '<details class="rounded-xl border border-slate-300 bg-white p-3"' + (open ? ' open' : '') + '>' +
+    '<summary class="cursor-pointer list-none flex items-center justify-between gap-2">' +
+      '<span class="font-black text-slate-800 text-sm"><i class="fa-solid fa-shekel-sign ml-1"></i>איפה הפער במחירים — שורה מול שורה</span>' +
+      '<span class="shrink-0 text-[10px] font-black text-slate-500">' + rows.length + ' שורות</span>' +
+    '</summary>' +
+    '<div class="mt-2">' + rowHtml + totalsHtml + listNote + suspectHtml + '</div></details>';
+}
 function aiScanWarningsHtml(ev) {
   const warnings = Array.isArray(ev && ev.warnings) ? ev.warnings.filter(Boolean) : [];
   if (!warnings.length) return '';
@@ -10788,7 +10880,7 @@ function aiInvoiceCaptureHtml() {
     // שבו הוא הכי נחוץ (רק שאריות, או רק שגיאות). עכשיו הוא תמיד מוצג.
     const analyzerLed = ev.analyzerLed === true && aiAnalyzeResult && aiAnalyzeResult.accepted === true;
     const balanceHtml = (!analyzerLed && ev.findingsReady === true && (actionableFindings.length || !(ev.closure && ev.closure.ok))) ? aiFindingsBalanceHtml(ev) : '';
-    const findingsHtml = (!analyzerLed && actionableFindings.length ? aiActionableFindingsHtml(actionableFindings) : '') + balanceHtml + aiScanWarningsHtml(ev) + residualLines + unknownCards + aiAnalyzeHtml(ev) + aiScanDiagnosticsHtml(ev);
+    const findingsHtml = (!analyzerLed && actionableFindings.length ? aiActionableFindingsHtml(actionableFindings) : '') + balanceHtml + aiScanWarningsHtml(ev) + aiPriceBreakdownHtml(ev) + residualLines + unknownCards + aiAnalyzeHtml(ev) + aiScanDiagnosticsHtml(ev);
     const allGood = ev.valid && !hasProblems;
     const statusHtml = allGood
       ? '<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-3 font-black text-emerald-800"><i class="fa-solid fa-circle-check ml-1"></i>הכול תואם — לא נמצאו חוסר, עודף או בעיית מחיר/מבצע.</div>'
