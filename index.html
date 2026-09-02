@@ -727,7 +727,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '46'; // גרסה 46: גם מוצר שלא נסרק כלל נרשם כחוסר בתעודה — לא רק מוצרים שהסורק ראה
+const APP_VERSION = '47'; // גרסה 47: מבצע החודש שירד כבר בתעודה עצמה מוסבר ונסגר — לא "המחירון התעדכן" ולא קיזוז מדומה במרכזת
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -9722,7 +9722,16 @@ function bermanAdaptScanPayload(payload) {
       // והיא גם תפיל את סגירת הכסף מול "נטו לחיוב" אם ההנחה כבר אינה נכונה.
       if (product && printedUnit != null && isFinite(printedUnit) && productListPrice(product) > 0
           && Math.abs(aiMoneyCents(printedUnit) - aiMoneyCents(productListPrice(product))) > 2) {
-        scan.warnings.push(String(product.name || '') + ': המחיר המודפס בתעודה (₪' + fmtMoney(printedUnit) + ') שונה ממחיר המחירון במאגר (₪' + fmtMoney(productListPrice(product)) + ') — ייתכן שהמחירון עודכן. בדוק את המוצר ואת אחוז ההנחה.');
+        // v47: לפני שמאשימים את המחירון — אולי זה מחיר המבצע. ברמן בדרך כלל
+        // מדפיס מחירון ומקזז את המבצע במרכזת, אבל לפעמים המבצע יורד כבר
+        // בתעודה עצמה. מחיר מודפס ששווה למחיר המבצע הפעיל אינו "מחירון
+        // שהתעדכן" אלא מבצע שכבר ניתן — וההערה צריכה להרגיע, לא להבהיל.
+        const printedPromo = aiActiveFixedPromoFor(product.id, day);
+        if (printedPromo && Math.abs(aiMoneyCents(printedUnit) - aiMoneyCents(promoFixedPrice(printedPromo))) <= 2) {
+          scan.warnings.push(String(product.name || '') + ': בתעודה מודפס מחיר המבצע (₪' + fmtMoney(printedUnit) + ') במקום המחירון (₪' + fmtMoney(productListPrice(product)) + ') — מבצע החודש ירד כבר בתעודה, ולכן לא צפוי עליו קיזוז במרכזת. המחירון לא השתנה.');
+        } else {
+          scan.warnings.push(String(product.name || '') + ': המחיר המודפס בתעודה (₪' + fmtMoney(printedUnit) + ') שונה ממחיר המחירון במאגר (₪' + fmtMoney(productListPrice(product)) + ') — ייתכן שהמחירון עודכן. בדוק את המוצר ואת אחוז ההנחה.');
+        }
       }
       // כסף השורה: על הנייר אין סכום שורה, והמחיר המודפס אינו החיוב (ההנחות
       // חבויות). שורה שזוהתה מקבלת את המחיר המוסכם נטו מהקטלוג; שורה שלא
@@ -10472,12 +10481,19 @@ function aiPriceBreakdownRows() {
       // על מחיר אחר לגמרי. זו הסטייה היחידה שאינה סותרת "ההנחות לא משתנות".
       const expectedNet = catalogList > 0 ? finalUnitPrice(catalogList, productDiscountPct(product)) : null;
       const activePromo = aiActiveFixedPromoFor(product.id, activeReceiptDate());
+      // v47: המקרה ההפוך לשורה שהגיעה במחירון מלא — שורה שהגיעה כבר במחיר
+      // המבצע. המחיר המודפס שווה למחיר המבצע הפעיל (±2 אגורות), כלומר הספק
+      // הוריד את המבצע בתעודה עצמה במקום להשאיר אותו לקיזוז במרכזת. זו אינה
+      // אי-התאמת מחירון, ואסור שתוצג ככזאת.
+      const promoFixed = activePromo ? promoFixedPrice(activePromo) : 0;
+      const promoOnPaper = !!(promoFixed > 0 && printedList != null && isFinite(printedList)
+        && Math.abs(aiMoneyCents(printedList) - aiMoneyCents(promoFixed)) <= 2);
       out.push({
-        product, qty, printedList, catalogList, net, expectedNet, activePromo,
+        product, qty, printedList, catalogList, net, expectedNet, activePromo, promoFixed, promoOnPaper,
         pct: productDiscountPct(product),
         lineTotal: lineTotalFromUnit(net, qty),
         netDrift: expectedNet != null && Math.abs(net - expectedNet) > 0.005 ? r2((net - expectedNet) * qty) : 0,
-        listMismatch: printedList != null && isFinite(printedList) && catalogList > 0
+        listMismatch: !promoOnPaper && printedList != null && isFinite(printedList) && catalogList > 0
           && Math.abs(aiMoneyCents(printedList) - aiMoneyCents(catalogList)) > 2
       });
     });
@@ -10518,11 +10534,48 @@ function aiPriceGapContext(ev) {
   const quantitiesAnchored = unitsMatch === true && linesMatch !== false;
   const anchorText = (unitsMatch == null ? 'לא הוקלד מונה יחידות' : ('יחידות ' + readUnits + '/' + anchorUnits))
     + (linesMatch == null ? '' : ' · שורות ' + rows.length + '/' + anchorLines);
+  // v47: סיבולת עיגול. כל שורה מעוגלת לאגורה גם באפליקציה וגם בנייר, ולכן
+  // הסבר נכון עד האגורה יכול לפספס את הפער בכמה אגורות על תעודה ארוכה
+  // (16 שורות: הסבר של ₪26.60 מול פער של ₪26.58). אגורה לשורה, ולפחות 5.
+  const roundingTol = Math.max(0.05, 0.01 * rows.length);
+  // v47: שורות שהגיעו כבר במחיר המבצע (המחיר המודפס = מחיר המבצע הפעיל).
+  // אלה עובדות מהנייר, לא ניחוש — ולכן הן מוסברות ראשונות, וכל חיפוש אחר
+  // (שורה במחירון מלא) נעשה על מה שנשאר מהפער אחריהן. כך גם תעודה שבה
+  // קרו שני הדברים יחד (אקטיב בלי הנחה, לחמניות במחיר מבצע) נסגרת.
+  const promoOnPaperRows = (gap == null || !quantitiesAnchored) ? []
+    : rows.filter(r => r.promoOnPaper && r.qty > 0 && r.net > r.promoFixed + 0.005);
+  const promoOnPaperTotal = r2(promoOnPaperRows.reduce((sum, r) => sum + r2((r.promoFixed - r.net) * r.qty), 0));
+  const residualGap = gap == null ? null : r2(gap - promoOnPaperTotal);
+  const promoOnPaperExplained = promoOnPaperRows.length > 0 && residualGap != null && (
+    Math.abs(residualGap) <= roundingTol
+    || rows.some(r => r.catalogList > 0 && r.qty > 0 && r.net < r.catalogList
+        && Math.abs(r2((r.catalogList - r.net) * r.qty) - residualGap) <= roundingTol));
+  const fullListGap = promoOnPaperExplained ? residualGap : gap;
   // שורה שהפרש המחירון-פחות-הנחה שלה שווה בדיוק לפער: היא הגיעה במחירון מלא.
-  const fullListRow = (gap == null || Math.abs(gap) <= 0.05 || !quantitiesAnchored) ? null
+  const fullListRow = (fullListGap == null || Math.abs(fullListGap) <= 0.05 || !quantitiesAnchored) ? null
     : rows.find(r => r.catalogList > 0 && r.qty > 0 && r.net < r.catalogList
-        && Math.abs(r2((r.catalogList - r.net) * r.qty) - gap) <= 0.05) || null;
-  return { rows, appTotal, paperTotal, gap, quantitiesAnchored, anchorText, fullListRow };
+        && Math.abs(r2((r.catalogList - r.net) * r.qty) - fullListGap) <= roundingTol) || null;
+  const gapExplained = !!fullListRow || (promoOnPaperExplained && Math.abs(residualGap) <= roundingTol);
+  return {
+    rows, appTotal, paperTotal, gap, quantitiesAnchored, anchorText, roundingTol,
+    fullListRow, fullListGap,
+    promoOnPaperRows: promoOnPaperExplained ? promoOnPaperRows : [],
+    promoOnPaperTotal: promoOnPaperExplained ? promoOnPaperTotal : 0,
+    gapExplained
+  };
+}
+// v47: המשפט האחד שהמשתמש רואה למעלה כשהפער מוסבר. נבנה מאותו הקשר שבונה
+// את כרטיסי ההסבר, כדי שהכותרת והפירוט לעולם לא יאמרו דברים שונים.
+function aiGapExplainedLine(ctx) {
+  if (!ctx || !ctx.gapExplained) return '';
+  const fullListLine = ctx.fullListRow && ctx.fullListRow.activePromo
+    ? String(ctx.fullListRow.product.name || '') + ' הגיע בלי ההנחה הרגילה, אבל יש עליו מבצע החודש — הכסף יחזור בקיזוז בסוף החודש.'
+    : '';
+  // המקרה של אתמול לבדו — בדיוק המשפט של v46, מילה במילה.
+  if (!ctx.promoOnPaperRows.length) return fullListLine ? fullListLine + ' אפשר לקלוט.' : '';
+  const names = ctx.promoOnPaperRows.map(r => String(r.product.name || '')).join(', ');
+  const promoLine = names + ' ' + (ctx.promoOnPaperRows.length > 1 ? 'הגיעו' : 'הגיע') + ' בתעודה כבר במחיר המבצע — שילמת פחות עכשיו, ולכן לא יהיה על זה קיזוז בסוף החודש.';
+  return (fullListLine ? promoLine + ' ' + fullListLine : promoLine) + ' הכול תקין, אפשר לקלוט.';
 }
 // v39: כשהפער כולו מוסבר בשורה אחת שהגיעה במחירון מלא — אומרים את זה בגדול,
 // למעלה, לפני כל רשימת בעיות. משתמש שרואה פער של ₪41 ולא מבין למה נעצר;
@@ -10545,7 +10598,9 @@ function aiMonthEndPendingRecord(ev) {
     qty: Number(r.qty) || 0,
     listPrice: r2(r.catalogList),
     expectedNet: r2(r.net),
-    gap: r2(ctx.gap),
+    // v47: הפער שהשורה הזאת מסבירה — אחרי ששורות במחיר-מבצע-בתעודה כבר
+    // נסגרו במחיר הנייר שלהן. בתעודה רגילה זה כל הפער, כמו קודם.
+    gap: r2(ctx.fullListGap != null ? ctx.fullListGap : ctx.gap),
     promoName: String(promo.name || '').slice(0, 160),
     promoFixedPrice: r2(fixed),
     expectedRebate: r2((r.catalogList - fixed) * r.qty),
@@ -10600,6 +10655,33 @@ function aiRecordFindingsAsPaperQty(ev) {
   if (written) reconcilePaperEntered = true;
   return written;
 }
+// v47: שורה שהגיעה כבר במחיר המבצע נקלטת במחיר שמודפס בנייר — כי זה מה
+// שהספק באמת חייב. כך התעודה נסגרת על "נטו לחיוב" בלי הפרש פתוח, וקיזוז
+// המרכזת על השורה יוצא אפס מעצמו (מחיר השורה = מחיר המבצע). aiPaperPriceOnly
+// שומר שהמחיר הזה יישאר בתעודה בלבד ולא ידרוס את מחיר המוצר במאגר — המחירון
+// וההנחה לא השתנו, רק התעודה הזאת. שום שורה אחרת לא נגעת.
+function aiRecordPromoOnPaperPrices(ev) {
+  if (!ev || !Array.isArray(reconcileData)) return 0;
+  let ctx = null;
+  try { ctx = aiPriceGapContext(ev); } catch (ctxError) { ctx = null; }
+  if (!ctx || !ctx.promoOnPaperRows.length) return 0;
+  let written = 0;
+  ctx.promoOnPaperRows.forEach(r => {
+    const line = reconcileData.find(l => l && !l.isDeposit && String(l.productId) === String(r.product.id));
+    if (!line || !(r.promoFixed > 0)) return;
+    line.promoOnPaper = {
+      expectedNet: r2(r.net), promoFixedPrice: r2(r.promoFixed),
+      promoName: String((r.activePromo && r.activePromo.name) || '').slice(0, 160),
+      recordedAt: Date.now()
+    };
+    line.price = r.promoFixed;
+    line.promoOn = false; line.promoPct = 0;
+    line.aiPaperPriceOnly = true;
+    line.checked = true;
+    written++;
+  });
+  return written;
+}
 function aiSimpleSummaryHtml(ev, opts) {
   opts = opts || {};
   const findings = (Array.isArray(ev && ev.findings) ? ev.findings : []).filter(aiIsActionableFinding);
@@ -10650,30 +10732,68 @@ function aiSimpleSummaryHtml(ev, opts) {
       : '') +
   '</div>';
 }
+// v47: המקרה ההפוך — הספק הוריד את מחיר המבצע כבר בתעודה. אתמול "ברמן
+// אקטיב" הגיע בלי ההנחה ואמרנו "המבצע יקזז במרכזת"; היום "לחמניות 10 בשקית"
+// הגיעו ב-₪8.50 (מחיר המבצע) במקום ₪10.40 (מחירון פחות הנחה), והמסך אמר
+// "המחירון התעדכן" ורשם קיזוז של ₪26.60 למרכזת שלעולם לא יגיע. האמת פשוטה:
+// שילמת פחות עכשיו במקום לקבל את זה בחזרה בסוף החודש. אותו כסף, מוקדם יותר.
+function aiPromoOnPaperExplanationHtml(ctx) {
+  if (!ctx || !ctx.promoOnPaperRows.length) return '';
+  const rowsHtml = ctx.promoOnPaperRows.map(r => {
+    const perUnit = r2(r.net - r.promoFixed);
+    const saved = r2(perUnit * r.qty);
+    return '<div class="text-[12px] font-bold mt-2 leading-relaxed">' +
+        '<b>' + htmlEscape(String(r.product.name || '')) + '</b> הגיע בתעודה כבר במחיר המבצע: ₪' + fmt3(r.promoFixed) +
+        ' ליח׳ במקום ₪' + fmt3(r.net) + ' (מחירון ₪' + fmtMoney(r.catalogList) + ' פחות ' + pctTxt(r.pct) + '%).<br>' +
+        r.qty + ' יח׳ × ₪' + fmtMoney(perUnit) + ' = <b>₪' + fmtMoney(saved) + '</b> פחות בתעודה.' +
+      '</div>' +
+      '<div class="text-[12px] font-bold mt-2 bg-white/80 rounded-lg p-2 leading-relaxed">' +
+        '<div class="font-black text-emerald-900 mb-1">למה זה בסדר: זה אותו מבצע, רק מוקדם יותר</div>' +
+        'בדרך כלל ברמן מחייב בתעודה את המחיר הרגיל ומחזיר את המבצע בקיזוז בסוף החודש. הפעם המבצע ירד כבר בתעודה — ולכן על השורה הזאת <b>לא יהיה קיזוז במרכזת</b>, כי כבר קיבלת אותו.' +
+        '<div class="mt-1 font-black text-slate-800">' +
+          '<div class="flex justify-between"><span>בתעודה · ' + r.qty + ' × ₪' + fmt3(r.promoFixed) + '</span><span>₪' + fmtMoney(r2(r.promoFixed * r.qty)) + '</span></div>' +
+          '<div class="flex justify-between text-emerald-800"><span>קיזוז במרכזת</span><span>₪0.00</span></div>' +
+          '<div class="flex justify-between border-t border-emerald-200 mt-1 pt-1"><span>תשלם בסוף</span><span>₪' + fmtMoney(r2(r.promoFixed * r.qty)) + ' (₪' + fmt3(r.promoFixed) + ' ליח׳)</span></div>' +
+        '</div>' +
+        '<div class="text-[11px] font-bold text-emerald-800 mt-1">בדיוק אותו סכום שהיית משלם אילו המבצע היה יורד במרכזת. המחירון במאגר לא השתנה ואין מה לתקן.</div>' +
+      '</div>';
+  }).join('');
+  const whole = Math.abs(ctx.gap - ctx.promoOnPaperTotal) <= ctx.roundingTol;
+  return '<div class="rounded-xl border-2 border-emerald-400 bg-emerald-50 p-3">' +
+    '<div class="font-black text-base text-emerald-900"><i class="fa-solid fa-circle-check ml-1"></i>' + (whole ? 'הפער מוסבר — אפשר לסגור את התעודה' : 'חלק מהפער מוסבר — מבצע שירד כבר בתעודה') + '</div>' +
+    rowsHtml +
+    '<div class="text-[11px] font-bold text-emerald-900 mt-2">' + (whole
+      ? 'התעודה תיקלט בסכום שמודפס בנייר (₪' + fmtMoney(ctx.paperTotal) + '), בלי הפרש פתוח ובלי קיזוז צפוי על השורה הזאת.'
+      : 'השורה הזאת תיקלט במחיר שמודפס בנייר; מה שנשאר מהפער מוסבר בכרטיס הבא.') + '</div>' +
+  '</div>';
+}
 function aiFullListExplanationHtml(ev) {
   const ctx = aiPriceGapContext(ev);
-  if (!ctx || !ctx.fullListRow) return '';
+  if (!ctx) return '';
+  const promoOnPaperHtml = aiSafeBlock('מבצע שירד בתעודה', () => aiPromoOnPaperExplanationHtml(ctx));
+  if (!ctx.fullListRow) return promoOnPaperHtml;
   const r = ctx.fullListRow, promo = r.activePromo;
   const perUnitGap = r2(r.catalogList - r.net);
+  const explainedGap = ctx.fullListGap != null ? ctx.fullListGap : ctx.gap;
   const head = htmlEscape(String(r.product.name || ''));
   const factsHtml =
     '<div class="text-[12px] font-bold mt-2 leading-relaxed">' +
       '<b>' + head + '</b> הגיע בתעודה בלי ההנחה הקבועה: מחירון מלא ₪' + fmtMoney(r.catalogList) +
       ' ליח׳ במקום ₪' + fmt3(r.net) + ' (הנחה ' + pctTxt(r.pct) + '%).<br>' +
-      r.qty + ' יח׳ × ₪' + fmtMoney(perUnitGap) + ' = <b>₪' + fmtMoney(ctx.gap) + '</b> — כל הפער, עד האגורה.' +
+      r.qty + ' יח׳ × ₪' + fmtMoney(perUnitGap) + ' = <b>₪' + fmtMoney(explainedGap) + '</b> — ' + (ctx.promoOnPaperRows.length ? 'כל מה שנשאר מהפער' : 'כל הפער, עד האגורה') + '.' +
     '</div>';
   if (!promo) {
-    return '<div class="rounded-xl border-2 border-rose-300 bg-rose-50 p-3">' +
+    return promoOnPaperHtml + '<div class="rounded-xl border-2 border-rose-300 bg-rose-50 p-3">' +
       '<div class="font-black text-base text-rose-900"><i class="fa-solid fa-circle-exclamation ml-1"></i>שורה אחת הגיעה בלי ההנחה הקבועה</div>' +
       factsHtml +
-      '<div class="text-[11px] font-bold text-rose-900 mt-2 bg-white/70 rounded-lg p-2">המוצר הזה <b>אינו במבצע החודש</b>, ולכן אין קיזוז צפוי במרכזת. כדאי לברר מול הספק לפני שסוגרים — ייתכן שחויבת ביתר ב-₪' + fmtMoney(ctx.gap) + '.</div>' +
+      '<div class="text-[11px] font-bold text-rose-900 mt-2 bg-white/70 rounded-lg p-2">המוצר הזה <b>אינו במבצע החודש</b>, ולכן אין קיזוז צפוי במרכזת. כדאי לברר מול הספק לפני שסוגרים — ייתכן שחויבת ביתר ב-₪' + fmtMoney(explainedGap) + '.</div>' +
     '</div>';
   }
   const fixed = promoFixedPrice(promo);
   const paperLine = r2(r.catalogList * r.qty);
   const rebate = r2((r.catalogList - fixed) * r.qty);
   const finalLine = r2(fixed * r.qty);
-  return '<div class="rounded-xl border-2 border-emerald-400 bg-emerald-50 p-3">' +
+  return promoOnPaperHtml + '<div class="rounded-xl border-2 border-emerald-400 bg-emerald-50 p-3">' +
     '<div class="font-black text-base text-emerald-900"><i class="fa-solid fa-circle-check ml-1"></i>הפער מוסבר — אפשר לסגור את התעודה</div>' +
     factsHtml +
     '<div class="text-[12px] font-bold mt-2 bg-white/80 rounded-lg p-2 leading-relaxed">' +
@@ -10719,7 +10839,9 @@ function aiPriceBreakdownHtml(ev) {
         (r.listMismatch ? '⚠ ' : '') + 'נייר ' + printed + ' · מחירון ' + (r.catalogList > 0 ? '₪' + fmtMoney(r.catalogList) : '—') +
         ' · הנחה ' + pctTxt(r.pct) + '% → ₪' + fmt3(r.net) + ' ליח׳' +
       '</div>' +
-      (r.activePromo ? '<div class="text-[10px] font-black text-violet-700 mt-0.5"><i class="fa-solid fa-tag ml-1"></i>\u05de\u05d1\u05e6\u05e2 \u05e4\u05e2\u05d9\u05dc: \u20aa' + fmt3(promoFixedPrice(r.activePromo)) + ' \u05dc\u05d9\u05d7\u05f3. \u05d4\u05e9\u05d5\u05e8\u05d4 \u05d1\u05ea\u05e2\u05d5\u05d3\u05d4 \u05e0\u05e9\u05d0\u05e8\u05ea \u05d1\u05de\u05d7\u05d9\u05e8 \u05d4\u05d4\u05e0\u05d7\u05d4 \u05d4\u05e8\u05d2\u05d9\u05dc, \u05d5\u05d4\u05e4\u05e8\u05e9 \u05e2\u05d3 \u05de\u05d7\u05d9\u05e8 \u05d4\u05de\u05d1\u05e6\u05e2 \u05e0\u05e8\u05e9\u05dd \u05db\u05e7\u05d9\u05d6\u05d5\u05d6 \u05dc\u05de\u05e8\u05db\u05d6\u05ea: \u20aa' + fmtMoney(Math.max(0, r2((r.net - promoFixedPrice(r.activePromo)) * r.qty))) + ' \u05d1\u05e9\u05d5\u05e8\u05d4 \u05d4\u05d6\u05d0\u05ea.</div>' : '') +
+      (r.promoOnPaper
+        ? '<div class="text-[10px] font-black text-emerald-700 mt-0.5"><i class="fa-solid fa-tag ml-1"></i>\u05de\u05d1\u05e6\u05e2 \u05e4\u05e2\u05d9\u05dc: \u20aa' + fmt3(r.promoFixed) + ' \u05dc\u05d9\u05d7\u05f3 \u2014 \u05d5\u05d4\u05d5\u05d0 \u05d9\u05e8\u05d3 \u05db\u05d1\u05e8 \u05d1\u05ea\u05e2\u05d5\u05d3\u05d4 \u05e2\u05e6\u05de\u05d4 (\u05d4\u05de\u05d7\u05d9\u05e8 \u05d4\u05de\u05d5\u05d3\u05e4\u05e1 \u05d4\u05d5\u05d0 \u05de\u05d7\u05d9\u05e8 \u05d4\u05de\u05d1\u05e6\u05e2). \u05d0\u05d9\u05df \u05e7\u05d9\u05d6\u05d5\u05d6 \u05e6\u05e4\u05d5\u05d9 \u05d1\u05de\u05e8\u05db\u05d6\u05ea \u05e2\u05dc \u05d4\u05e9\u05d5\u05e8\u05d4 \u05d4\u05d6\u05d0\u05ea, \u05d5\u05d4\u05de\u05d7\u05d9\u05e8\u05d5\u05df \u05d1\u05de\u05d0\u05d2\u05e8 \u05dc\u05d0 \u05d4\u05e9\u05ea\u05e0\u05d4.</div>'
+        : (r.activePromo ? '<div class="text-[10px] font-black text-violet-700 mt-0.5"><i class="fa-solid fa-tag ml-1"></i>\u05de\u05d1\u05e6\u05e2 \u05e4\u05e2\u05d9\u05dc: \u20aa' + fmt3(promoFixedPrice(r.activePromo)) + ' \u05dc\u05d9\u05d7\u05f3. \u05d4\u05e9\u05d5\u05e8\u05d4 \u05d1\u05ea\u05e2\u05d5\u05d3\u05d4 \u05e0\u05e9\u05d0\u05e8\u05ea \u05d1\u05de\u05d7\u05d9\u05e8 \u05d4\u05d4\u05e0\u05d7\u05d4 \u05d4\u05e8\u05d2\u05d9\u05dc, \u05d5\u05d4\u05e4\u05e8\u05e9 \u05e2\u05d3 \u05de\u05d7\u05d9\u05e8 \u05d4\u05de\u05d1\u05e6\u05e2 \u05e0\u05e8\u05e9\u05dd \u05db\u05e7\u05d9\u05d6\u05d5\u05d6 \u05dc\u05de\u05e8\u05db\u05d6\u05ea: \u20aa' + fmtMoney(Math.max(0, r2((r.net - promoFixedPrice(r.activePromo)) * r.qty))) + ' \u05d1\u05e9\u05d5\u05e8\u05d4 \u05d4\u05d6\u05d0\u05ea.</div>' : '')) +
       (r.netDrift ? '<div class="text-[10px] font-black text-rose-700 mt-0.5">⚠ המחיר במאגר אינו מחירון פחות הנחה: לפי ' + pctTxt(r.pct) + '% היה צריך לצאת ₪' + fmt3(r.expectedNet) + ', ובפועל מחושב ₪' + fmt3(r.net) + ' (' + (r.netDrift > 0 ? '+' : '−') + '₪' + fmtMoney(Math.abs(r.netDrift)) + ' בשורה)</div>' : '') +
     '</div>';
   }).join('');
@@ -10767,7 +10889,10 @@ function aiPriceBreakdownHtml(ev) {
     : '';
   // v35: רשימת החשודים בהנחה מוצגת רק כשהמבחן המכריע אכן הצביע על ההנחות.
   // כשההנחות תקינות היא הייתה שולחת לחפש במקום הלא נכון.
-  const suspectHtml = (suspects.length && quantitiesAnchored && !driftRows.length)
+  // v47: וכשהפער כבר מוסבר במלואו (מבצע שירד בתעודה / שורה במחירון מלא),
+  // רשימת חשודים רק מפחידה — היא הציעה "פיתות ענן 55.8%" כשהתשובה הייתה
+  // לחמניות במחיר מבצע.
+  const suspectHtml = (suspects.length && quantitiesAnchored && !driftRows.length && !ctx.gapExplained)
     ? '<div class="mt-2"><div class="text-[11px] font-black text-slate-600 mb-1">איזו הנחה הייתה סוגרת את הפער — אם שורה אחת בלבד אחראית לו:</div>' +
       suspects.slice(0, 5).map(s => '<div class="flex items-center justify-between gap-2 py-1 border-t border-black/5 text-[11px] font-bold text-slate-700"><span class="min-w-0">' + htmlEscape(String(s.name || '')) + ' <span class="text-slate-400">(' + s.qty + ' יח׳)</span></span><span class="shrink-0 font-black">' + pctTxt(s.from) + '% ← ' + pctTxt(s.to) + '%</span></div>' + (s.promo && s.round ? '<div class="text-[10px] font-black text-violet-800 bg-violet-50 border border-violet-200 rounded p-1.5 mt-1">\u25c0 המוצר הזה במבצע פעיל והאחוז שיוצא עגול. ייתכן שהספק חרג והשורה הגיעה במחירון מלא. הכסף לא אובד — קיזוז המרכזת גדל בהתאם והמחיר הסופי ליחידה זהה — אבל שווה לברר מולו.</div>' : '')).join('') +
       '<div class="text-[10px] font-bold text-slate-400 mt-1">רשימת חשודים לבדיקה מול מה שסוכם — לא קביעה. אחוז "עגול" הוא הסימן החזק ביותר.</div></div>'
@@ -11205,19 +11330,16 @@ function aiInvoiceCaptureHtml() {
     // v43: שתי שכבות. למעלה — משפט אחד גדול וכפתור אחד גדול, וזה כל מה שרוב
     // המשתמשים צריכים לראות. כל הפירוט (מאזן, מחירים, הערות, אבחון) יורד אל
     // מאחורי "רוצה הסבר מה קרה בתעודה?" ונפתח רק בלחיצה.
-    const explainedName = (function () {
-      try {
-        const ctx = aiPriceGapContext(ev);
-        if (!ctx || !ctx.fullListRow || !ctx.fullListRow.activePromo) return '';
-        return String(ctx.fullListRow.product.name || '');
-      } catch (nameError) { return ''; }
+    // v47: המשפט נבנה מההקשר המשותף — גם לשורה במחירון מלא, גם למבצע שירד
+    // כבר בתעודה, וגם לשניהם יחד.
+    const explainedLine = (function () {
+      try { return aiGapExplainedLine(aiPriceGapContext(ev)); }
+      catch (lineError) { return ''; }
     })();
     const simpleHtml = aiSafeBlock('סיכום', () => aiSimpleSummaryHtml(ev, {
       allGood,
       gapExplained: !!gapExplanationHtml,
-      explainedLine: explainedName
-        ? explainedName + ' הגיע בלי ההנחה הרגילה, אבל יש עליו מבצע החודש — הכסף יחזור בקיזוז בסוף החודש. אפשר לקלוט.'
-        : ''
+      explainedLine
     }));
     const detailsToggle = '<button data-role="ai-toggle-details" class="btn-tap w-full mt-3 bg-white border-2 border-slate-200 text-slate-600 rounded-2xl py-3 font-black text-base flex items-center justify-center gap-2">' +
       '<i class="fa-solid fa-circle-question"></i>' + (aiDetailsOpen ? 'סגור את ההסבר' : 'רוצה הסבר מה קרה בתעודה? לחץ כאן') + '</button>';
@@ -12381,8 +12503,17 @@ function saveReconciledReceipt(opts) {
     const received = Number(l.received) || 0, noteQty = Number(l.noteQty) || 0, price = Number(l.price) || 0;
     const line = { productId: l.productId, name: l.name, barcode: l.barcode || '', qty: received, unitPrice: price, basePrice: r2(Number(l.basePrice) || price), lineTotal: lineTotalFromUnit(price, received), promoPct: (l.promoOn ? (Number(l.promoPct) || 0) : 0) };
     if (noteQty !== received) line.noteQty = noteQty;
+    // v47: השורה נקלטה במחיר המבצע שמודפס בנייר — מתועד על השורה עצמה,
+    // כדי שמי שפותח את התעודה בעוד חודש יבין למה המחיר שונה מהמאגר.
+    if (l.promoOnPaper && typeof l.promoOnPaper === 'object') line.promoOnPaper = cloneSafe(l.promoOnPaper);
     return line;
   });
+  // v47: רשומת "מבצע ירד כבר בתעודה" — לכרטיס התעודה בהיסטוריה.
+  const promoOnPaper = lines.filter(l => l.promoOnPaper).map(l => ({
+    productId: String(l.productId), name: String(l.name || '').slice(0, 160), qty: Number(l.qty) || 0,
+    expectedNet: r2(l.promoOnPaper.expectedNet), promoFixedPrice: r2(l.promoOnPaper.promoFixedPrice),
+    promoName: String(l.promoOnPaper.promoName || ''), saved: r2((Number(l.promoOnPaper.expectedNet) - Number(l.promoOnPaper.promoFixedPrice)) * (Number(l.qty) || 0))
+  }));
   if (!lines.length) { showToast('אין פריטים לשמירה', null, null, 2000); return; }
   const grossEx = r2(lines.reduce((a, l) => a + l.lineTotal, 0));
   const supplierDiscount = r2(Number(reconcileSupplierDiscount) || 0);
@@ -12403,7 +12534,7 @@ function saveReconciledReceipt(opts) {
   const payableEx = receiptNoteTotal != null
     ? r2(Math.max(0, Number(receiptNoteTotal) - (Number(effectiveInfo.shortValRaw) || 0)))
     : r2(Math.max(0, ex - (Number(effectiveInfo.overVal) || 0)));
-  pendingReceipt = { lines, ex: payableEx, calculatedEx, receivedEx: ex, roundingAdjustment, grossEx, supplierDiscount, supplierPromoItems: reconcileSupplierPromoItems.slice(), supplierPromoMismatchItems: reconcilePromoMismatchItems.slice(), supplierCreditClaim, aiAudit, monthEndPending, noteTotal: receiptNoteTotal, status: open ? 'open' : 'ok', noteParts: receiptNotes.slice(), unresolvedAmountGap, unresolvedUnitsGap };
+  pendingReceipt = { lines, ex: payableEx, calculatedEx, receivedEx: ex, roundingAdjustment, grossEx, supplierDiscount, supplierPromoItems: reconcileSupplierPromoItems.slice(), supplierPromoMismatchItems: reconcilePromoMismatchItems.slice(), supplierCreditClaim, aiAudit, monthEndPending, promoOnPaper, noteTotal: receiptNoteTotal, status: open ? 'open' : 'ok', noteParts: receiptNotes.slice(), unresolvedAmountGap, unresolvedUnitsGap };
   presentReconcileSummary(lines, payableEx, open, { calculatedEx, receivedEx: ex, roundingAdjustment, grossEx, supplierDiscount, supplierPromoItems: reconcileSupplierPromoItems.slice(), supplierPromoMismatchItems: reconcilePromoMismatchItems.slice(), supplierCreditClaim, aiAudit, internalOffsets: effectiveInfo.priceOffsets || [] });
 }
 function presentReconcileSummary(lines, ex, open, extra) {
@@ -12413,7 +12544,7 @@ function presentReconcileSummary(lines, ex, open, extra) {
     const tag = diff > 0 ? ' · <span class="text-rose-600 font-bold">חסר ' + diff + '</span>' : (diff < 0 ? ' · <span class="text-amber-600 font-bold">עודף ' + (-diff) + '</span>' : '');
     return '<div class="flex items-center justify-between gap-2 py-1.5 border-b border-slate-100 last:border-0">' +
       '<div class="min-w-0"><div class="font-bold text-slate-800 text-sm truncate">' + htmlEscape(l.name) + '</div>' +
-      '<div class="text-[11px] text-slate-400">התקבל ' + l.qty + ' × ₪' + fmtUnitPrice(l.unitPrice, l.promoPct) + (l.promoPct ? ' · מבצע' + (l.promoPrice ? ' ₪' + fmt3(l.promoPrice) : ' ' + pctTxt(l.promoPct) + '%') : '') + tag + '</div></div>' +
+      '<div class="text-[11px] text-slate-400">התקבל ' + l.qty + ' × ₪' + fmtUnitPrice(l.unitPrice, l.promoPct) + (l.promoPct ? ' · מבצע' + (l.promoPrice ? ' ₪' + fmt3(l.promoPrice) : ' ' + pctTxt(l.promoPct) + '%') : '') + (l.promoOnPaper ? ' · <span class="text-emerald-700 font-black">מבצע ירד בתעודה</span>' : '') + tag + '</div></div>' +
       '<div class="font-black text-slate-700 text-sm shrink-0">₪' + fmtMoney(l.lineTotal) + '</div>' +
     '</div>';
   }).join('');
@@ -12680,12 +12811,12 @@ async function saveReceiptFix() {
 }
 async function confirmReceipt() {
   if (!pendingReceipt) { hideReceiptSummary(); return; }
-  const { lines, ex, calculatedEx, roundingAdjustment, grossEx, supplierDiscount, supplierPromoItems, supplierPromoMismatchItems, supplierCreditClaim, aiAudit, monthEndPending, noteTotal, status, noteParts, unresolvedAmountGap, unresolvedUnitsGap } = pendingReceipt;
+  const { lines, ex, calculatedEx, roundingAdjustment, grossEx, supplierDiscount, supplierPromoItems, supplierPromoMismatchItems, supplierCreditClaim, aiAudit, monthEndPending, promoOnPaper, noteTotal, status, noteParts, unresolvedAmountGap, unresolvedUnitsGap } = pendingReceipt;
   const opId = pendingReceipt.operationId || receiptDraftId || (pendingReceipt.operationId = makeOperationId('receipt'));
   const creditClaim = supplierCreditClaim ? { ...cloneSafe(supplierCreditClaim), createdAt: supplierCreditClaim.createdAt || Date.now() } : null;
   const docDate = receiptDocDate || todayStr();
   const receiptVatRate = vatRateForNewDocument(docDate);
-  const data = { timestamp: Date.now(), date: todayStr(), docDate, vatPct: r2(receiptVatRate * 100), items: lines, count: lines.length, totalExVat: ex, totalIncVat: r2(ex * (1 + receiptVatRate)), receivedExVat: (calculatedEx != null ? calculatedEx : ex), calculatedExVat: (calculatedEx != null ? calculatedEx : ex), roundingAdjustment: r2(Number(roundingAdjustment) || 0), grossExVat: (grossEx != null ? grossEx : (calculatedEx != null ? calculatedEx : ex)), supplierDiscount: r2(Number(supplierDiscount) || 0), supplierPromoItems: (Array.isArray(supplierPromoItems) ? supplierPromoItems : []), supplierPromoMismatchItems: (Array.isArray(supplierPromoMismatchItems) ? supplierPromoMismatchItems : []), supplierCreditClaim: creditClaim, aiAudit: aiAudit ? cloneSafe(aiAudit) : null, noteTotalInc: (noteTotal != null ? noteTotal : null), noteParts: (Array.isArray(noteParts) ? noteParts : []), monthEndRebates: monthEndSnapshotForLines(lines, docDate), monthEndPending: (monthEndPending || null), unresolvedAmountGap: r2(Number(unresolvedAmountGap) || 0), unresolvedUnitsGap: Number(unresolvedUnitsGap) || 0, status: status || 'ok', operationId: opId };
+  const data = { timestamp: Date.now(), date: todayStr(), docDate, vatPct: r2(receiptVatRate * 100), items: lines, count: lines.length, totalExVat: ex, totalIncVat: r2(ex * (1 + receiptVatRate)), receivedExVat: (calculatedEx != null ? calculatedEx : ex), calculatedExVat: (calculatedEx != null ? calculatedEx : ex), roundingAdjustment: r2(Number(roundingAdjustment) || 0), grossExVat: (grossEx != null ? grossEx : (calculatedEx != null ? calculatedEx : ex)), supplierDiscount: r2(Number(supplierDiscount) || 0), supplierPromoItems: (Array.isArray(supplierPromoItems) ? supplierPromoItems : []), supplierPromoMismatchItems: (Array.isArray(supplierPromoMismatchItems) ? supplierPromoMismatchItems : []), supplierCreditClaim: creditClaim, aiAudit: aiAudit ? cloneSafe(aiAudit) : null, noteTotalInc: (noteTotal != null ? noteTotal : null), noteParts: (Array.isArray(noteParts) ? noteParts : []), monthEndRebates: monthEndSnapshotForLines(lines, docDate), monthEndPending: (monthEndPending || null), promoOnPaper: (Array.isArray(promoOnPaper) ? promoOnPaper : []), unresolvedAmountGap: r2(Number(unresolvedAmountGap) || 0), unresolvedUnitsGap: Number(unresolvedUnitsGap) || 0, status: status || 'ok', operationId: opId };
   const saved = await runCloudTask('save receipt before clearing draft', { op: 'set', path: dataPath('receipts', opId), data, operationId: opId });
   if (!saved) return;
   hideReceiptSummary();
@@ -13506,7 +13637,7 @@ function renderReceiptsHistory() {
     const legacyRecovering = !!(rc.offsetClosed && Number(rc.offsetSchemaVersion || 0) < 2);
     const rows = (rc.items || []).map(l =>
       '<div class="flex items-center justify-between gap-2 py-1 border-b border-slate-100 last:border-0">' +
-        '<div class="min-w-0"><div class="text-sm font-bold text-slate-700 truncate">' + htmlEscape(l.name) + '</div><div class="text-[11px] text-slate-400">' + l.qty + ' × ₪' + fmtUnitPrice(l.unitPrice, l.promoPct) + (l.promoPct ? ' · מבצע' + (l.promoPrice ? ' ₪' + fmt3(l.promoPrice) : ' ' + pctTxt(l.promoPct) + '%') : '') + '</div></div>' +
+        '<div class="min-w-0"><div class="text-sm font-bold text-slate-700 truncate">' + htmlEscape(l.name) + '</div><div class="text-[11px] text-slate-400">' + l.qty + ' × ₪' + fmtUnitPrice(l.unitPrice, l.promoPct) + (l.promoPct ? ' · מבצע' + (l.promoPrice ? ' ₪' + fmt3(l.promoPrice) : ' ' + pctTxt(l.promoPct) + '%') : '') + (l.promoOnPaper ? ' · <span class="text-emerald-700 font-black">מבצע ירד בתעודה</span>' : '') + '</div></div>' +
         '<div class="text-sm font-black text-slate-600 shrink-0">₪' + fmtMoney(l.lineTotal) + '</div>' +
       '</div>'
     ).join('');
@@ -13570,6 +13701,14 @@ function renderReceiptsHistory() {
         '<div class="bg-slate-50 rounded-xl p-3 border border-slate-100">' + rows + '</div>' +
         '<div class="flex items-center justify-end mt-2 text-xs text-slate-500 font-bold px-1"><span>שווי שנסרק: ₪' + fmtMoney(rc.receivedExVat != null ? rc.receivedExVat : (rc.calculatedExVat != null ? rc.calculatedExVat : rc.totalExVat)) + ' · לתשלום: ₪' + fmtMoney(payableEx) + '</span></div>' +
         (rc.noteTotalInc != null ? '<div class="text-[11px] text-slate-500 font-bold mt-1 px-1"><i class="fa-solid fa-file-invoice"></i> ' + (rc.noteParts && rc.noteParts.length > 1 ? rc.noteParts.length + ' תעודות ספק: ' + rc.noteParts.map(x => '₪' + fmtMoney(normNote(x).amount)).join(' + ') + ' = ₪' + fmtMoney(rc.noteTotalInc) : 'תעודת ספק: ₪' + fmtMoney(rc.noteTotalInc)) + '</div>' : '') +
+        (Array.isArray(rc.promoOnPaper) && rc.promoOnPaper.length ? (function () {
+          // v47: מבצע שירד כבר בתעודה. מי שפותח את התעודה בסוף החודש ורואה
+          // שאין עליה קיזוז — צריך לראות כאן מיד למה, בלי לחשוב שמשהו אבד.
+          return '<div class="mt-2 bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-xs">' +
+            '<div class="font-black text-emerald-800 mb-1"><i class="fa-solid fa-tag"></i> מבצע החודש ירד כבר בתעודה — לא נדרש טיפול</div>' +
+            rc.promoOnPaper.map(x => '<div class="font-bold text-emerald-900 leading-relaxed">' + htmlEscape(String(x.name || '')) + ': ' + (Number(x.qty) || 0) + ' יח׳ במחיר המבצע ₪' + fmt3(x.promoFixedPrice) + ' במקום ₪' + fmt3(x.expectedNet) + ' — ₪' + fmtMoney(x.saved) + ' פחות בתעודה, ולכן אין קיזוז צפוי במרכזת על השורה הזאת.</div>').join('') +
+          '</div>';
+        })() : '') +
         (di.monthEndWaiting && di.monthEndPending ? (function () {
           // v40: מי שפותח את התעודה חודש אחרי כן צריך לראות בשנייה למה היא
           // אינה "בעיה" — עם השם, הסכום, והמחיר הסופי שכבר ידוע.
@@ -16436,7 +16575,7 @@ app.addEventListener('click', (e) => {
   if (role === 'ai-toggle-details') { aiDetailsOpen = !aiDetailsOpen; renderReconcile(); return; } // v43
   if (role === 'ai-apply') { aiApplyInvoiceResult(); return; }
   // v45: סגירה ממסך הסריקה — קודם מתעדים מה בדיוק חסר, ואז שומרים.
-  if (role === 'ai-close-receipt') { aiRecordFindingsAsPaperQty(aiScanEvaluation); saveReconciledReceipt(); return; }
+  if (role === 'ai-close-receipt') { aiRecordFindingsAsPaperQty(aiScanEvaluation); aiRecordPromoOnPaperPrices(aiScanEvaluation); saveReconciledReceipt(); return; }
   if (role === 'admin-login') { requireAdmin('כניסת מנהל', () => { if (currentView === 'settings') renderSettings(); }); return; }
   if (role === 'admin-logout') { exitAdminMode(); return; }
   if (role === 'admin-change-pin') { openChangeAdminPinModal(); return; }
