@@ -727,7 +727,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '47'; // גרסה 47: מבצע החודש שירד כבר בתעודה עצמה מוסבר ונסגר — לא "המחירון התעדכן" ולא קיזוז מדומה במרכזת
+const APP_VERSION = '48'; // גרסה 48: המרכזת לא מציגה שורת קיזוז של ₪0.00 למבצע שירד כבר בתעודה (v47: המבצע שירד בתעודה מוסבר ונסגר)
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -13828,6 +13828,9 @@ function receiptRangeData(from, to) {
       meEx += reb;
       const rebInc = amountIncForDoc(r, reb);
       meInc += rebInc;
+      // v48: מבצע שירד כבר בתעודה (מחיר השורה = מחיר המבצע) משאיר קיזוז אפס.
+      // שורת "− ₪0.00" ברשימה רק מבלבלת — לא מציגים אותה.
+      if (reb === 0) return;
       const key = x.id || (String(x.name || '') + '|' + String(x.pct || 0));
       if (!meMap[key]) meMap[key] = { name: x.name || ('מבצע ' + x.pct + '%'), pct: Number(x.pct) || 0, ex: 0, inc: 0 };
       meMap[key].ex = r2(meMap[key].ex + reb);
