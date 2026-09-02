@@ -10568,16 +10568,14 @@ function aiPriceGapContext(ev) {
 // את כרטיסי ההסבר, כדי שהכותרת והפירוט לעולם לא יאמרו דברים שונים.
 function aiGapExplainedLine(ctx) {
   if (!ctx || !ctx.gapExplained) return '';
-  const parts = [];
-  if (ctx.promoOnPaperRows.length) {
-    const names = ctx.promoOnPaperRows.map(r => String(r.product.name || '')).join(', ');
-    parts.push(names + ' ' + (ctx.promoOnPaperRows.length > 1 ? 'הגיעו' : 'הגיע') + ' בתעודה כבר במחיר המבצע — שילמת פחות עכשיו, ולכן לא יהיה על זה קיזוז בסוף החודש.');
-  }
-  if (ctx.fullListRow && ctx.fullListRow.activePromo) {
-    parts.push(String(ctx.fullListRow.product.name || '') + ' הגיע בלי ההנחה הרגילה, אבל יש עליו מבצע החודש — הכסף יחזור בקיזוז בסוף החודש.');
-  }
-  if (!parts.length) return '';
-  return parts.join(' ') + ' הכול תקין, אפשר לקלוט.';
+  const fullListLine = ctx.fullListRow && ctx.fullListRow.activePromo
+    ? String(ctx.fullListRow.product.name || '') + ' הגיע בלי ההנחה הרגילה, אבל יש עליו מבצע החודש — הכסף יחזור בקיזוז בסוף החודש.'
+    : '';
+  // המקרה של אתמול לבדו — בדיוק המשפט של v46, מילה במילה.
+  if (!ctx.promoOnPaperRows.length) return fullListLine ? fullListLine + ' אפשר לקלוט.' : '';
+  const names = ctx.promoOnPaperRows.map(r => String(r.product.name || '')).join(', ');
+  const promoLine = names + ' ' + (ctx.promoOnPaperRows.length > 1 ? 'הגיעו' : 'הגיע') + ' בתעודה כבר במחיר המבצע — שילמת פחות עכשיו, ולכן לא יהיה על זה קיזוז בסוף החודש.';
+  return (fullListLine ? promoLine + ' ' + fullListLine : promoLine) + ' הכול תקין, אפשר לקלוט.';
 }
 // v39: כשהפער כולו מוסבר בשורה אחת שהגיעה במחירון מלא — אומרים את זה בגדול,
 // למעלה, לפני כל רשימת בעיות. משתמש שרואה פער של ₪41 ולא מבין למה נעצר;
