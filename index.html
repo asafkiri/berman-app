@@ -1081,8 +1081,13 @@ function noteEditorBodyHtml() {
   const total = receiptNotes.length ? '<div class="flex items-center justify-between mt-2 pt-2 border-t border-slate-200"><span class="font-bold text-slate-500 text-sm">סה"כ ' + receiptNotes.length + ' תעודות</span><span class="font-black text-blue-600 text-lg">₪' + fmtMoney(noteSum()) + '</span></div>' + anchorsSummary : '';
   return chips +
     '<div class="text-xs text-slate-500 font-bold mb-1.5"><i class="fa-solid fa-circle-info"></i> לכל תעודה הקלד את שלושת המספרים שמודפסים בתחתית: <b class="text-slate-700">נטו לחיוב (ללא מע״מ)</b>, <b class="text-slate-700">סה"כ כללי</b> (סך היחידות) ו<b class="text-slate-700">סה"כ שורות</b></div>' +
+    // v50: המלכודת של תחתית התעודה. שלוש שורות זו מתחת לזו — נטו לחיוב,
+    // מע״מ, וסה״כ לתשלום — והתחתונה מהן היא הגדולה והבולטת. מי שלוקח אותה
+    // מקבל תעודה שכל היחידות בה תואמות ורק הכסף חורג בדיוק בשיעור המע״מ.
+    // עדיף לומר את זה כאן, לפני ההקלדה, מאשר לתפוס את זה אחר כך.
+    '<div class="text-[11px] font-black text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2 mb-1.5 leading-relaxed"><i class="fa-solid fa-triangle-exclamation"></i> לא "סה״כ לתשלום" — הוא כולל מע״מ. המספר הנכון הוא זה שמעל שורת המע״מ.</div>' +
     '<div class="flex gap-2 items-stretch">' +
-      '<div class="flex-1 flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500"><span class="text-slate-400 font-black">₪</span><input id="rcNoteInput" type="text" inputmode="decimal" placeholder="נטו לחיוב (ללא מע״מ)" class="w-full h-11 text-center text-base font-black outline-none bg-transparent"></div>' +
+      '<div class="flex-1 flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500"><span class="text-slate-400 font-black">₪</span><input id="rcNoteInput" type="text" inputmode="decimal" placeholder="נטו לחיוב — ללא מע״מ" class="w-full h-11 text-center text-base font-black outline-none bg-transparent"></div>' +
       '<button data-role="rc-note-add" class="btn-tap px-4 rounded-xl font-black bg-slate-100 text-slate-700 flex items-center gap-1"><i class="fa-solid fa-plus"></i> הוסף</button>' +
     '</div>' +
     '<input id="rcNoteUnits" type="text" inputmode="numeric" placeholder="סה״כ כללי — סך היחידות בתעודה" class="w-full h-11 mt-1.5 text-center text-sm font-black border-2 border-slate-200 rounded-xl outline-none focus:border-blue-500 bg-white">' +
