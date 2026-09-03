@@ -727,7 +727,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '49'; // גרסה 49: התחזית "צפי אחרי המרכזת" יודעת אחרי הסריקה שמבצע שירד כבר בתעודה לא יקוזז שוב
+const APP_VERSION = '50'; // גרסה 50: סכום תעודה שהוקלד כולל מע״מ מזוהה בשמו, נאמר בכותרת, ומתוקן בלחיצה
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -1081,8 +1081,13 @@ function noteEditorBodyHtml() {
   const total = receiptNotes.length ? '<div class="flex items-center justify-between mt-2 pt-2 border-t border-slate-200"><span class="font-bold text-slate-500 text-sm">סה"כ ' + receiptNotes.length + ' תעודות</span><span class="font-black text-blue-600 text-lg">₪' + fmtMoney(noteSum()) + '</span></div>' + anchorsSummary : '';
   return chips +
     '<div class="text-xs text-slate-500 font-bold mb-1.5"><i class="fa-solid fa-circle-info"></i> לכל תעודה הקלד את שלושת המספרים שמודפסים בתחתית: <b class="text-slate-700">נטו לחיוב (ללא מע״מ)</b>, <b class="text-slate-700">סה"כ כללי</b> (סך היחידות) ו<b class="text-slate-700">סה"כ שורות</b></div>' +
+    // v50: המלכודת של תחתית התעודה. שלוש שורות זו מתחת לזו — נטו לחיוב,
+    // מע״מ, וסה״כ לתשלום — והתחתונה מהן היא הגדולה והבולטת. מי שלוקח אותה
+    // מקבל תעודה שכל היחידות בה תואמות ורק הכסף חורג בדיוק בשיעור המע״מ.
+    // עדיף לומר את זה כאן, לפני ההקלדה, מאשר לתפוס את זה אחר כך.
+    '<div class="text-[11px] font-black text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2 mb-1.5 leading-relaxed"><i class="fa-solid fa-triangle-exclamation"></i> לא "סה״כ לתשלום" — הוא כולל מע״מ. המספר הנכון הוא זה שמעל שורת המע״מ.</div>' +
     '<div class="flex gap-2 items-stretch">' +
-      '<div class="flex-1 flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500"><span class="text-slate-400 font-black">₪</span><input id="rcNoteInput" type="text" inputmode="decimal" placeholder="נטו לחיוב (ללא מע״מ)" class="w-full h-11 text-center text-base font-black outline-none bg-transparent"></div>' +
+      '<div class="flex-1 flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500"><span class="text-slate-400 font-black">₪</span><input id="rcNoteInput" type="text" inputmode="decimal" placeholder="נטו לחיוב — ללא מע״מ" class="w-full h-11 text-center text-base font-black outline-none bg-transparent"></div>' +
       '<button data-role="rc-note-add" class="btn-tap px-4 rounded-xl font-black bg-slate-100 text-slate-700 flex items-center gap-1"><i class="fa-solid fa-plus"></i> הוסף</button>' +
     '</div>' +
     '<input id="rcNoteUnits" type="text" inputmode="numeric" placeholder="סה״כ כללי — סך היחידות בתעודה" class="w-full h-11 mt-1.5 text-center text-sm font-black border-2 border-slate-200 rounded-xl outline-none focus:border-blue-500 bg-white">' +
@@ -4600,6 +4605,27 @@ function receiptMoneyMatches(calculated, paperTotal, unitsMatch) {
   const diff = moneyDiffCents(calculated, paperTotal);
   return diff === 0 || (!!unitsMatch && diff <= RECEIPT_ROUNDING_TOLERANCE_CENTS);
 }
+// v50: הפער ששווה בדיוק למע״מ. בתחתית תעודת ברמן מודפסים זה מתחת לזה
+// "נטו לחיוב" (ללא מע״מ), שורת המע״מ, ו"סה״כ לתשלום" (כולל מע״מ). מי
+// שמקליד בטעות את השורה התחתונה מקבל תעודה שכל היחידות והשורות בה תואמות
+// לחלוטין ורק הכסף חורג — בדיוק בשיעור המע״מ. זו אינה סחורה חסרה אלא
+// מספר שנלקח משורה אחת נמוך מדי, ולכן היא מזוהה בשמה בכל מקום שבו הפער
+// מוצג: אחרי הסריקה, ברגע השמירה, ובכרטיס התעודה בהיסטוריה.
+function vatOnlyGapNet(paperTotal, netTotal, vatRate) {
+  const paper = Number(paperTotal), net = Number(netTotal);
+  const rate = Number(vatRate) > 0 ? Number(vatRate) : VAT;
+  if (!isFinite(paper) || !isFinite(net) || net <= 0 || paper <= net || !(rate > 0)) return null;
+  if (moneyDiffCents(paper, r2(net * (1 + rate))) > RECEIPT_ROUNDING_TOLERANCE_CENTS) return null;
+  const derivedNet = r2(paper / (1 + rate));
+  return { net: derivedNet, vat: r2(paper - derivedNet), rate, pctTxt: r2(rate * 100) + '%' };
+}
+// שווי השורות לפי מה שרשום בנייר (כמות התעודה, לא הכמות שהתקבלה) — המספר
+// שאמור להיות שווה ל"נטו לחיוב" המודפס בתחתיתה.
+function receiptPaperNetValue(rc) {
+  const items = (rc && rc.items) || [];
+  const paperValue = r2(items.reduce((a, l) => a + lineTotalFromUnit(Number(l.unitPrice) || 0, l.noteQty != null ? (Number(l.noteQty) || 0) : (Number(l.qty) || 0)), 0));
+  return r2(paperValue - (Number(rc && rc.supplierDiscount) || 0));
+}
 function discountedUnitPrice(base, pct) {
   return (Number(base) || 0) * (1 - (Number(pct) || 0) / 100);
 }
@@ -5476,6 +5502,19 @@ function finishReceipt() {
   // רק כשהיחידות תואמות בדיוק. פער יחידות לעולם אינו נסגר באמצעות סיבולת כספית.
   const moneyMismatch = receiptNoteTotal != null && !receiptMoneyMatches(ex, receiptNoteTotal, !unitsMismatch);
   if (moneyMismatch || unitsMismatch) {
+    // v50: המקום המוקדם ביותר שבו אפשר לתפוס את זה — לפני מסך ההפרשים,
+    // לפני הסריקה, ולפני שהתעודה נשמרת פתוחה. כל היחידות תואמות והכסף חורג
+    // בדיוק בשיעור המע״מ: זה לא חוסר, זו השורה השגויה בתחתית התעודה.
+    const vatOnly = (moneyMismatch && !unitsMismatch)
+      ? vatOnlyGapNet(receiptNoteTotal, ex, vatRateForNewDocument(activeReceiptDate())) : null;
+    if (vatOnly) {
+      showConfirm('הוקלד סכום כולל מע״מ',
+        'סכום התעודה שהוקלד (₪' + fmtMoney(receiptNoteTotal) + ') הוא "סה״כ לתשלום" כולל מע״מ. "נטו לחיוב" הוא ₪' + fmtMoney(vatOnly.net) +
+        ', וההפרש ₪' + fmtMoney(vatOnly.vat) + ' הוא בדיוק המע״מ (' + vatOnly.pctTxt + ') — הסחורה תואמת. לתקן את הסכום ולהמשיך?',
+        'תקן ל-₪' + fmtMoney(vatOnly.net) + ' והמשך',
+        function () { convertNoteTotalsToNet(vatOnly.rate); finishReceipt(); });
+      return;
+    }
     const big = Math.max(ex, receiptNoteTotal), small = Math.min(ex, receiptNoteTotal);
     if (moneyMismatch && big >= 50 && big >= small * 2) { showConfirm('הפרש חריג', 'סכום התעודה מהספק ₪' + fmtMoney(receiptNoteTotal) + ', אבל מהסריקה שוחזר ₪' + fmtMoney(ex) + '. הפרש גדול במיוחד — ייתכן שסכום התעודה הוקלד לא נכון (או שבאמת חסר הרבה). להמשיך לבדיקת ההפרשים?', 'המשך לבדיקה', openReconcile); return; }
     openReconcile(); return;
@@ -9302,7 +9341,7 @@ function aiEvaluateInvoiceScan(payload) {
     if (printedUnits != null && isFinite(printedUnits) && Math.round(printedUnits) === docUnits && inputDoc.units != null && docUnits !== Number(inputDoc.units)) {
       warnings.push('תעודה ' + (index + 1) + ': היחידות שנקראו (' + docUnits + ') תואמות לשדה המודפס בתעודה — ייתכן שהיחידות שהוקלדו (' + inputDoc.units + ') שגויות.');
     }
-    docSummaries.push({ noteIndex: index, invoiceNumber: doc.invoiceNumber || '', subtotal: subtotalCents == null ? null : subtotalCents / 100, rowsSum: docRowsCents / 100, units: docUnits, rows: Array.isArray(doc.rows) ? doc.rows.length : 0, documentDiscount: printedDiscountCents == null ? null : printedDiscountCents / 100, confidence: isFinite(docConfidence) ? docConfidence : 0 });
+    docSummaries.push({ noteIndex: index, invoiceNumber: doc.invoiceNumber || '', subtotal: subtotalCents == null ? null : subtotalCents / 100, rowsSum: docRowsCents / 100, units: docUnits, rows: Array.isArray(doc.rows) ? doc.rows.length : 0, documentDiscount: printedDiscountCents == null ? null : printedDiscountCents / 100, confidence: isFinite(docConfidence) ? docConfidence : 0, printedVat: vatCents == null ? null : vatCents / 100, printedInclusive: totalInclCents == null ? null : totalInclCents / 100 });
   });
   // ===== v132: הכרעה אוטומטית של השורות שנותרו, בשני מעברים =====
   // מעבר שני נחוץ כי הצלבת "כמות שנותרה בספירה" משתנה אחרי כל הכרעה.
@@ -9795,6 +9834,12 @@ function bermanAdaptScanPayload(payload) {
     // "נטו לחיוב" המודפס הוא הסכום שסגירת הכסף המקומית נבדקת מולו. אין בברמן
     // הנחת-מסמך נפרדת — ההנחה כבר מגולמת במחיר המוסכם של כל שורה.
     doc.subtotalExVat = doc.netToChargeExVat == null ? null : Number(doc.netToChargeExVat);
+    // v50: שתי שורות הכסף האחרות בבלוק התחתון. הן אינן מאמתות דבר — "נטו
+    // לחיוב" נשאר העוגן היחיד — אבל הן מאפשרות לומר בוודאות איזו שורה
+    // הוקלדה בטעות, במקום להסיק את זה מיחס. שרת ישן שאינו מחזיר אותן
+    // מחזיר null, וההסבר חוזר לזיהוי לפי שיעור המע״מ.
+    doc.vatAmount = doc.vatAmountPrinted == null ? null : Number(doc.vatAmountPrinted);
+    doc.totalInclVat = doc.totalToChargeInclVat == null ? null : Number(doc.totalToChargeInclVat);
     doc.documentDiscountExVat = null;
     doc.printedUnits = doc.totalUnits == null ? null : Number(doc.totalUnits); // "סה"כ כללי" המודפס
     doc.printedLines = doc.printedLines == null ? null : Number(doc.printedLines); // מונה "שורות" המודפס
@@ -10534,6 +10579,90 @@ function aiSafeBlock(label, build) {
       htmlEscape(label) + ': התצוגה נכשלה (' + htmlEscape(String((blockError && blockError.message) || 'שגיאה')) + '). שאר המסך תקין.</div>';
   }
 }
+// v50: העוגן שהוקלד מול הסכום שנקרא מהנייר. שתי הבדיקות האלה חיו עד היום
+// בשני עולמות נפרדים: הסבר הפער השווה את מה שה-AI קרא מול חישוב הקטלוג
+// והכריז "הכול בסדר", בזמן ש"נקרא ₪738.93 במקום ₪871.95" ישב כשגיאה
+// מקופלת מתחת ל"רוצה הסבר?". התוצאה: תעודה שנסגרה בביטחון ונשמרה פתוחה עם
+// פער של ₪133.01. מעכשיו אי-התאמת העוגן היא עובדה בכותרת, עם תיקון בלחיצה.
+function aiAnchorMismatchState(ev) {
+  const summaries = Array.isArray(ev && ev.docSummaries) ? ev.docSummaries : [];
+  if (!summaries.length || !summaries.every(s => s && s.subtotal != null)) return null;
+  const paperTotal = r2(summaries.reduce((sum, s) => sum + Number(s.subtotal || 0), 0));
+  const typed = receiptNoteTotal == null ? null : r2(Number(receiptNoteTotal) || 0);
+  if (typed == null || moneyDiffCents(typed, paperTotal) === 0) return null;
+  // v50: הראיה החזקה ביותר — שורת "סה הכל תעודה לחיוב" נקראה מהנייר עצמו,
+  // והמספר שהוקלד זהה לה לאגורה. כאן כבר לא מסיקים לפי שיעור מע״מ אלא
+  // אומרים לחנות איזו שורה מתוך שלוש היא לקחה. (שרת ישן אינו מחזיר את
+  // השורה הזאת — ואז נשארת ההשוואה לשיעור המע״מ.)
+  const printedInclusive = summaries.every(s => s.printedInclusive != null)
+    ? r2(summaries.reduce((sum, s) => sum + Number(s.printedInclusive || 0), 0)) : null;
+  const typedIsPrintedInclusive = printedInclusive != null && moneyDiffCents(typed, printedInclusive) === 0;
+  const vat = vatOnlyGapNet(typed, paperTotal, vatRateForNewDocument(activeReceiptDate()));
+  return {
+    typed, paperTotal, gap: r2(typed - paperTotal), summaries,
+    vat, printedInclusive, typedIsPrintedInclusive, vatLine: !!(vat || typedIsPrintedInclusive)
+  };
+}
+function aiAnchorMismatchHtml(state) {
+  if (!state) return '';
+  const fixBtn = '<button data-role="ai-fix-note-total" class="btn-tap w-full mt-2 bg-rose-600 text-white rounded-xl py-3 font-black text-base">' +
+    '<i class="fa-solid fa-wand-magic-sparkles ml-1"></i>' + (state.vatLine ? 'תקן ל-₪' + fmtMoney(state.paperTotal) + ' (נטו לחיוב)' : 'עדכן לסכום שנקרא מהנייר: ₪' + fmtMoney(state.paperTotal)) + '</button>';
+  if (state.vatLine) {
+    // כשגם שורת המע״מ נקראה מהנייר, מציגים את שלוש השורות כפי שהן מודפסות
+    // ומסמנים איזו מהן הוקלדה. זו אינה הערכה — זו התעודה עצמה.
+    const threeLines = state.typedIsPrintedInclusive
+      ? '<div class="mt-2 bg-white/80 rounded-lg p-2 text-[13px] font-black text-slate-800">' +
+        '<div class="flex justify-between"><span>נטו לחיוב (ללא מע״מ)</span><span class="text-emerald-700">₪' + fmtMoney(state.paperTotal) + ' ← זה המספר</span></div>' +
+        (state.summaries.every(s => s.printedVat != null)
+          ? '<div class="flex justify-between text-slate-500"><span>מע״מ</span><span>₪' + fmtMoney(r2(state.summaries.reduce((sum, s) => sum + Number(s.printedVat || 0), 0))) + '</span></div>' : '') +
+        '<div class="flex justify-between"><span>סה״כ לתשלום (כולל מע״מ)</span><span class="text-rose-700">₪' + fmtMoney(state.printedInclusive) + ' ← הוקלד</span></div></div>'
+      : '';
+    return '<div class="rounded-2xl border-2 border-rose-400 bg-rose-50 p-4 mt-3">' +
+      '<div class="text-lg font-black text-rose-900 leading-tight"><i class="fa-solid fa-circle-exclamation ml-2"></i>הוקלד הסכום <u>כולל</u> מע״מ</div>' +
+      '<div class="text-sm font-bold text-rose-900 mt-2 leading-relaxed">' + (state.typedIsPrintedInclusive
+        ? 'הסכום שהוקלד (₪' + fmtMoney(state.typed) + ') הוא בדיוק שורת "סה הכל תעודה לחיוב" שנקראה מהתעודה — היא כוללת מע״מ.'
+        : 'בתחילת הקליטה הוקלד ₪' + fmtMoney(state.typed) + ' — זה "סה״כ לתשלום" שבתחתית התעודה, כולל מע״מ.') +
+        ' השורה שצריך להקליד היא "נטו לחיוב", והיא ₪' + fmtMoney(state.paperTotal) + '.</div>' +
+      threeLines +
+      '<div class="text-sm font-bold text-rose-900 mt-2 leading-relaxed">ההפרש ₪' + fmtMoney(Math.abs(state.gap)) +
+        ' הוא המע״מ' + (state.vat ? ' (' + state.vat.pctTxt + ')' : '') + ' — <b>לא חסרה סחורה</b>. אם תיקלט כך, התעודה תישמר פתוחה עם פער שאין מה לעשות איתו.</div>' +
+      fixBtn + '</div>';
+  }
+  return '<div class="rounded-2xl border-2 border-rose-400 bg-rose-50 p-4 mt-3">' +
+    '<div class="text-lg font-black text-rose-900 leading-tight"><i class="fa-solid fa-circle-exclamation ml-2"></i>הסכום שהוקלד אינו הסכום שבתעודה</div>' +
+    '<div class="text-sm font-bold text-rose-900 mt-2 leading-relaxed">בתחילת הקליטה הוקלד ₪' + fmtMoney(state.typed) +
+      ', ומהנייר נקרא "נטו לחיוב" ₪' + fmtMoney(state.paperTotal) + ' — הפרש של ₪' + fmtMoney(Math.abs(state.gap)) + '.' +
+      ' כל השוואה נוספת נמדדת מול המספר שהוקלד, ולכן כדאי לתקן אותו לפני הקליטה.</div>' +
+    fixBtn + '</div>';
+}
+// v50: תיקון העוגן בלחיצה — סכומי התעודות נלקחים ממה שנקרא בנייר, והמסך
+// כולו מחושב מחדש מאותה קריאת AI (בלי צילום מחדש ובלי קריאה נוספת לשרת).
+function aiApplyReadNoteTotals(confirmed) {
+  const state = aiAnchorMismatchState(aiScanEvaluation);
+  if (!state) { showToast('אין מה לתקן — הסכום שהוקלד תואם לנייר', null, null, 2400); return; }
+  // כשהפער אינו המע״מ, אין לאפליקציה דרך לדעת מי צודק — ההקלדה או הקריאה.
+  // לכן היא לא מחליפה מספר שהוקלד ביד בלי אישור מפורש.
+  if (!state.vatLine && !confirmed) {
+    showConfirm('להחליף את הסכום שהוקלד?',
+      'הוקלד ₪' + fmtMoney(state.typed) + ' ומהנייר נקרא ₪' + fmtMoney(state.paperTotal) +
+      '. ודא מול "נטו לחיוב" שבתחתית התעודה מי מהם נכון — ההחלפה משנה את הסכום שהכול נמדד מולו.',
+      'החלף ל-₪' + fmtMoney(state.paperTotal), function () { aiApplyReadNoteTotals(true); });
+    return;
+  }
+  const bySummary = new Map();
+  state.summaries.forEach(s => bySummary.set(Number(s.noteIndex), r2(Number(s.subtotal) || 0)));
+  const before = r2(Number(receiptNoteTotal) || 0);
+  receiptNotes = receiptNotes.map((raw, i) => {
+    const n = normNote(raw);
+    return bySummary.has(i) ? { amount: bySummary.get(i), units: n.units, lines: n.lines } : n;
+  });
+  recomputeNoteTotal();
+  (aiScanDocuments || []).forEach((doc, i) => { if (doc && bySummary.has(i)) doc.amount = bySummary.get(i); });
+  saveReceiptDraft();
+  aiRefreshScanEvaluation();
+  renderReconcile();
+  showToast('סכום התעודה תוקן: ₪' + fmtMoney(before) + ' ← ₪' + fmtMoney(receiptNoteTotal), null, null, 3200);
+}
 function aiPriceGapContext(ev) {
   const rows = aiPriceBreakdownRows();
   if (!rows.length) return null;
@@ -10709,8 +10838,20 @@ function aiSimpleSummaryHtml(ev, opts) {
   const surpluses = findings.filter(f => String(f.type) === 'surplus');
   const explained = !!opts.gapExplained;
   const allGood = !!opts.allGood;
+  const anchor = opts.anchor || null;
   let tone, icon, title, subtitle;
-  if (allGood) {
+  // v50: כשהסכום שהוקלד אינו הסכום שבנייר, שום דבר אחר אינו "תקין" — כל
+  // ההשוואות נמדדות מול מספר שגוי. הכותרת אומרת את זה ראשונה, כי המשפט
+  // "הכול בסדר, אפשר לקלוט" מעל פער של ₪133 הוא בדיוק מה שגרם לתעודה
+  // להיסגר בביטחון ולהישמר פתוחה.
+  if (anchor) {
+    tone = { box: 'bg-rose-50 border-rose-300', head: 'text-rose-900', sub: 'text-rose-800' };
+    icon = 'fa-circle-exclamation';
+    title = anchor.vatLine ? 'הוקלד סכום כולל מע״מ' : 'הסכום שהוקלד לא תואם לתעודה';
+    subtitle = anchor.vatLine
+      ? 'הוקלד ₪' + fmtMoney(anchor.typed) + ' (סה״כ לתשלום) במקום ₪' + fmtMoney(anchor.paperTotal) + ' (נטו לחיוב). תקן למטה — הסחורה עצמה תואמת.'
+      : 'הוקלד ₪' + fmtMoney(anchor.typed) + ' ובנייר כתוב ₪' + fmtMoney(anchor.paperTotal) + '. תקן את הסכום למטה לפני הקליטה.';
+  } else if (allGood) {
     tone = { box: 'bg-emerald-50 border-emerald-300', head: 'text-emerald-900', sub: 'text-emerald-800' };
     icon = 'fa-circle-check'; title = 'הכול תקין';
     subtitle = 'כל מה שקיבלת תואם לתעודה של ברמן. אפשר לקלוט.';
@@ -11340,9 +11481,13 @@ function aiInvoiceCaptureHtml() {
     // מאז הסיכום הפשוט אומר בדיוק מה יקרה ומציג את ההבדלים בכתב גדול, ולכן
     // "כן, זה נכון" ואחריו "קלוט את התעודה" הם אותה לחיצה על אותו מסך פעמיים.
     // כפתור אחד עושה את שניהם; "לא נכון — צלם שוב" נשאר הדרך אחורה.
+    // v50: אי-התאמה בין הסכום שהוקלד לסכום שבנייר מורידה את הכפתור הירוק.
+    // "קלוט את התעודה" בירוק הוא הבטחה שהתעודה תיסגר; כשהעוגן שגוי היא לא
+    // תיסגר, ולכן הכפתור אומר את האמת — קליטה עם הפרש פתוח.
+    const anchorState = (function () { try { return aiAnchorMismatchState(ev); } catch (anchorError) { return null; } })();
     const primaryHtml = ev.valid
       ? '<button data-role="ai-apply" class="btn-tap w-full bg-emerald-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-check ml-1"></i>קלוט את התעודה</button>'
-      : (gapExplanationHtml
+      : ((gapExplanationHtml && !anchorState)
         ? '<button data-role="ai-close-receipt" class="btn-tap w-full bg-emerald-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-circle-check ml-1"></i>קלוט את התעודה</button>'
         : '<button data-role="ai-close-receipt" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-file-circle-exclamation ml-1"></i>קלוט ותטפל בהפרש אחר כך</button>');
     const actionsHtml = '<div class="mt-4 space-y-2">' + primaryHtml +
@@ -11357,17 +11502,19 @@ function aiInvoiceCaptureHtml() {
       catch (lineError) { return ''; }
     })();
     const simpleHtml = aiSafeBlock('סיכום', () => aiSimpleSummaryHtml(ev, {
-      allGood,
+      allGood: allGood && !anchorState,
       gapExplained: !!gapExplanationHtml,
-      explainedLine
+      explainedLine,
+      anchor: anchorState
     }));
+    const anchorHtml = aiSafeBlock('סכום התעודה שהוקלד', () => aiAnchorMismatchHtml(anchorState));
     const detailsToggle = '<button data-role="ai-toggle-details" class="btn-tap w-full mt-3 bg-white border-2 border-slate-200 text-slate-600 rounded-2xl py-3 font-black text-base flex items-center justify-center gap-2">' +
       '<i class="fa-solid fa-circle-question"></i>' + (aiDetailsOpen ? 'סגור את ההסבר' : 'רוצה הסבר מה קרה בתעודה? לחץ כאן') + '</button>';
     const detailsBody = aiDetailsOpen
       ? '<div class="space-y-2 mt-3 pt-3 border-t-2 border-slate-100">' + statusHtml + findingsHtml + autoNote + '</div>'
       : '';
-    return '<div class="bg-white rounded-2xl border-2 ' + (ev.valid ? 'border-violet-300' : 'border-amber-300') + ' p-4 shadow-sm mb-24">' +
-      simpleHtml + actionsHtml + detailsToggle + detailsBody + '</div>';
+    return '<div class="bg-white rounded-2xl border-2 ' + (anchorState ? 'border-rose-300' : (ev.valid ? 'border-violet-300' : 'border-amber-300')) + ' p-4 shadow-sm mb-24">' +
+      simpleHtml + anchorHtml + actionsHtml + detailsToggle + detailsBody + '</div>';
   }
   const docCards = aiScanDocuments.map((doc, i) => {
     const noteText = 'סכום צפוי: ₪' + fmtMoney(doc.amount || 0) + (doc.units != null ? ' · ' + doc.units + ' יחידות' : '');
@@ -12495,6 +12642,23 @@ function reconcileSetPriceLive(productId, val) {
   const l = (reconcileData || []).find(x => x.productId === productId); if (!l) return;
   const n = parseFloat((val || '').toString().replace(/[^0-9.]/g, '')); l.price = isFinite(n) ? n : 0; reconcileDetectiveRoundingGap = null; refreshReconcileHeader();
 }
+// v50: המרת סכומי תעודות הספק שהוקלדו מ"כולל מע״מ" ל"נטו לחיוב". כשיש כמה
+// תעודות ספק כל אחת מומרת בנפרד — כל אחת מהן הוקלדה מאותה שורה שגויה.
+function convertNoteTotalsToNet(rate) {
+  if (!receiptNotes.length) return;
+  const useRate = Number(rate) > 0 ? Number(rate) : VAT;
+  receiptNotes = receiptNotes.map(raw => {
+    const n = normNote(raw);
+    return { amount: r2(n.amount / (1 + useRate)), units: n.units, lines: n.lines };
+  });
+  recomputeNoteTotal();
+  (aiScanDocuments || []).forEach((doc, i) => {
+    const n = receiptNotes[i] ? normNote(receiptNotes[i]) : null;
+    if (doc && n) doc.amount = n.amount;
+  });
+  saveReceiptDraft();
+  if (aiScanResponse) { try { aiRefreshScanEvaluation(); } catch (refreshError) {} }
+}
 function saveReconciledReceipt(opts) {
   opts = opts || {};
   if (!reconcileData) return;
@@ -12504,6 +12668,19 @@ function saveReconciledReceipt(opts) {
   }
   if (!opts.skipGap && (receiptNoteTotal != null || receiptNoteUnits != null)) {
     const g = reconcileGap(), ug = reconcileUnitsGap(), moneyBalanced = reconcileMoneyBalanced();
+    // v50: הפער ששווה בדיוק למע״מ אינו "הפרש לא מוסבר" — הוא מספר שהוקלד
+    // משורה אחת נמוך מדי בתחתית התעודה. אומרים את זה בשמו ומציעים לתקן,
+    // במקום לשמור תעודה פתוחה עם פער שאין לו טיפול.
+    const vatOnly = (!moneyBalanced && !(ug != null && ug !== 0))
+      ? vatOnlyGapNet(receiptNoteTotal, r2(reconcileNoteInc() - (Number(reconcileSupplierDiscount) || 0)), vatRateForNewDocument(activeReceiptDate())) : null;
+    if (vatOnly) {
+      showConfirm('הוקלד סכום כולל מע״מ',
+        'סכום התעודה שהוקלד (₪' + fmtMoney(receiptNoteTotal) + ') הוא "סה״כ לתשלום" כולל מע״מ. "נטו לחיוב" הוא ₪' + fmtMoney(vatOnly.net) +
+        ', וההפרש ₪' + fmtMoney(vatOnly.vat) + ' הוא בדיוק המע״מ (' + vatOnly.pctTxt + ') — לא חסרה סחורה. לתקן את הסכום ולקלוט?',
+        'תקן ל-₪' + fmtMoney(vatOnly.net) + ' וקלוט',
+        function () { convertNoteTotalsToNet(vatOnly.rate); saveReconciledReceipt({ skipChecked: true }); });
+      return;
+    }
     if (!moneyBalanced || (ug != null && ug !== 0)) {
       const parts = [];
       if (!moneyBalanced) parts.push('הפרש סכום ₪' + fmtMoney(Math.abs(g)) + ' (' + (g > 0 ? 'חסר' : 'עודף') + ')');
@@ -12704,6 +12881,28 @@ function receiptFixRowHtml(l) {
     (ls.locked ? '<div class="mt-2 text-[10px] font-bold text-indigo-600"><i class="fa-solid fa-lock"></i> הכמויות נעולות כדי לשמור על הקיזוז שאושר מול התעודה השנייה</div>' : '') +
   '</div>';
 }
+// v50: הסכום שהוקלד בתחתית תעודת הספק היה עד היום מספר נעול. תעודה שנפתחה
+// בגלל הקלדה שגויה (למשל "סה״כ לתשלום" במקום "נטו לחיוב") לא הייתה ניתנת
+// לסגירה בשום דרך — אף תיקון כמות לא סוגר פער שמקורו בעוגן עצמו.
+function receiptFixPaperNet() {
+  const paperValue = r2((receiptFix.items || []).reduce((a, l) => a + lineTotalFromUnit(l.unitPrice, l.noteQty != null ? l.noteQty : l.qty), 0));
+  return r2(paperValue - (Number(receiptFix.supplierDiscount) || 0));
+}
+function receiptFixVatSuspect() {
+  if (!receiptFix || receiptFix.noteTotalInc == null) return null;
+  const rc = receipts.find(x => x.id === receiptFix.id);
+  return vatOnlyGapNet(receiptFix.noteTotalInc, receiptFixPaperNet(), vatRateForDoc(rc));
+}
+function receiptFixVatHintHtml() {
+  const v = receiptFixVatSuspect();
+  if (!v) return '';
+  return '<div class="mt-2 rounded-xl bg-rose-50 border-2 border-rose-300 p-2.5">' +
+    '<div class="font-black text-rose-900 text-sm"><i class="fa-solid fa-circle-exclamation"></i> הפער שווה בדיוק למע״מ (' + v.pctTxt + ')</div>' +
+    '<div class="text-[11px] font-bold text-rose-900 mt-1 leading-relaxed">נראה שהוקלד "סה״כ לתשלום" (כולל מע״מ) במקום "נטו לחיוב". הנטו הוא ₪' + fmtMoney(v.net) +
+      ', וההפרש ₪' + fmtMoney(v.vat) + ' הוא המע״מ — לא חסרה סחורה.</div>' +
+    '<button data-role="rc-fix-note-vat" class="btn-tap w-full mt-2 bg-rose-600 text-white rounded-xl py-2.5 font-black text-sm">תקן ל-₪' + fmtMoney(v.net) + ' (נטו לחיוב)</button>' +
+  '</div>';
+}
 function renderReceiptFix() {
   if (!receiptFix) { setView('receiptsHistory'); return; }
   const t = receiptFixTotals();
@@ -12712,9 +12911,11 @@ function renderReceiptFix() {
   app.innerHTML =
     '<div class="px-1 py-1 mb-2"><h2 class="font-black text-2xl text-slate-800">עריכת תעודה</h2><div class="text-xs text-slate-400 mt-0.5">עדכן כמה התקבל בפועל וכמה רשום בתעודת הנייר — ההפרש (חסר/עודף) יחושב אוטומטית</div></div>' +
     '<div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm mb-3">' +
-      (receiptFix.noteTotalInc != null ? '<div class="flex justify-between text-sm font-bold text-slate-600"><span>סכום התעודה (ללא מע״מ)</span><span>₪' + fmtMoney(receiptFix.noteTotalInc) + '</span></div>' : '') +
+      (receiptFix.noteTotalInc != null ? '<div class="flex items-center justify-between gap-2 text-sm font-bold text-slate-600"><span>סכום התעודה — נטו לחיוב (ללא מע״מ)</span>' +
+        '<span class="flex items-center gap-1 shrink-0">₪<input data-role="rc-fix-note-total" type="text" inputmode="decimal" value="' + priceFieldVal(receiptFix.noteTotalInc) + '" class="w-24 h-9 text-center font-black border-2 border-slate-200 rounded-lg outline-none focus:border-blue-500"></span></div>' : '') +
       '<div class="flex justify-between text-sm font-bold text-slate-800 mt-1"><span>סה"כ שהתקבל (ללא מע"מ)</span><span id="rfInc">₪' + fmtMoney(t.ex) + '</span></div>' +
       '<div id="rfStatus" class="mt-1.5 pt-1.5 border-t border-slate-100 text-sm font-black ' + (open ? 'text-rose-600' : 'text-emerald-600') + '">' + (open ? '<i class="fa-solid fa-triangle-exclamation"></i> ' + gapTxt : '<i class="fa-solid fa-circle-check"></i> הכל תואם — אפשר לסגור') + '</div>' +
+      '<div id="rfVatHint">' + receiptFixVatHintHtml() + '</div>' +
     '</div>' +
     '<div class="space-y-2 mb-3">' + (receiptFix.items || []).map(receiptFixRowHtml).join('') + '</div>' +
     '<div class="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm mb-24">' +
@@ -12734,6 +12935,35 @@ function refreshReceiptFixHeader() {
   const gapTxt = openLines ? openLines + ' שורות עם הפרש' : (di.unresolvedUnitsGap ? 'פער של ' + Math.abs(di.unresolvedUnitsGap) + ' יחידות שטרם שויך' : 'פער סכום של ₪' + fmtMoney(Math.abs(di.unresolvedAmountGap || 0)) + ' שטרם שויך');
   const st = $('rfStatus');
   if (st) { st.className = 'mt-1.5 pt-1.5 border-t border-slate-100 text-sm font-black ' + (open ? 'text-rose-600' : 'text-emerald-600'); st.innerHTML = open ? '<i class="fa-solid fa-triangle-exclamation"></i> ' + gapTxt : '<i class="fa-solid fa-circle-check"></i> הכל תואם — אפשר לסגור'; }
+  const hint = $('rfVatHint'); if (hint) hint.innerHTML = receiptFixVatHintHtml();
+}
+function receiptFixSetNoteTotalLive(val) {
+  if (!receiptFix) return;
+  // שדה ריק באמצע הקלדה אינו "תעודה בלי סכום" — הערך הקודם נשמר עד
+  // שמוקלד מספר תקין, כדי שהמסך לא יקפוץ לפער ענק בין תו לתו.
+  const v = parseNoteVal(val);
+  if (v == null || !(v >= 0)) return;
+  receiptFix.noteTotalInc = r2(v);
+  refreshReceiptFixHeader();
+}
+// v50: המרת סכום התעודה השמורה מ"כולל מע״מ" לנטו, כולל פיצול לכמה תעודות
+// ספק — כל תעודה מומרת ביחס שלה, והאגורה האחרונה יושבת על התעודה האחרונה.
+function receiptFixApplyVatNet() {
+  const v = receiptFixVatSuspect();
+  if (!v || !receiptFix) return;
+  const before = r2(Number(receiptFix.noteTotalInc) || 0);
+  receiptFix.noteTotalInc = v.net;
+  const parts = Array.isArray(receiptFix.noteParts) ? receiptFix.noteParts.map(normNote) : [];
+  if (parts.length && before > 0) {
+    let running = 0;
+    receiptFix.noteParts = parts.map((p, i) => {
+      const amount = i === parts.length - 1 ? r2(v.net - running) : r2(p.amount * v.net / before);
+      running = r2(running + amount);
+      return { amount, units: p.units, lines: p.lines };
+    });
+  }
+  renderReceiptFix();
+  showToast('סכום התעודה תוקן: ₪' + fmtMoney(before) + ' ← ₪' + fmtMoney(v.net), null, null, 3200);
 }
 function receiptFixStepQty(productId, delta) {
   if (receiptFixLineState(productId).locked) { showToast('השורה נעולה כי קוזזה מול תעודה אחרת', null, null, 2200); return; }
@@ -12820,6 +13050,12 @@ async function saveReceiptFix() {
     : r2(Math.max(0, calculatedEx - (Number(di.overVal) || 0)));
   const receiptVatRate = vatRateForDoc(originalReceipt);
   const updateData = { items, count: items.length, vatPct: r2(receiptVatRate * 100), totalExVat: payableEx, totalIncVat: r2(payableEx * (1 + receiptVatRate)), receivedExVat: calculatedEx, grossExVat: grossEx, calculatedExVat: calculatedEx, roundingAdjustment, aiAudit, monthEndRebates: monthEndSnapshotForLines(items, storedReceiptDate(originalReceipt)), unresolvedAmountGap: r2(Number(di.unresolvedAmountGap) || 0), unresolvedUnitsGap: Number(di.unresolvedUnitsGap) || 0, status: open ? 'open' : 'ok' };
+  // v50: סכום התעודה ניתן לעריכה במסך התיקון, ולכן הוא נשמר יחד עם השאר —
+  // בלעדיו התיקון היה נעלם בפתיחה הבאה והתעודה הייתה נפתחת שוב עם אותו פער.
+  if (receiptFix.noteTotalInc != null) {
+    updateData.noteTotalInc = r2(Number(receiptFix.noteTotalInc) || 0);
+    updateData.noteParts = (Array.isArray(receiptFix.noteParts) ? receiptFix.noteParts.map(normNote) : []);
+  }
   const opId = makeOperationId('receipt_fix');
   const saved = await runCloudTask('save receipt fix', { op: 'update', path: dataPath('receipts', id), data: updateData, operationId: opId });
   if (!saved) return;
@@ -13745,6 +13981,17 @@ function renderReceiptsHistory() {
           (di.unresolvedUnitsGap ? '<div class="flex justify-between text-rose-700 font-black"><span>פער יחידות שטרם שויך</span><span>' + Math.abs(di.unresolvedUnitsGap) + ' (' + (di.unresolvedUnitsGap > 0 ? 'חסרות' : 'עודפות') + ')</span></div>' : '') +
           (di.amountGapOpen ? '<div class="flex justify-between text-rose-700 font-black"><span>פער סכום שטרם שויך</span><span>₪' + fmtMoney(Math.abs(di.unresolvedAmountGap)) + '</span></div>' : '') +
           (rc.noteTotalInc != null ? '<div class="mt-1 pt-1 border-t border-rose-200 text-rose-700/80">תעודת ספק ₪' + fmtMoney(rc.noteTotalInc) + (rc.noteParts && rc.noteParts.length > 1 ? ' (' + rc.noteParts.map(x => '₪' + fmtMoney(normNote(x).amount)).join(' + ') + ')' : '') + ' · לתשלום ₪' + fmtMoney(payableEx) + '</div>' : '') +
+          // v50: פער שהוא בדיוק המע״מ אינו סחורה חסרה אלא שורה שגויה שהוקלדה
+          // מתחתית התעודה. בלי המשפט הזה התעודה נראית כמו חוסר של ₪133 שאין
+          // לו טיפול, ונשארת פתוחה לנצח.
+          (di.amountGapOpen ? (function () {
+            const v = vatOnlyGapNet(rc.noteTotalInc, receiptPaperNetValue(rc), vatRateForDoc(rc));
+            if (!v) return '';
+            return '<div class="mt-2 bg-white/80 border border-rose-300 rounded-lg p-2">' +
+              '<div class="font-black text-rose-900">הפער שווה בדיוק למע״מ (' + v.pctTxt + ') — לא חסרה סחורה</div>' +
+              '<div class="font-bold text-rose-900/90 leading-relaxed mt-0.5">נראה שבקליטה הוקלד "סה״כ לתשלום" (₪' + fmtMoney(rc.noteTotalInc) + ') במקום "נטו לחיוב" (₪' + fmtMoney(v.net) + ').' +
+              ' פתח "תקן הפרשים", תקן את סכום התעודה — והתעודה תיסגר.</div></div>';
+          })() : '') +
         '</div>' : '') +
         ((!di.amountGapOpen && Math.round(Math.abs(di.unresolvedAmountGap || 0) * 100) > 0) ? '<div class="mt-2 bg-blue-50 border border-blue-200 rounded-xl p-2.5 text-xs text-blue-800"><div class="font-black"><i class="fa-solid fa-calculator"></i> פער עיגול נסבל: ₪' + fmtMoney(Math.abs(di.unresolvedAmountGap)) + ' · סך היחידות תואם</div></div>' : '') +
         aiHistoryHtml +
@@ -16443,6 +16690,7 @@ app.addEventListener('input', (e) => {
   if (role === 'rc-fix-qty') { receiptFixSetQtyLive(t.dataset.id, t.value); return; }
   if (role === 'rc-fix-note') { receiptFixSetNoteLive(t.dataset.id, t.value); return; }
   if (role === 'rc-fix-price') { receiptFixSetPriceLive(t.dataset.id, t.value); return; }
+  if (role === 'rc-fix-note-total') { receiptFixSetNoteTotalLive(t.value); return; }
   if (role === 'rv-note') { rvSetNoteLive(parseInt(t.dataset.id, 10), t.value); return; }
   if (role === 'rv-price') { rvSetPriceLive(parseInt(t.dataset.id, 10), t.value); return; }
   if (role === 're-qty') { retEditSetQtyLive(parseInt(t.dataset.id, 10), t.value); return; }
@@ -16598,6 +16846,7 @@ app.addEventListener('click', (e) => {
   if (role === 'ai-toggle-details') { aiDetailsOpen = !aiDetailsOpen; renderReconcile(); return; } // v43
   if (role === 'ai-apply') { aiApplyInvoiceResult(); return; }
   // v45: סגירה ממסך הסריקה — קודם מתעדים מה בדיוק חסר, ואז שומרים.
+  if (role === 'ai-fix-note-total') { aiApplyReadNoteTotals(); return; }
   if (role === 'ai-close-receipt') { aiRecordFindingsAsPaperQty(aiScanEvaluation); aiRecordPromoOnPaperPrices(aiScanEvaluation); saveReconciledReceipt(); return; }
   if (role === 'admin-login') { requireAdmin('כניסת מנהל', () => { if (currentView === 'settings') renderSettings(); }); return; }
   if (role === 'admin-logout') { exitAdminMode(); return; }
@@ -16925,6 +17174,7 @@ app.addEventListener('click', (e) => {
   else if (role === 'rc-fix-note-plus') receiptFixStepNote(id, 1);
   else if (role === 'rc-fix-promo') receiptFixTogglePromo(id);
   else if (role === 'rc-fix-cancel') { receiptFix = null; setView('receiptsHistory'); }
+  else if (role === 'rc-fix-note-vat') receiptFixApplyVatNet();
   else if (role === 'rc-fix-save') saveReceiptFix();
   else if (role === 'rc-prices') setView('prices');
   else if (role === 'rc-promos') setView('promos');
