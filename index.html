@@ -9341,7 +9341,7 @@ function aiEvaluateInvoiceScan(payload) {
     if (printedUnits != null && isFinite(printedUnits) && Math.round(printedUnits) === docUnits && inputDoc.units != null && docUnits !== Number(inputDoc.units)) {
       warnings.push('תעודה ' + (index + 1) + ': היחידות שנקראו (' + docUnits + ') תואמות לשדה המודפס בתעודה — ייתכן שהיחידות שהוקלדו (' + inputDoc.units + ') שגויות.');
     }
-    docSummaries.push({ noteIndex: index, invoiceNumber: doc.invoiceNumber || '', subtotal: subtotalCents == null ? null : subtotalCents / 100, rowsSum: docRowsCents / 100, units: docUnits, rows: Array.isArray(doc.rows) ? doc.rows.length : 0, documentDiscount: printedDiscountCents == null ? null : printedDiscountCents / 100, confidence: isFinite(docConfidence) ? docConfidence : 0 });
+    docSummaries.push({ noteIndex: index, invoiceNumber: doc.invoiceNumber || '', subtotal: subtotalCents == null ? null : subtotalCents / 100, rowsSum: docRowsCents / 100, units: docUnits, rows: Array.isArray(doc.rows) ? doc.rows.length : 0, documentDiscount: printedDiscountCents == null ? null : printedDiscountCents / 100, confidence: isFinite(docConfidence) ? docConfidence : 0, printedVat: vatCents == null ? null : vatCents / 100, printedInclusive: totalInclCents == null ? null : totalInclCents / 100 });
   });
   // ===== v132: הכרעה אוטומטית של השורות שנותרו, בשני מעברים =====
   // מעבר שני נחוץ כי הצלבת "כמות שנותרה בספירה" משתנה אחרי כל הכרעה.
@@ -9834,6 +9834,12 @@ function bermanAdaptScanPayload(payload) {
     // "נטו לחיוב" המודפס הוא הסכום שסגירת הכסף המקומית נבדקת מולו. אין בברמן
     // הנחת-מסמך נפרדת — ההנחה כבר מגולמת במחיר המוסכם של כל שורה.
     doc.subtotalExVat = doc.netToChargeExVat == null ? null : Number(doc.netToChargeExVat);
+    // v50: שתי שורות הכסף האחרות בבלוק התחתון. הן אינן מאמתות דבר — "נטו
+    // לחיוב" נשאר העוגן היחיד — אבל הן מאפשרות לומר בוודאות איזו שורה
+    // הוקלדה בטעות, במקום להסיק את זה מיחס. שרת ישן שאינו מחזיר אותן
+    // מחזיר null, וההסבר חוזר לזיהוי לפי שיעור המע״מ.
+    doc.vatAmount = doc.vatAmountPrinted == null ? null : Number(doc.vatAmountPrinted);
+    doc.totalInclVat = doc.totalToChargeInclVat == null ? null : Number(doc.totalToChargeInclVat);
     doc.documentDiscountExVat = null;
     doc.printedUnits = doc.totalUnits == null ? null : Number(doc.totalUnits); // "סה"כ כללי" המודפס
     doc.printedLines = doc.printedLines == null ? null : Number(doc.printedLines); // מונה "שורות" המודפס
@@ -10584,22 +10590,42 @@ function aiAnchorMismatchState(ev) {
   const paperTotal = r2(summaries.reduce((sum, s) => sum + Number(s.subtotal || 0), 0));
   const typed = receiptNoteTotal == null ? null : r2(Number(receiptNoteTotal) || 0);
   if (typed == null || moneyDiffCents(typed, paperTotal) === 0) return null;
+  // v50: הראיה החזקה ביותר — שורת "סה הכל תעודה לחיוב" נקראה מהנייר עצמו,
+  // והמספר שהוקלד זהה לה לאגורה. כאן כבר לא מסיקים לפי שיעור מע״מ אלא
+  // אומרים לחנות איזו שורה מתוך שלוש היא לקחה. (שרת ישן אינו מחזיר את
+  // השורה הזאת — ואז נשארת ההשוואה לשיעור המע״מ.)
+  const printedInclusive = summaries.every(s => s.printedInclusive != null)
+    ? r2(summaries.reduce((sum, s) => sum + Number(s.printedInclusive || 0), 0)) : null;
+  const typedIsPrintedInclusive = printedInclusive != null && moneyDiffCents(typed, printedInclusive) === 0;
+  const vat = vatOnlyGapNet(typed, paperTotal, vatRateForNewDocument(activeReceiptDate()));
   return {
     typed, paperTotal, gap: r2(typed - paperTotal), summaries,
-    vat: vatOnlyGapNet(typed, paperTotal, vatRateForNewDocument(activeReceiptDate()))
+    vat, printedInclusive, typedIsPrintedInclusive, vatLine: !!(vat || typedIsPrintedInclusive)
   };
 }
 function aiAnchorMismatchHtml(state) {
   if (!state) return '';
   const fixBtn = '<button data-role="ai-fix-note-total" class="btn-tap w-full mt-2 bg-rose-600 text-white rounded-xl py-3 font-black text-base">' +
-    '<i class="fa-solid fa-wand-magic-sparkles ml-1"></i>' + (state.vat ? 'תקן ל-₪' + fmtMoney(state.paperTotal) + ' (נטו לחיוב)' : 'עדכן לסכום שנקרא מהנייר: ₪' + fmtMoney(state.paperTotal)) + '</button>';
-  if (state.vat) {
+    '<i class="fa-solid fa-wand-magic-sparkles ml-1"></i>' + (state.vatLine ? 'תקן ל-₪' + fmtMoney(state.paperTotal) + ' (נטו לחיוב)' : 'עדכן לסכום שנקרא מהנייר: ₪' + fmtMoney(state.paperTotal)) + '</button>';
+  if (state.vatLine) {
+    // כשגם שורת המע״מ נקראה מהנייר, מציגים את שלוש השורות כפי שהן מודפסות
+    // ומסמנים איזו מהן הוקלדה. זו אינה הערכה — זו התעודה עצמה.
+    const threeLines = state.typedIsPrintedInclusive
+      ? '<div class="mt-2 bg-white/80 rounded-lg p-2 text-[13px] font-black text-slate-800">' +
+        '<div class="flex justify-between"><span>נטו לחיוב (ללא מע״מ)</span><span class="text-emerald-700">₪' + fmtMoney(state.paperTotal) + ' ← זה המספר</span></div>' +
+        (state.summaries.every(s => s.printedVat != null)
+          ? '<div class="flex justify-between text-slate-500"><span>מע״מ</span><span>₪' + fmtMoney(r2(state.summaries.reduce((sum, s) => sum + Number(s.printedVat || 0), 0))) + '</span></div>' : '') +
+        '<div class="flex justify-between"><span>סה״כ לתשלום (כולל מע״מ)</span><span class="text-rose-700">₪' + fmtMoney(state.printedInclusive) + ' ← הוקלד</span></div></div>'
+      : '';
     return '<div class="rounded-2xl border-2 border-rose-400 bg-rose-50 p-4 mt-3">' +
       '<div class="text-lg font-black text-rose-900 leading-tight"><i class="fa-solid fa-circle-exclamation ml-2"></i>הוקלד הסכום <u>כולל</u> מע״מ</div>' +
-      '<div class="text-sm font-bold text-rose-900 mt-2 leading-relaxed">בתחילת הקליטה הוקלד ₪' + fmtMoney(state.typed) +
-        ' — זה "סה״כ לתשלום" שבתחתית התעודה, כולל מע״מ. השורה שצריך להקליד היא "נטו לחיוב", והיא ₪' + fmtMoney(state.paperTotal) + '.</div>' +
+      '<div class="text-sm font-bold text-rose-900 mt-2 leading-relaxed">' + (state.typedIsPrintedInclusive
+        ? 'הסכום שהוקלד (₪' + fmtMoney(state.typed) + ') הוא בדיוק שורת "סה הכל תעודה לחיוב" שנקראה מהתעודה — היא כוללת מע״מ.'
+        : 'בתחילת הקליטה הוקלד ₪' + fmtMoney(state.typed) + ' — זה "סה״כ לתשלום" שבתחתית התעודה, כולל מע״מ.') +
+        ' השורה שצריך להקליד היא "נטו לחיוב", והיא ₪' + fmtMoney(state.paperTotal) + '.</div>' +
+      threeLines +
       '<div class="text-sm font-bold text-rose-900 mt-2 leading-relaxed">ההפרש ₪' + fmtMoney(Math.abs(state.gap)) +
-        ' הוא בדיוק המע״מ (' + state.vat.pctTxt + ') — <b>לא חסרה סחורה</b>. אם תיקלט כך, התעודה תישמר פתוחה עם פער שאין מה לעשות איתו.</div>' +
+        ' הוא המע״מ' + (state.vat ? ' (' + state.vat.pctTxt + ')' : '') + ' — <b>לא חסרה סחורה</b>. אם תיקלט כך, התעודה תישמר פתוחה עם פער שאין מה לעשות איתו.</div>' +
       fixBtn + '</div>';
   }
   return '<div class="rounded-2xl border-2 border-rose-400 bg-rose-50 p-4 mt-3">' +
@@ -10616,7 +10642,7 @@ function aiApplyReadNoteTotals(confirmed) {
   if (!state) { showToast('אין מה לתקן — הסכום שהוקלד תואם לנייר', null, null, 2400); return; }
   // כשהפער אינו המע״מ, אין לאפליקציה דרך לדעת מי צודק — ההקלדה או הקריאה.
   // לכן היא לא מחליפה מספר שהוקלד ביד בלי אישור מפורש.
-  if (!state.vat && !confirmed) {
+  if (!state.vatLine && !confirmed) {
     showConfirm('להחליף את הסכום שהוקלד?',
       'הוקלד ₪' + fmtMoney(state.typed) + ' ומהנייר נקרא ₪' + fmtMoney(state.paperTotal) +
       '. ודא מול "נטו לחיוב" שבתחתית התעודה מי מהם נכון — ההחלפה משנה את הסכום שהכול נמדד מולו.',
@@ -10821,8 +10847,8 @@ function aiSimpleSummaryHtml(ev, opts) {
   if (anchor) {
     tone = { box: 'bg-rose-50 border-rose-300', head: 'text-rose-900', sub: 'text-rose-800' };
     icon = 'fa-circle-exclamation';
-    title = anchor.vat ? 'הוקלד סכום כולל מע״מ' : 'הסכום שהוקלד לא תואם לתעודה';
-    subtitle = anchor.vat
+    title = anchor.vatLine ? 'הוקלד סכום כולל מע״מ' : 'הסכום שהוקלד לא תואם לתעודה';
+    subtitle = anchor.vatLine
       ? 'הוקלד ₪' + fmtMoney(anchor.typed) + ' (סה״כ לתשלום) במקום ₪' + fmtMoney(anchor.paperTotal) + ' (נטו לחיוב). תקן למטה — הסחורה עצמה תואמת.'
       : 'הוקלד ₪' + fmtMoney(anchor.typed) + ' ובנייר כתוב ₪' + fmtMoney(anchor.paperTotal) + '. תקן את הסכום למטה לפני הקליטה.';
   } else if (allGood) {
