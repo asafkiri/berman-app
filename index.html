@@ -728,7 +728,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '52'; // גרסה 52: סיבולת העיגול הורחבה — שתי אגורות לשורה, ועד 30 אג' לתעודה
+const APP_VERSION = '53'; // גרסה 53: "לא מצליח לסרוק" מחפש גם לפי שם המוצר, לא רק לפי קוד
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -5027,26 +5027,60 @@ function proceedScannedProduct(p, target) {
   if (!(productListPrice(p) > 0) && !(Number(p.price) > 0)) { promptSetPrice(p, target); return; }
   promptQty(p, target);
 }
-// הקלדה ידנית של סיומת ברקוד — כשהסורק לא קורא
+// v53: חיפוש לפי שם, לצד הקוד. הסורק שלא קורא הוא רק חצי מהבעיה — החצי
+// השני הוא תעודה שהקוד בה מרוח או מוסתר בסימון עט, ואז השם הוא מה שיש.
+// שדה אחד חכם ולא בורר מצבים: מה שהוקלד מחליט. ספרות בלבד → קוד/ברקוד,
+// בדיוק כמו קודם; יש בו אות → חיפוש שם. אי אפשר להיות במצב הלא נכון.
+function receivingSearchMatches(qRaw) {
+  const raw = String(qRaw || '').trim();
+  const digits = raw.replace(/[^0-9]/g, '');
+  const isNameQuery = /[^\s\d]/.test(raw);
+  if (!isNameQuery) {
+    if (digits.length < 2) return { mode: 'code', q: digits, list: [], tooShort: true };
+    const list = products.filter(p => productCode(p) === digits || productCode(p).indexOf(digits) === 0 || (digits.length >= 4 && (p.barcode || '').endsWith(digits))).slice(0, 6);
+    return { mode: 'code', q: digits, list, tooShort: false };
+  }
+  if (raw.length < 2) return { mode: 'name', q: raw, list: [], tooShort: true };
+  // כל מילה שהוקלדה חייבת להימצא — כך "חלומית ארוזה" מצמצם, ולא מרחיב.
+  // הזהות (קוד וברקוד) נכללת בשדה החיפוש, ולכן "חלומית 458" עובד גם הוא.
+  const tokens = aiNormalizeNameForMatch(raw).split(' ').filter(Boolean);
+  const scored = [];
+  products.forEach(p => {
+    const name = aiNormalizeNameForMatch(p.name || '');
+    const hay = name + ' ' + productCode(p) + ' ' + (p.barcode || '');
+    if (!tokens.every(t => hay.indexOf(t) !== -1)) return;
+    // מי שהשם שלו מתחיל במה שהוקלד עולה למעלה — הכוונה הסבירה ביותר.
+    scored.push({ p, rank: name.indexOf(tokens[0]) === 0 ? 0 : 1, name });
+  });
+  scored.sort((a, b) => a.rank - b.rank || a.name.length - b.name.length || a.name.localeCompare(b.name, 'he'));
+  return { mode: 'name', q: raw, list: scored.slice(0, 8).map(x => x.p), tooShort: false };
+}
+function receivingPickRowHtml(p) {
+  return '<button data-role="rc-digits-pick" data-id="' + htmlEscape(p.id) + '" class="btn-tap w-full flex items-center justify-between gap-2 p-2.5 rounded-lg border border-slate-100 bg-slate-50"><div class="min-w-0 text-right"><div class="font-bold text-slate-700 text-sm truncate">' + htmlEscape(p.name || '(ללא שם)') + '</div><div class="text-[11px] text-slate-400">קוד <b class="text-blue-600">' + htmlEscape(productCode(p) || '—') + '</b>' + (p.barcode ? ' · <span dir="ltr">' + htmlEscape(p.barcode) + '</span>' : '') + '</div></div><i class="fa-solid fa-plus text-blue-600"></i></button>';
+}
+// הקלדה ידנית של קוד פריט או שם מוצר — כשהסורק לא קורא
 function refreshReceivingDigits(qRaw) {
   const box = $('rcDigitsList'); if (!box) return;
   clearTimeout(receivingDigitsMissTimer);
-  const q = (qRaw || '').replace(/[^0-9]/g, '');
-  if (q.length < 2) {
+  const res = receivingSearchMatches(qRaw);
+  if (res.tooShort) {
     receivingDigitsMissNotified = '';
-    box.innerHTML = q.length ? '<div class="text-center text-slate-300 py-1 text-[11px] font-bold">הקלד קוד פריט (2–4 ספרות)</div>' : '';
+    box.innerHTML = res.q.length ? '<div class="text-center text-slate-300 py-1 text-[11px] font-bold">הקלד קוד פריט (2–4 ספרות) או שם מוצר</div>' : '';
     return;
   }
-  const list = products.filter(p => productCode(p) === q || (q.length >= 2 && productCode(p).indexOf(q) === 0) || (q.length >= 4 && (p.barcode || '').endsWith(q))).slice(0, 6);
-  if (!list.length) {
-    box.innerHTML = '<div class="text-center text-slate-400 py-2 text-xs font-bold">לא נמצא מוצר עם קוד ' + q + ' (או ברקוד שמסתיים בו)</div>';
-    if (receivingDigitsMissNotified !== q) {
+  if (!res.list.length) {
+    box.innerHTML = res.mode === 'name'
+      ? '<div class="text-center text-slate-400 py-2 text-xs font-bold">לא נמצא מוצר ששמו מכיל "' + htmlEscape(res.q) + '"</div>'
+      : '<div class="text-center text-slate-400 py-2 text-xs font-bold">לא נמצא מוצר עם קוד ' + res.q + ' (או ברקוד שמסתיים בו)</div>';
+    // התרעת "ברקוד לא מזוהה" שייכת לחיפוש קוד בלבד. שם שלא נמצא הוא
+    // בדרך כלל איות חלקי באמצע הקלדה, לא נייר עם קוד שאינו במאגר.
+    if (res.mode === 'code' && receivingDigitsMissNotified !== res.q) {
       receivingDigitsMissTimer = setTimeout(() => {
         const inp = $('rcDigits');
-        const current = ((inp && inp.value) || '').replace(/[^0-9]/g, '');
-        const stillMissing = !products.some(p => productCode(p) === q || productCode(p).indexOf(q) === 0 || (p.barcode || '').endsWith(q));
-        if (current === q && stillMissing) {
-          receivingDigitsMissNotified = q;
+        const current = ((inp && inp.value) || '').trim();
+        const still = receivingSearchMatches(current);
+        if (still.mode === 'code' && still.q === res.q && !still.list.length) {
+          receivingDigitsMissNotified = res.q;
           rejectUnknownReceivingBarcode();
         }
       }, 500);
@@ -5054,9 +5088,7 @@ function refreshReceivingDigits(qRaw) {
     return;
   }
   receivingDigitsMissNotified = '';
-  box.innerHTML = list.map(p => {
-    return '<button data-role="rc-digits-pick" data-id="' + htmlEscape(p.id) + '" class="btn-tap w-full flex items-center justify-between gap-2 p-2.5 rounded-lg border border-slate-100 bg-slate-50"><div class="min-w-0 text-right"><div class="font-bold text-slate-700 text-sm truncate">' + htmlEscape(p.name || '(ללא שם)') + '</div><div class="text-[11px] text-slate-400">קוד <b class="text-blue-600">' + htmlEscape(productCode(p) || '—') + '</b>' + (p.barcode ? ' · <span dir="ltr">' + htmlEscape(p.barcode) + '</span>' : '') + '</div></div><i class="fa-solid fa-plus text-blue-600"></i></button>';
-  }).join('');
+  box.innerHTML = res.list.map(receivingPickRowHtml).join('');
 }
 function receivingDigitsPick(pid) {
   const p = products.find(x => x.id === pid); if (!p) return;
@@ -5365,8 +5397,10 @@ function renderReceiving() {
     '<button data-role="rc-scan" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 font-black text-lg flex items-center justify-center gap-3 shadow-lg mb-2"><i class="fa-solid fa-barcode text-2xl"></i> סרוק פריט לתעודה</button>' +
     '<button data-role="rc-crates" class="btn-tap w-full bg-amber-50 border-2 border-amber-300 text-amber-900 rounded-2xl py-3 font-black text-base flex items-center justify-center gap-2 mb-2"><i class="fa-solid fa-basket-shopping"></i> הוסף לחם בתפזורת</button>' +
     '<details class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4"><summary class="cursor-pointer p-3 font-black text-sm text-slate-600"><i class="fa-solid fa-circle-question text-slate-400"></i> לא מצליח לסרוק?</summary><div class="px-3 pb-3">' +
-      '<div class="text-[11px] font-bold text-slate-400 mb-1.5"><i class="fa-solid fa-keyboard"></i> הסורק לא קורא? הקלד את קוד הפריט שמודפס בתעודה (2–4 ספרות)</div>' +
-      '<input id="rcDigits" type="text" inputmode="numeric" placeholder="למשל: 236" class="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-base font-black text-center outline-none focus:border-blue-500" dir="ltr">' +
+      '<div class="text-[11px] font-bold text-slate-400 mb-1.5"><i class="fa-solid fa-keyboard"></i> הקלד את קוד הפריט שמודפס בתעודה (2–4 ספרות) — <b class="text-slate-500">או חפש לפי שם המוצר</b></div>' +
+      // v53: dir="auto" — הקלדת ספרות נשארת משמאל לימין כמו קודם, ושם
+      // בעברית מסתדר לימין. inputmode הוסר כדי שתהיה גם מקלדת אותיות.
+      '<input id="rcDigits" type="text" placeholder="למשל: 236 או חלומית" class="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-base font-black text-center outline-none focus:border-blue-500" dir="auto" autocomplete="off" autocorrect="off" spellcheck="false">' +
       '<div id="rcDigitsList" class="mt-2 space-y-1"></div>' +
     '</div></details>' +
     '<div class="flex items-center justify-between px-1 mb-2"><div class="font-black text-slate-800">שורות שנקלטו</div><div id="rcCount" class="text-xs text-slate-400">' + receiptList.length + ' שורות</div></div>' +
