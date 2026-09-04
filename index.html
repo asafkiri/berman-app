@@ -15231,6 +15231,8 @@ function updatePromoHint() {
 }
 // ברמן: ייבוא המבצעים מדף הפעילות של תנובה הוסר — מבצעים מוזנים ידנית.
 // (תשתית סריקת ה-AI נשארת רדומה בקוד ותודלק כשיהיה שרת לברמן.)
+// הדגל נמחק בטעות עם הסרת הייבוא — בלעדיו הפונקציה זרקה ReferenceError בכל קריאה.
+let aiPriceStampRan = false;
 function stampResolvedAiPriceFindings() {
   if (aiPriceStampRan || !db || !promos.length || !receipts.length) return;
   aiPriceStampRan = true;
