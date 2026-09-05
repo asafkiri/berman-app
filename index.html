@@ -16300,7 +16300,7 @@ function anLineKey(idx, l) {
 }
 function anNewRow(info) {
   return { key: info.key, name: info.name, barcode: info.barcode, product: info.p || null, inCatalog: !!info.p,
-    recvUnits: 0, recvValue: 0, retUnits: 0, retMid: 0, retEnd: 0, retValue: 0, lastRecv: null, lastRet: null, prices: [], dayRecv: [0, 0, 0, 0, 0, 0, 0], byWeek: {} };
+    recvUnits: 0, recvValue: 0, retUnits: 0, retMid: 0, retEnd: 0, retValue: 0, lastRecv: null, lastRet: null, prices: [], dayRecv: [0, 0, 0, 0, 0, 0, 0], dayRet: [0, 0, 0, 0, 0, 0, 0], byWeek: {} };
 }
 
 // --- בניית השבועות: כל תעודה נכנסת לשבוע שלה, לכל מוצר שורה בכל שבוע ---
@@ -16309,7 +16309,7 @@ function anBuildWeeks(rcs, rets, catalog) {
   const weeks = new Map();
   const wk = (k) => {
     let w = weeks.get(k);
-    if (!w) { w = { key: k, rcCount: 0, retCount: 0, prod: new Map(), dayRecv: [0, 0, 0, 0, 0, 0, 0], recvUnits: 0, recvValue: 0, retUnits: 0, retMid: 0, retEnd: 0, retValue: 0 }; weeks.set(k, w); }
+    if (!w) { w = { key: k, rcCount: 0, retCount: 0, prod: new Map(), dayRecv: [0, 0, 0, 0, 0, 0, 0], dayRet: [0, 0, 0, 0, 0, 0, 0], recvUnits: 0, recvValue: 0, retUnits: 0, retMid: 0, retEnd: 0, retValue: 0 }; weeks.set(k, w); }
     return w;
   };
   const rowFor = (w, l) => { const info = anLineKey(idx, l); if (!info) return null; let r = w.prod.get(info.key); if (!r) { r = anNewRow(info); w.prod.set(info.key, r); } return r; };
@@ -16337,14 +16337,15 @@ function anBuildWeeks(rcs, rets, catalog) {
     const dd = anDocDate(rt); const k = dd ? anWeekOfReturn(dd) : ''; if (!k) return;
     const w = wk(k); w.retCount++;
     const ts = Number(rt.timestamp) || 0, closing = anIsClosing(dd);
+    const g = anDow(dd) === 0 ? 6 : anDow(dd); // סגירה שהוקלדה ביום ראשון נחשבת כשבת של השבוע שנסגר
     const status = rt.credited ? (rt.creditStatus === 'open' ? 'partial' : 'full') : 'pending';
     (rt.items || []).forEach(l => {
       if (anIsDepositLine(l)) return;
       const r = rowFor(w, l); if (!r) return;
       const qty = Number(l.qty) || 0, unit = Number(l.unitPrice) || 0;
       const val = (l.lineTotal != null) ? (Number(l.lineTotal) || 0) : r2(unit * qty);
-      r.retUnits += qty; r.retValue = r2(r.retValue + val); if (closing) r.retEnd += qty; else r.retMid += qty;
-      w.retUnits += qty; w.retValue = r2(w.retValue + val); if (closing) w.retEnd += qty; else w.retMid += qty;
+      r.retUnits += qty; r.retValue = r2(r.retValue + val); if (closing) r.retEnd += qty; else r.retMid += qty; r.dayRet[g] += qty;
+      w.retUnits += qty; w.retValue = r2(w.retValue + val); if (closing) w.retEnd += qty; else w.retMid += qty; w.dayRet[g] += qty;
       if (r.lastRet && dd === r.lastRet.d && ts === r.lastRet.ts) r.lastRet.qty += qty;
       else if (newer(dd, ts, r.lastRet)) r.lastRet = { d: dd, ts, qty, unit, status, closing };
     });
@@ -16355,20 +16356,20 @@ function anBuildWeeks(rcs, rets, catalog) {
 // סכום חלון של שבועות → שורות מוצרים + סיכום
 function anAggregate(weeks, keys) {
   const rows = new Map();
-  const t = { recvUnits: 0, recvValue: 0, retUnits: 0, retMid: 0, retEnd: 0, retValue: 0, rcCount: 0, retCount: 0, weeks: keys.length, dayRecv: [0, 0, 0, 0, 0, 0, 0] };
+  const t = { recvUnits: 0, recvValue: 0, retUnits: 0, retMid: 0, retEnd: 0, retValue: 0, rcCount: 0, retCount: 0, weeks: keys.length, dayRecv: [0, 0, 0, 0, 0, 0, 0], dayRet: [0, 0, 0, 0, 0, 0, 0] };
   const newer = (d, ts, cur) => !cur || d > cur.d || (d === cur.d && ts > cur.ts);
   keys.forEach(k => {
     const w = weeks.get(k); if (!w) return;
     t.rcCount += w.rcCount; t.retCount += w.retCount;
     t.recvUnits += w.recvUnits; t.recvValue = r2(t.recvValue + w.recvValue);
     t.retUnits += w.retUnits; t.retMid += w.retMid; t.retEnd += w.retEnd; t.retValue = r2(t.retValue + w.retValue);
-    for (let g = 0; g < 7; g++) t.dayRecv[g] += w.dayRecv[g];
+    for (let g = 0; g < 7; g++) { t.dayRecv[g] += w.dayRecv[g]; t.dayRet[g] += w.dayRet[g]; }
     w.prod.forEach((pr, key) => {
       let r = rows.get(key);
       if (!r) { r = anNewRow({ key, p: pr.product, name: pr.name, barcode: pr.barcode }); rows.set(key, r); }
       r.recvUnits += pr.recvUnits; r.recvValue = r2(r.recvValue + pr.recvValue);
       r.retUnits += pr.retUnits; r.retMid += pr.retMid; r.retEnd += pr.retEnd; r.retValue = r2(r.retValue + pr.retValue);
-      for (let g = 0; g < 7; g++) r.dayRecv[g] += pr.dayRecv[g];
+      for (let g = 0; g < 7; g++) { r.dayRecv[g] += pr.dayRecv[g]; r.dayRet[g] += pr.dayRet[g]; }
       if (pr.lastRecv && newer(pr.lastRecv.d, pr.lastRecv.ts, r.lastRecv)) r.lastRecv = pr.lastRecv;
       if (pr.lastRet && newer(pr.lastRet.d, pr.lastRet.ts, r.lastRet)) r.lastRet = pr.lastRet;
       r.prices = r.prices.concat(pr.prices);
@@ -16584,6 +16585,44 @@ function anPerWeek(t, n) { return { recvUnits: Math.round(t.recvUnits / n), retU
 function anCmpBox(title, inner) { return '<div class="bg-slate-50 rounded-xl border border-slate-200 px-3 py-2"><div class="text-[11px] font-black text-slate-500 mb-1">' + title + '</div>' + inner + '</div>'; }
 function anNoDataLine(txt) { return '<div class="text-xs font-bold text-slate-400">' + txt + '</div>'; }
 
+// טבלת השוואה: עמודה לתקופה שנבחרה (ראשונה) ולידה התקופות להשוואה. ההפרש הקטן
+// בעמודה הראשונה הוא מול העמודה השנייה.
+function anDeltaSmall(a, b, mode) {
+  if (a == null || b == null || !(b > 0)) return '';
+  const pct = Math.round((a - b) / b * 100);
+  if (Math.abs(pct) < 1) return '<span class="text-[10px] font-black text-slate-400">אותו דבר</span>';
+  const up = pct > 0;
+  const cls = mode === 'lower' ? (up ? 'text-rose-600' : 'text-emerald-700') : (mode === 'higher' ? (up ? 'text-emerald-700' : 'text-rose-600') : 'text-blue-700');
+  return '<span class="text-[10px] font-black ' + cls + '" dir="ltr">' + (up ? '▲' : '▼') + Math.abs(pct) + '%</span>';
+}
+function anUpto(arr, dow) { return (arr || []).slice(0, dow + 1).reduce((a, v) => a + (Number(v) || 0), 0); }
+function anSoFar(t, dow) {
+  if (!t) return null;
+  const recvUnits = anUpto(t.dayRecv, dow), retUnits = anUpto(t.dayRet, dow);
+  return { recvUnits, retUnits, retPct: recvUnits > 0 ? Math.round(retUnits / recvUnits * 1000) / 10 : null, soldUnits: null };
+}
+const AN_CMP_ROWS = [
+  { label: 'הגיע מהספק', get: t => t.recvUnits, fmt: anNum, mode: 'neutral', cls: 'text-blue-800' },
+  { label: 'חזר לספק', get: t => t.retUnits, fmt: anNum, mode: 'lower', cls: 'text-rose-700' },
+  { label: 'אחוז חזרות', get: t => t.retPct, fmt: anPlainPct, noDelta: true, cls: 'text-slate-700' },
+  { label: 'נמכר', get: t => t.soldUnits, fmt: anNum, mode: 'higher', cls: 'text-emerald-700' }
+];
+function anCmpTable(cols, rows) {
+  const head = '<tr><th class="pb-1"></th>' + cols.map((c, i) => '<th class="text-center pb-1 align-bottom"><div class="text-[11px] font-black ' + (i === 0 ? 'text-slate-800' : 'text-slate-500') + '">' + c.h + '</div>' + (c.s ? '<div class="text-[9px] font-bold text-slate-400 whitespace-nowrap">' + c.s + '</div>' : '') + '</th>').join('') + '</tr>';
+  const body = rows.map(r => '<tr class="border-t border-slate-100"><td class="py-1.5 text-right text-[11px] font-black text-slate-600 whitespace-nowrap pl-2">' + r.label + '</td>' +
+    cols.map((c, i) => {
+      const v = c.t ? r.get(c.t) : null;
+      const txt = v == null ? '—' : r.fmt(v);
+      const d = (i === 0 && cols[1] && cols[1].t && !r.noDelta) ? anDeltaSmall(v, r.get(cols[1].t), r.mode) : '';
+      return '<td class="py-1.5 text-center"><div class="text-sm font-black ' + (i === 0 ? r.cls : 'text-slate-500') + '" dir="ltr">' + txt + '</div>' + (d ? '<div class="leading-none">' + d + '</div>' : '') + '</td>';
+    }).join('') + '</tr>').join('');
+  return '<div class="overflow-x-auto"><table class="w-full">' + head + body + '</table></div>';
+}
+function anCmpCard(title, table, notes) {
+  return '<div class="mt-3 bg-slate-50 rounded-xl border border-slate-200 px-3 py-2">' +
+    '<div class="text-xs font-black text-slate-700 mb-1"><i class="fa-solid fa-scale-balanced text-slate-400 ml-1"></i>' + title + '</div>' + table +
+    (notes || []).map(n => '<div class="text-[11px] font-bold text-slate-400 mt-1.5">' + n + '</div>').join('') + '</div>';
+}
 function anStatTile(cls, label, big, small) {
   return '<div class="' + cls + ' rounded-xl py-2.5 px-1 text-center">' +
     '<div class="text-[11px] font-black opacity-80">' + label + '</div>' +
@@ -16618,8 +16657,9 @@ function anTotalsHtml() {
   const perWeek = n > 1 ? anPerWeek(t, n) : null;
   let tiles;
   if (isCur) {
-    tiles = anStatTile('bg-blue-50 border border-blue-100 text-blue-800', 'הגיע עד עכשיו', '₪' + anMoney(t.recvValue), anNum(t.recvUnits) + ' יח׳') +
-      anStatTile('bg-rose-50 border border-rose-100 text-rose-800', 'חזר עד עכשיו', '₪' + anMoney(t.retValue), anNum(t.retUnits) + ' יח׳') +
+    // שבוע פתוח: המספרים הם של השבוע הזה בלבד, מיום ראשון עד היום, ומתאפסים כל שבוע
+    tiles = anStatTile('bg-blue-50 border border-blue-100 text-blue-800', 'הגיע השבוע', '₪' + anMoney(t.recvValue), anNum(t.recvUnits) + ' יח׳ · מראשון עד היום') +
+      anStatTile('bg-rose-50 border border-rose-100 text-rose-800', 'חזר השבוע', '₪' + anMoney(t.retValue), anNum(t.retUnits) + ' יח׳ · מראשון עד היום') +
       anStatTile('bg-slate-50 border border-slate-200 text-slate-500', 'נמכר', '—', 'נדע במוצאי שבת');
   } else {
     tiles = anStatTile('bg-blue-50 border border-blue-100 text-blue-800', 'הגיע מהספק', '₪' + anMoney(t.recvValue), anNum(t.recvUnits) + ' יח׳') +
@@ -16632,33 +16672,35 @@ function anTotalsHtml() {
   const avgLine = perWeek
     ? '<div class="text-[11px] text-slate-500 font-bold mt-1.5 px-1"><i class="fa-solid fa-scale-balanced text-slate-400 ml-1"></i>בממוצע לשבוע: הגיע <b class="text-slate-700">' + anNum(perWeek.recvUnits) + '</b> · חזר <b class="text-slate-700">' + anNum(perWeek.retUnits) + '</b> · נמכר <b class="text-slate-700">' + anNum(perWeek.soldUnits) + '</b> יח׳</div>'
     : '';
-  // השוואות
-  const boxes = [];
+  // השוואה: עמודות זו לצד זו
+  let cmp = '';
   if (isCur) {
     const dow = anDow(todayStr());
-    const upto = (arr) => arr.slice(0, dow + 1).reduce((a, b) => a + b, 0);
-    const now = upto(t.dayRecv), last = upto(d.prevTotals.dayRecv);
-    const ch = anPctChange(now, last);
-    boxes.push(anCmpBox('הגיע עד יום ' + AN_DOW[dow] + ', לעומת אותם ימים בשבוע שעבר',
-      last > 0 || now > 0
-        ? '<div class="flex items-center gap-2 text-xs font-bold ' + (ch == null || Math.abs(ch) < 1 ? 'text-slate-500' : 'text-blue-700') + '"><i class="fa-solid ' + (ch == null || Math.abs(ch) < 1 ? 'fa-equals' : (ch > 0 ? 'fa-arrow-up' : 'fa-arrow-down')) + ' w-4 text-center"></i><span>' + anNum(now) + ' יח׳ השבוע לעומת ' + anNum(last) + ' בשבוע שעבר' + (ch != null && Math.abs(ch) >= 1 ? ' (' + Math.abs(ch) + '% ' + (ch > 0 ? 'יותר' : 'פחות') + ')' : '') + '</span></div>'
-        : anNoDataLine('אין עדיין קליטות השבוע')));
-    boxes.push('<div class="text-[11px] text-amber-700 font-bold px-1"><i class="fa-solid fa-hourglass-half ml-1"></i>השבוע עוד לא נסגר. מה שנשאר יחזור במוצאי שבת, ואז נדע מה נמכר.</div>');
+    const cols = [
+      { h: 'השבוע', s: 'עד יום ' + AN_DOW[dow], t: anSoFar(t, dow) },
+      { h: 'שבוע שעבר', s: 'עד יום ' + AN_DOW[dow], t: anHasPrev() ? anSoFar(d.prevTotals, dow) : null }
+    ];
+    cmp = anCmpCard('השוואה לשבוע שעבר, אותם ימים', anCmpTable(cols, AN_CMP_ROWS.slice(0, 3)), ['השבוע עוד לא נסגר. מה שנשאר יחזור במוצאי שבת, ואז נדע מה נמכר.']);
   } else if (d.single) {
-    const hp = anHasPrev();
-    boxes.push(anCmpBox('לעומת השבוע שלפני (' + anWeekLabel(d.prevKeys[0]) + ')' + (anWeekHolidays(d.prevKeys[0]).length ? ' · ' + anHolidayTag(d.prevKeys[0]) : ''), hp ? '<div class="space-y-1">' + anCompareHtml(t, d.prevTotals, true) + '</div>' : anNoDataLine('אין תעודות מהשבוע ההוא')));
-    const p4 = d.prev4Totals;
-    boxes.push(anCmpBox('לעומת ממוצע 4 השבועות שלפני (' + anShortDM(d.prev4[0]) + ' – ' + anShortDM(anWeekEnd(d.prev4[3])) + ')', (p4.rcCount > 0 || p4.retCount > 0) ? '<div class="space-y-1">' + anCompareHtml(t, anPerWeek(p4, 4), true) + '</div>' : anNoDataLine('אין עדיין 4 שבועות קודמים')));
-    if (d.year) {
-      const y = d.year;
-      boxes.push(anCmpBox('לעומת אותו שבוע לפני שנה (' + anWeekLabel(y.key) + ')' + (anWeekHolidays(y.key).length ? ' · ' + anHolidayTag(y.key) : ''), y.has ? '<div class="space-y-1">' + anCompareHtml(t, y.totals, true) + '</div>' : anNoDataLine('אין עדיין נתונים מהשבוע הזה בשנה שעברה')));
-    }
-    if (anPreset === 'last' && anDow(todayStr()) === 0) boxes.push('<div class="text-[11px] text-amber-700 font-bold px-1"><i class="fa-solid fa-circle-info ml-1"></i>אם החזרת מוצאי שבת עוד לא נרשמה, המספרים חלקיים.</div>');
+    const cols = [
+      { h: anPreset === 'last' ? 'שבוע שעבר' : 'השבוע הזה', s: anWeekLabel(d.start), t },
+      { h: 'השבוע שלפני', s: anWeekLabel(d.prevKeys[0]), t: anHasPrev() ? d.prevTotals : null },
+      { h: 'ממוצע 4 שבועות', s: 'שלפני', t: (d.prev4Totals.rcCount > 0 || d.prev4Totals.retCount > 0) ? anPerWeek(d.prev4Totals, 4) : null }
+    ];
+    const notes = [];
+    if (d.year) { if (d.year.has) cols.push({ h: 'לפני שנה', s: anWeekLabel(d.year.key), t: d.year.totals }); else notes.push('אין עדיין נתונים מאותו שבוע לפני שנה (' + anWeekLabel(d.year.key) + ').'); }
+    const hp = anWeekHolidays(d.prevKeys[0]); if (hp.length) notes.push('בשבוע שלפני היה חג: ' + hp.join(', ') + '.');
+    if (anPreset === 'last' && anDow(todayStr()) === 0) notes.push('אם החזרת מוצאי שבת עוד לא נרשמה, המספרים חלקיים.');
+    notes.push('ההפרש הקטן מתחת למספר הוא מול השבוע שלפני. יחידות.');
+    cmp = anCmpCard('השוואה', anCmpTable(cols, AN_CMP_ROWS), notes);
   } else if (anPreset === 'w4') {
-    boxes.push(anCmpBox('לעומת 4 השבועות שלפני (' + anShortDM(d.prevKeys[0]) + ' – ' + anShortDM(anWeekEnd(d.prevKeys[3])) + ')', anHasPrev() ? '<div class="space-y-1">' + anCompareHtml(t, d.prevTotals, true) + '</div>' : anNoDataLine('אין תעודות מהשבועות ההם')));
+    const cols = [
+      { h: '4 השבועות האלה', s: anShortDM(d.start) + ' – ' + anShortDM(anWeekEnd(d.end)), t },
+      { h: '4 השבועות שלפני', s: anShortDM(d.prevKeys[0]) + ' – ' + anShortDM(anWeekEnd(d.prevKeys[3])), t: anHasPrev() ? d.prevTotals : null }
+    ];
+    cmp = anCmpCard('השוואה', anCmpTable(cols, AN_CMP_ROWS.concat([{ label: 'נמכר בממוצע לשבוע', get: x => Math.round(x.soldUnits / 4), fmt: anNum, mode: 'higher', cls: 'text-emerald-700' }])), ['ההפרש הקטן מתחת למספר הוא מול 4 השבועות שלפני. יחידות.']);
   }
-  return '<div class="grid grid-cols-3 gap-2 mt-3">' + tiles + '</div>' + split + avgLine +
-    (boxes.length ? '<div class="mt-3 space-y-2">' + boxes.join('') + '</div>' : '') +
+  return '<div class="grid grid-cols-3 gap-2 mt-3">' + tiles + '</div>' + split + avgLine + cmp +
     (n > 1 ? anWeekTableHtml() : '') +
     anHelpHtml();
 }
@@ -16887,14 +16929,16 @@ function anSelectedCardHtml() {
         (r.grossProfit != null && !isCur ? line('בתקופה הזו: <b class="' + (r.grossProfit >= 0 ? 'text-emerald-700' : 'text-rose-600') + '">₪' + anMoney(r.grossProfit) + '</b> רווח על ' + anNum(r.soldUnits) + ' יח׳ שנמכרו') : '');
     stats =
       '<div class="grid grid-cols-2 gap-2 mt-3">' +
-        anStatTile('bg-blue-50 border border-blue-100 text-blue-800', isCur ? 'הגיע עד עכשיו' : 'הגיע מהספק', anNum(r.recvUnits) + ' יח׳', '₪' + anMoney(r.recvValue)) +
-        anStatTile('bg-rose-50 border border-rose-100 text-rose-800', isCur ? 'חזר עד עכשיו' : 'חזר לספק', anNum(r.retUnits) + ' יח׳', (r.retUnits > 0 ? 'במהלך השבוע ' + anNum(r.retMid) + ' · במוצאי שבת ' + anNum(r.retEnd) : '₪' + anMoney(r.retValue))) +
+        anStatTile('bg-blue-50 border border-blue-100 text-blue-800', isCur ? 'הגיע השבוע' : 'הגיע מהספק', anNum(r.recvUnits) + ' יח׳', (isCur ? 'מראשון עד היום · ' : '') + '₪' + anMoney(r.recvValue)) +
+        anStatTile('bg-rose-50 border border-rose-100 text-rose-800', isCur ? 'חזר השבוע' : 'חזר לספק', anNum(r.retUnits) + ' יח׳', (r.retUnits > 0 ? 'במהלך השבוע ' + anNum(r.retMid) + ' · במוצאי שבת ' + anNum(r.retEnd) : '₪' + anMoney(r.retValue))) +
         (isCur ? anStatTile('bg-slate-50 border border-slate-200 text-slate-500', 'נמכר', '—', 'נדע במוצאי שבת') : anStatTile('bg-emerald-50 border border-emerald-100 text-emerald-800', 'נמכר', anNum(r.soldUnits) + ' יח׳', '₪' + anMoney(r.soldValue))) +
         (isCur ? anStatTile('bg-slate-50 border border-slate-200 text-slate-700', 'חזרות עד עכשיו', anPctText(r), '') : anStatTile('bg-slate-50 border border-slate-200 text-slate-700', 'אחוז חזרות', anPctText(r), r.retPct != null ? 'ממה שהגיע' : '')) +
       '</div>' +
       (r.grossProfit != null && !isCur ? '' : '') +
       section('fa-scale-balanced', 'ממוצע שבועי (' + anShortDM(d.ref4[0]) + ' – ' + anShortDM(anWeekEnd(d.ref4[3])) + ')', avgInner) +
-      (single && !isCur ? '<div class="mt-2 bg-slate-50 rounded-xl border border-slate-200 px-3 py-2"><div class="text-[11px] font-black text-slate-500 mb-1">לעומת השבוע שלפני (' + anWeekLabel(d.prevKeys[0]) + ')</div>' + (prev ? '<div class="space-y-1">' + anCompareHtml(r, prev, true) + '</div>' : anNoDataLine('לא הגיע ולא חזר בשבוע ההוא')) + '</div>' : '') +
+      (single ? (isCur
+        ? anCmpCard('השוואה לשבוע שעבר, אותם ימים', anCmpTable([{ h: 'השבוע', s: 'עד יום ' + AN_DOW[anDow(todayStr())], t: anSoFar(r, anDow(todayStr())) }, { h: 'שבוע שעבר', s: 'עד יום ' + AN_DOW[anDow(todayStr())], t: prev ? anSoFar(prev, anDow(todayStr())) : null }], AN_CMP_ROWS.slice(0, 3)))
+        : anCmpCard('השוואה', anCmpTable([{ h: anPreset === 'last' ? 'שבוע שעבר' : 'השבוע הזה', s: anWeekLabel(d.start), t: r }, { h: 'השבוע שלפני', s: anWeekLabel(d.prevKeys[0]), t: prev || null }, { h: 'ממוצע 4 שבועות', s: anShortDM(d.ref4[0]) + ' – ' + anShortDM(anWeekEnd(d.ref4[3])), t: (avg && avg.weeksRecv > 0) ? { recvUnits: avg.recv, retUnits: avg.ret, retPct: avg.pct, soldUnits: avg.sold } : null }], AN_CMP_ROWS), prev ? [] : ['לא הגיע ולא חזר בשבוע שלפני.'])) : '') +
       section('fa-truck-ramp-box', 'קליטות וחזרות',
         (days ? line('הגיע לפי ימים: ' + days) : '') +
         (r.lastRecv ? line('הגיע לאחרונה ב-' + dDisp(r.lastRecv.d) + ' <span class="text-xs text-slate-400">(' + AN_DOW[anDow(r.lastRecv.d)] + ', ' + anAgoText(r.lastRecv.d) + ')</span> · ' + anNum(r.lastRecv.qty) + ' יח׳ · ₪' + fmtMoney(r.lastRecv.unit) + ' ליח׳' + (r.lastRecv.promo ? ' <span class="text-[10px] font-black text-violet-700 bg-violet-50 border border-violet-200 rounded px-1 py-0.5">מבצע</span>' : '')) : line('<span class="text-slate-400">לא הגיע בתקופה הזו</span>')) +
@@ -16927,8 +16971,8 @@ function anSummaryText() {
   L.push('🍞 *ניתוח שבועי — ' + AN_APP_NAME + '*');
   L.push('📅 ' + anWindowTitle() + (d.single && anWeekHolidays(d.start).length ? ' · חג: ' + anWeekHolidays(d.start).join(', ') : ''));
   L.push('🧾 ' + t.rcCount + ' תעודות קליטה · ' + t.retCount + ' תעודות חזרה');
-  L.push('📥 הגיע מהספק' + (isCur ? ' עד עכשיו' : '') + ': ' + anNum(t.recvUnits) + ' יח׳ · ₪' + anMoney(t.recvValue));
-  L.push('↩️ חזר לספק' + (isCur ? ' עד עכשיו' : '') + ': ' + anNum(t.retUnits) + ' יח׳ · ₪' + anMoney(t.retValue) + (t.retPct != null && !isCur ? ' (' + anPlainPct(t.retPct) + ' ממה שהגיע)' : '') + (t.retUnits > 0 && !isCur ? ' · במהלך השבוע ' + anNum(t.retMid) + ', במוצאי שבת ' + anNum(t.retEnd) : ''));
+  L.push('📥 הגיע מהספק' + (isCur ? ' השבוע (מראשון עד היום)' : '') + ': ' + anNum(t.recvUnits) + ' יח׳ · ₪' + anMoney(t.recvValue));
+  L.push('↩️ חזר לספק' + (isCur ? ' השבוע (מראשון עד היום)' : '') + ': ' + anNum(t.retUnits) + ' יח׳ · ₪' + anMoney(t.retValue) + (t.retPct != null && !isCur ? ' (' + anPlainPct(t.retPct) + ' ממה שהגיע)' : '') + (t.retUnits > 0 && !isCur ? ' · במהלך השבוע ' + anNum(t.retMid) + ', במוצאי שבת ' + anNum(t.retEnd) : ''));
   if (!isCur) L.push('🛒 נמכר: ' + anNum(t.soldUnits) + ' יח׳ · ₪' + anMoney(t.soldValue));
   else L.push('⏳ השבוע עוד לא נסגר — מה שנשאר יחזור במוצאי שבת');
   if (n > 1) { const pw = anPerWeek(t, n); L.push('📊 בממוצע לשבוע: הגיע ' + anNum(pw.recvUnits) + ' · חזר ' + anNum(pw.retUnits) + ' · נמכר ' + anNum(pw.soldUnits)); }
