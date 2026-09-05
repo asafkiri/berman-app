@@ -16528,7 +16528,37 @@ function anBuild(rcs, rets, keys, yearDocs, lastYearKey, source, truncated) {
     year = { key: lastYearKey, totals: ya.totals, has: ya.totals.rcCount > 0 || ya.totals.retCount > 0 };
   } else if (lastYearKey) year = { key: lastYearKey, totals: null, has: false };
   const chartKeys = Array.from({ length: 12 }, (_, i) => anDateShift(7 * (i - 11), end));
-  anData = { weeks, keys, start, end, single, closed, rows: cur.rows, totals: cur.totals, prevKeys, prevTotals: prev.totals, prevRows: new Map(prev.rows.map(r => [r.key, r])),
+  // האריחים למעלה: החודש הנוכחי, מ-1 בחודש עד היום. "נמכר" רק עד מוצאי שבת האחרון,
+  // כי לחם של השבוע הפתוח עדיין על המדף.
+  const today = todayStr(), monthStart = today.slice(0, 8) + '01', closedEnd = anWeekEnd(lc);
+  const month = { fromD: monthStart, toD: today, closedEnd, recvUnits: 0, recvValue: 0, retUnits: 0, retValue: 0, cRecvUnits: 0, cRecvValue: 0, cRetUnits: 0, cRetValue: 0, rcCount: 0, retCount: 0 };
+  (rcs || []).forEach(rc => {
+    const dd = anDocDate(rc); if (!dd || dd < monthStart || dd > today) return;
+    month.rcCount++;
+    (rc.items || []).forEach(l => {
+      if (anIsDepositLine(l)) return;
+      const qty = Number(l.qty) || 0, unit = Number(l.unitPrice) || 0, val = (l.lineTotal != null) ? (Number(l.lineTotal) || 0) : r2(unit * qty);
+      month.recvUnits += qty; month.recvValue = r2(month.recvValue + val);
+      if (dd <= closedEnd) { month.cRecvUnits += qty; month.cRecvValue = r2(month.cRecvValue + val); }
+    });
+  });
+  (rets || []).forEach(rt => {
+    const raw = anDocDate(rt); if (!raw) return;
+    const dd = anDow(raw) === 0 ? anDateShift(-1, raw) : raw;
+    if (dd < monthStart || dd > today) return;
+    month.retCount++;
+    (rt.items || []).forEach(l => {
+      if (anIsDepositLine(l)) return;
+      const qty = Number(l.qty) || 0, unit = Number(l.unitPrice) || 0, val = (l.lineTotal != null) ? (Number(l.lineTotal) || 0) : r2(unit * qty);
+      month.retUnits += qty; month.retValue = r2(month.retValue + val);
+      if (dd <= closedEnd) { month.cRetUnits += qty; month.cRetValue = r2(month.cRetValue + val); }
+    });
+  });
+  month.hasClosed = closedEnd >= monthStart;
+  month.soldUnits = Math.max(0, month.cRecvUnits - month.cRetUnits);
+  month.soldValue = Math.max(0, r2(month.cRecvValue - month.cRetValue));
+  month.retPct = month.recvUnits > 0 ? Math.round(month.retUnits / month.recvUnits * 1000) / 10 : null;
+  anData = { month, weeks, keys, start, end, single, closed, rows: cur.rows, totals: cur.totals, prevKeys, prevTotals: prev.totals, prevRows: new Map(prev.rows.map(r => [r.key, r])),
     ref4, prev4, prev4Totals: prev4Agg.totals, avg4, missing, steady, year, chartKeys, source, truncated };
 }
 
@@ -16642,6 +16672,7 @@ function anHelpHtml() {
   return '<details class="mt-3 bg-slate-50 rounded-xl border border-slate-200 px-3 py-2">' +
     '<summary class="cursor-pointer text-xs font-black text-slate-600 flex items-center gap-1.5"><i class="fa-solid fa-circle-question text-blue-500"></i> איך לקרוא את המסך?</summary>' +
     '<div class="text-[11px] text-slate-500 font-bold leading-relaxed mt-2 space-y-1.5">' +
+      '<div><b class="text-slate-700">האריחים למעלה</b> הם החודש הנוכחי, מ-1 בחודש עד היום. כל השאר עובד בשבועות.</div>' +
       '<div><b class="text-slate-700">שבוע</b> הוא מראשון עד שבת. <b class="text-slate-700">הגיע מהספק</b> — כל תעודות הקליטה של השבוע. <b class="text-slate-700">חזר לספק</b> — כל ההחזרות של השבוע: מה שחזר במהלך השבוע ומה שנשאר במוצאי שבת.</div>' +
       '<div><b class="text-slate-700">נמכר</b> — הגיע פחות חזר. בשבוע שנסגר זה מספר אמיתי, כי במוצאי שבת חוזר כל מה שנשאר והמדף ריק ביום ראשון.</div>' +
       '<div>תעודת חזרה שתאריכה <b class="text-slate-700">יום ראשון</b> נספרת לשבוע שלפניה (הסגירה של מוצאי שבת שהוקלדה בבוקר). אם סגירה הוקלדה ביום שני, כדאי לתקן את תאריך הנייר לשבת.</div>' +
@@ -16651,21 +16682,25 @@ function anHelpHtml() {
     '</div></details>';
 }
 
+// האריחים למעלה: החודש הנוכחי מ-1 בחודש עד היום, בלי קשר לשבוע שנבחר למטה
+function anMonthTilesHtml() {
+  if (!anData || !anData.month) return '';
+  const m = anData.month;
+  const monthName = new Date(m.toD + 'T12:00:00').toLocaleDateString('he-IL', { month: 'long' });
+  return '<div class="mt-3 flex items-center justify-between gap-2"><div class="text-xs font-black text-slate-700"><i class="fa-solid fa-calendar text-slate-400 ml-1"></i>החודש: ' + monthName + ' · מ-' + dDisp(m.fromD) + ' עד היום</div><div class="text-[10px] font-bold text-slate-400">' + m.rcCount + ' קליטות · ' + m.retCount + ' חזרות</div></div>' +
+    '<div class="grid grid-cols-3 gap-2 mt-2">' +
+      anStatTile('bg-blue-50 border border-blue-100 text-blue-800', 'הגיע החודש', '₪' + anMoney(m.recvValue), anNum(m.recvUnits) + ' יח׳') +
+      anStatTile('bg-rose-50 border border-rose-100 text-rose-800', 'חזר החודש', '₪' + anMoney(m.retValue), anNum(m.retUnits) + ' יח׳' + (m.retPct != null ? ' · ' + anPlainPct(m.retPct) + ' ממה שהגיע' : '')) +
+      (m.hasClosed
+        ? anStatTile('bg-emerald-50 border border-emerald-100 text-emerald-800', 'נמכר החודש', '₪' + anMoney(m.soldValue), anNum(m.soldUnits) + ' יח׳ · עד מוצאי שבת ' + anShortDM(m.closedEnd))
+        : anStatTile('bg-slate-50 border border-slate-200 text-slate-500', 'נמכר החודש', '—', 'נדע במוצאי שבת')) +
+    '</div>' +
+    '<div class="text-[10px] text-slate-400 font-bold mt-1">"נמכר" נספר רק לשבועות שנסגרו, כי הלחם של השבוע הפתוח עדיין על המדף.</div>';
+}
 function anTotalsHtml() {
   if (!anData) return '';
   const d = anData, t = d.totals, n = d.keys.length, isCur = anPreset === 'cur';
   const perWeek = n > 1 ? anPerWeek(t, n) : null;
-  let tiles;
-  if (isCur) {
-    // שבוע פתוח: המספרים הם של השבוע הזה בלבד, מיום ראשון עד היום, ומתאפסים כל שבוע
-    tiles = anStatTile('bg-blue-50 border border-blue-100 text-blue-800', 'הגיע השבוע', '₪' + anMoney(t.recvValue), anNum(t.recvUnits) + ' יח׳ · מראשון עד היום') +
-      anStatTile('bg-rose-50 border border-rose-100 text-rose-800', 'חזר השבוע', '₪' + anMoney(t.retValue), anNum(t.retUnits) + ' יח׳ · מראשון עד היום') +
-      anStatTile('bg-slate-50 border border-slate-200 text-slate-500', 'נמכר', '—', 'נדע במוצאי שבת');
-  } else {
-    tiles = anStatTile('bg-blue-50 border border-blue-100 text-blue-800', 'הגיע מהספק', '₪' + anMoney(t.recvValue), anNum(t.recvUnits) + ' יח׳') +
-      anStatTile('bg-rose-50 border border-rose-100 text-rose-800', 'חזר לספק', '₪' + anMoney(t.retValue), anNum(t.retUnits) + ' יח׳' + (t.retPct != null ? ' · ' + anPlainPct(t.retPct) + ' ממה שהגיע' : '')) +
-      anStatTile('bg-emerald-50 border border-emerald-100 text-emerald-800', 'נמכר', '₪' + anMoney(t.soldValue), anNum(t.soldUnits) + ' יח׳');
-  }
   const split = (t.retUnits > 0 && !isCur)
     ? '<div class="text-[11px] text-slate-500 font-bold mt-2 px-1"><i class="fa-solid fa-rotate-left text-rose-400 ml-1"></i>מזה חזר במהלך השבוע' + (n > 1 ? 'ות' : '') + ': <b class="text-slate-700">' + anNum(t.retMid) + '</b> יח׳ · נשאר במוצאי שבת: <b class="text-slate-700">' + anNum(t.retEnd) + '</b> יח׳</div>'
     : '';
@@ -16700,7 +16735,11 @@ function anTotalsHtml() {
     ];
     cmp = anCmpCard('השוואה', anCmpTable(cols, AN_CMP_ROWS.concat([{ label: 'נמכר בממוצע לשבוע', get: x => Math.round(x.soldUnits / 4), fmt: anNum, mode: 'higher', cls: 'text-emerald-700' }])), ['ההפרש הקטן מתחת למספר הוא מול 4 השבועות שלפני. יחידות.']);
   }
-  return '<div class="grid grid-cols-3 gap-2 mt-3">' + tiles + '</div>' + split + avgLine + cmp +
+  const weekNums = isCur
+    ? '<div class="text-[11px] text-slate-500 font-bold mt-1 px-1">הגיע השבוע (מראשון עד היום): <b class="text-slate-700">' + anNum(t.recvUnits) + '</b> יח׳ · ₪' + anMoney(t.recvValue) + ' · חזר: <b class="text-slate-700">' + anNum(t.retUnits) + '</b> יח׳</div>'
+    : (n === 1 ? '<div class="text-[11px] text-slate-500 font-bold mt-1 px-1">הגיע <b class="text-slate-700">' + anNum(t.recvUnits) + '</b> יח׳ (₪' + anMoney(t.recvValue) + ') · חזר <b class="text-slate-700">' + anNum(t.retUnits) + '</b> יח׳ (₪' + anMoney(t.retValue) + ') · נמכר <b class="text-emerald-700">' + anNum(t.soldUnits) + '</b> יח׳ (₪' + anMoney(t.soldValue) + ')</div>'
+      : '<div class="text-[11px] text-slate-500 font-bold mt-1 px-1">סך הכל: הגיע <b class="text-slate-700">' + anNum(t.recvUnits) + '</b> · חזר <b class="text-slate-700">' + anNum(t.retUnits) + '</b> · נמכר <b class="text-emerald-700">' + anNum(t.soldUnits) + '</b> יח׳ · ₪' + anMoney(t.soldValue) + '</div>');
+  return weekNums + split + avgLine + cmp +
     (n > 1 ? anWeekTableHtml() : '') +
     anHelpHtml();
 }
@@ -16971,6 +17010,7 @@ function anSummaryText() {
   L.push('🍞 *ניתוח שבועי — ' + AN_APP_NAME + '*');
   L.push('📅 ' + anWindowTitle() + (d.single && anWeekHolidays(d.start).length ? ' · חג: ' + anWeekHolidays(d.start).join(', ') : ''));
   L.push('🧾 ' + t.rcCount + ' תעודות קליטה · ' + t.retCount + ' תעודות חזרה');
+  if (d.month) L.push('📆 החודש (מ-' + dDisp(d.month.fromD) + '): הגיע ' + anNum(d.month.recvUnits) + ' יח׳ · חזר ' + anNum(d.month.retUnits) + ' יח׳' + (d.month.hasClosed ? ' · נמכר ' + anNum(d.month.soldUnits) + ' יח׳ (עד מוצאי שבת ' + anShortDM(d.month.closedEnd) + ')' : ''));
   L.push('📥 הגיע מהספק' + (isCur ? ' השבוע (מראשון עד היום)' : '') + ': ' + anNum(t.recvUnits) + ' יח׳ · ₪' + anMoney(t.recvValue));
   L.push('↩️ חזר לספק' + (isCur ? ' השבוע (מראשון עד היום)' : '') + ': ' + anNum(t.retUnits) + ' יח׳ · ₪' + anMoney(t.retValue) + (t.retPct != null && !isCur ? ' (' + anPlainPct(t.retPct) + ' ממה שהגיע)' : '') + (t.retUnits > 0 && !isCur ? ' · במהלך השבוע ' + anNum(t.retMid) + ', במוצאי שבת ' + anNum(t.retEnd) : ''));
   if (!isCur) L.push('🛒 נמכר: ' + anNum(t.soldUnits) + ' יח׳ · ₪' + anMoney(t.soldValue));
@@ -17055,7 +17095,8 @@ function renderAnalysis() {
     '<div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm mb-3">' +
       '<div class="flex items-center justify-between gap-2 mb-1"><div class="flex items-center gap-2 min-w-0"><i class="fa-solid fa-chart-simple text-emerald-600"></i><div class="font-black text-slate-800 text-base">ניתוח שבועי</div></div>' + shareBtns + '</div>' +
       '<div class="text-xs text-slate-500 font-bold mb-3">מה הגיע, מה חזר ומה באמת נמכר. כל שבוע נסגר במוצאי שבת, וביום ראשון המדף ריק. רק מציג, לא משנה כלום.</div>' +
-      '<div class="text-[11px] font-black text-slate-500 mb-1.5">איזה שבוע?</div>' +
+      (anBusy ? '' : anMonthTilesHtml()) +
+      '<div class="mt-4 pt-3 border-t border-slate-100 text-[11px] font-black text-slate-500 mb-1.5">איזה שבוע?</div>' +
       '<div class="flex flex-wrap gap-1.5">' + chips + '</div>' + anWeekPickerHtml() + coverage + (anBusy ? '' : anTotalsHtml()) + warn +
     '</div>' +
     (busyHtml || (
