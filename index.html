@@ -730,7 +730,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '54'; // גרסה 54: ממוצע שבועי אמיתי (מחלקים רק בשבועות עם נתונים), לשונית "ממוצעים" לכל המוצרים, ולשונית "מבצעים" — כמה נמכר מאז שהמבצע התחיל
+const APP_VERSION = '55'; // גרסה 55: "ליום" הוא ליום מכירה — מחלקים ב-6 (א׳–ו׳) ולא ב-7, כי בשבת החנות סגורה
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -16214,6 +16214,10 @@ let anCache = null;            // { fromTs, rcs, rets } — משיכה אחת מ
 let anYearCache = {};          // מפתח שבוע → { rcs, rets } של אותו שבוע לפני שנה
 
 const AN_DOW = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+// ימי מכירה בשבוע: ראשון עד שישי. בשבת החנות סגורה, ומה שנמכר במוצאי שבת שולי
+// לעומת כל השבוע. חלוקה ב-7 הראתה "ליום" נמוך מדי מהמכירה האמיתית ביום עבודה.
+const AN_SELL_DAYS = 6;
+const AN_SELL_DAYS_LABEL = 'א׳–ו׳';
 const AN_DOW_SHORT = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
 // חגים בישראל (יום ראשון של החג עד היום האחרון) — כדי להסביר שבועות חריגים
 const AN_HOLIDAYS = [
@@ -16433,7 +16437,7 @@ function anWeekAverages(weeks, keys) {
     a.weeksBase = active.length;      // כמה שבועות עם נתונים עומדים מאחורי הממוצע
     a.recv = Math.round(a.recvSum / n); a.ret = Math.round(a.retSum / n);
     a.sold = Math.max(0, Math.round((a.recvSum - a.retSum) / n));
-    a.soldPerDay = Math.round(Math.max(0, (a.recvSum - a.retSum) / n / 7) * 10) / 10;
+    a.soldPerDay = Math.round(Math.max(0, (a.recvSum - a.retSum) / n / AN_SELL_DAYS) * 10) / 10;
     a.pct = a.recvSum > 0 ? Math.round(a.retSum / a.recvSum * 1000) / 10 : null;
     a.pctList = keys.map(k => (a.pcts[k] != null ? a.pcts[k] : null));
   });
@@ -16778,7 +16782,7 @@ function anHelpHtml() {
       '<div><b class="text-slate-700">נמכר</b> — הגיע פחות חזר. בשבוע שנסגר זה מספר אמיתי, כי במוצאי שבת חוזר כל מה שנשאר והמדף ריק ביום ראשון.</div>' +
       '<div>תעודת חזרה שתאריכה <b class="text-slate-700">יום ראשון</b> נספרת לשבוע שלפניה (הסגירה של מוצאי שבת שהוקלדה בבוקר). אם סגירה הוקלדה ביום שני, כדאי לתקן את תאריך הנייר לשבת.</div>' +
       '<div><b class="text-slate-700">ממוצע שבועי</b> — כמה יחידות בשבוע שלם (ראשון–שבת), <b class="text-slate-700">לא ליום</b>. מחושב על 4 השבועות הסגורים האחרונים, ומחולק רק בשבועות שיש בהם נתונים. אם יש נתונים רק לשבועיים — מחלקים בשניים.</div>' +
-      '<div>בלשונית <b class="text-slate-700">ממוצעים</b> יש את הממוצע השבועי של כל המוצרים הפעילים, לא רק של הנמכרים ביותר.</div>' +
+      '<div>בלשונית <b class="text-slate-700">ממוצעים</b> יש את הממוצע השבועי של כל המוצרים הפעילים, לא רק של הנמכרים ביותר. ה"ליום" שם הוא <b class="text-slate-700">ליום מכירה</b>: מחלקים בששת הימים א׳–ו׳ ולא בשבעה, כי בשבת החנות סגורה ומה שנמכר במוצאי שבת שולי.</div>' +
       '<div><b class="text-slate-700">מבצעים</b> — לכל מבצע פעיל, כמה נמכר בממוצע לשבוע מאז שהתחיל לעומת השבועות שלפניו. נספרים רק שבועות סגורים שנמצאים כולם בתוך תקופת המבצע.</div>' +
       '<div><b class="text-slate-700">אפס חזרות</b> — כל מה שהגיע נשאר בחנות; לא יודעים אם נגמר לפני סוף השבוע.</div>' +
       '<div><b class="text-slate-700">רווח</b> — מחיר הקופה בלי מע״מ פחות מחיר הקנייה הרגיל, על מה שנמכר. רק למוצרים עם מחיר קופה. <b class="text-slate-700">מחירים שעלו</b> — מחיר רגיל מול מחיר רגיל, בלי מבצעים.</div>' +
@@ -16866,7 +16870,7 @@ function anWeekTableHtml() {
 const AN_RANKS = [
   { k: 'returns', label: 'חזרות', title: 'הכי הרבה חזרות', icon: 'fa-rotate-left', color: 'text-rose-500', help: 'לחמים שחלק גדול ממה שהגיע חזר לספק. אחוז גבוה = הגיע יותר מדי.', empty: 'לא חזר שום לחם לספק בשבוע הזה' },
   { k: 'sold', label: 'הכי נמכר', title: 'הכי נמכר', icon: 'fa-cart-shopping', color: 'text-blue-600', help: 'הגיע פחות חזר. בשבוע סגור זה מספר אמיתי. לידו הממוצע לשבוע שלם (לא ליום) של השבועות הסגורים האחרונים.', empty: 'אין מכירות בשבוע הזה' },
-  { k: 'avg', label: 'ממוצעים', title: 'ממוצע שבועי לכל המוצרים', icon: 'fa-scale-balanced', color: 'text-indigo-600', help: 'כמה יחידות נמכרות בשבוע שלם (ראשון–שבת) — לכל המוצרים הפעילים, לא רק לנמכרים ביותר. לצד כל מוצר גם הכמות ליום בערך.', empty: 'אין מוצרים להצגה' },
+  { k: 'avg', label: 'ממוצעים', title: 'ממוצע שבועי לכל המוצרים', icon: 'fa-scale-balanced', color: 'text-indigo-600', help: 'כמה יחידות נמכרות בשבוע שלם (ראשון–שבת) — לכל המוצרים הפעילים, לא רק לנמכרים ביותר. לצד כל מוצר גם הכמות ליום מכירה: מחלקים בששת ימי המכירה (א׳–ו׳), כי בשבת החנות סגורה.', empty: 'אין מוצרים להצגה' },
   { k: 'promo', label: 'מבצעים', title: 'מבצעים: מה קרה מאז שהתחיל', icon: 'fa-tag', color: 'text-violet-600', help: 'לכל מבצע — כמה נמכר בממוצע לשבוע מאז שהתחיל, לעומת השבועות שלפניו. נספרים רק שבועות סגורים שנמצאים כולם בתוך תקופת המבצע.', empty: 'לא הוגדרו מבצעים במסך "מבצעים"' },
   { k: 'zero', label: 'אפס חזרות', title: 'אפס חזרות: הכל נשאר בחנות', icon: 'fa-check-double', color: 'text-emerald-600', help: 'לחמים שכלום מהם לא חזר. יכול להיות שנגמרו לפני סוף השבוע, ויכול להיות שהכמות הייתה מדויקת. האפליקציה לא יודעת להבדיל.', empty: 'אין לחם שכל הכמות שלו נשארה בחנות' },
   { k: 'steady', label: 'חוזר כל שבוע', title: 'חוזר הרבה שבוע אחרי שבוע', icon: 'fa-repeat', color: 'text-amber-600', help: 'מעל 20% חזרות ב-3 מתוך 4 השבועות הסגורים האחרונים. זה לא שבוע חריג, זו כמות שמגיעה גדולה מדי באופן קבוע.', empty: 'אין לחם שחוזר הרבה באופן קבוע' },
@@ -16959,11 +16963,11 @@ function anRankingsHtml() {
     body = list.map((x, i) => {
       const a = x.avg;
       if (!a) return anRankRowHtml(i, x.key, x.name, 'לא הגיע ולא חזר בשבועות האלה', '0', 'text-slate-400', 'יח׳ לשבוע', 'bg-slate-100 text-slate-400');
-      const sub = 'הגיע ' + anNum(a.recv) + ' · חזר ' + anNum(a.ret) + (a.pct != null ? ' (' + anPlainPct(a.pct) + ')' : '') + ' · בערך ' + anNum(a.soldPerDay) + ' ליום' +
+      const sub = 'הגיע ' + anNum(a.recv) + ' · חזר ' + anNum(a.ret) + (a.pct != null ? ' (' + anPlainPct(a.pct) + ')' : '') + ' · בערך ' + anNum(a.soldPerDay) + ' ליום מכירה (' + AN_SELL_DAYS_LABEL + ')' +
         (a.weeksRecv < a.weeksBase ? ' · הגיע ב-' + a.weeksRecv + ' מתוך ' + a.weeksBase + ' שבועות' : '');
       return anRankRowHtml(i, x.key, x.name, sub, anNum(a.sold), 'text-indigo-700', 'יח׳ לשבוע', 'bg-indigo-50 text-indigo-700');
     }).join('');
-    note = 'לפי ' + anAvgBasisText() + '. המספר הגדול הוא ליחידות שנמכרות בשבוע שלם, לא ליום. מוצרים מוסתרים אינם ברשימה.';
+    note = 'לפי ' + anAvgBasisText() + '. המספר הגדול הוא ליחידות שנמכרות בשבוע שלם, לא ליום. ה"ליום" מחולק ב-' + AN_SELL_DAYS + ' ימי מכירה (' + AN_SELL_DAYS_LABEL + ') — בשבת החנות סגורה, ומה שנמכר במוצאי שבת שולי. מוצרים מוסתרים אינם ברשימה.';
   } else if (def.k === 'promo') {
     const list = anPromoStats();
     body = list.map(pi => anPromoHeadHtml(pi) + pi.items.slice(0, 25).map((it, i) => {
@@ -17119,7 +17123,7 @@ function anSelectedCardHtml() {
   const line = (html) => '<div class="text-sm font-bold text-slate-700 leading-relaxed">' + html + '</div>';
   const avg = d.avg4.get(anSelectedKey) || null;
   const avgInner = avg && avg.weeksRecv > 0
-    ? line('הגיע <b>' + anNum(avg.recv) + '</b> · חזר <b>' + anNum(avg.ret) + '</b> (' + anPlainPct(avg.pct) + ') · נמכר <b class="text-emerald-700">' + anNum(avg.sold) + '</b> יח׳ לשבוע שלם <span class="text-xs text-slate-400">(בערך ' + anNum(avg.soldPerDay) + ' ליום)</span>') +
+    ? line('הגיע <b>' + anNum(avg.recv) + '</b> · חזר <b>' + anNum(avg.ret) + '</b> (' + anPlainPct(avg.pct) + ') · נמכר <b class="text-emerald-700">' + anNum(avg.sold) + '</b> יח׳ לשבוע שלם <span class="text-xs text-slate-400">(בערך ' + anNum(avg.soldPerDay) + ' ליום מכירה, ' + AN_SELL_DAYS_LABEL + ')</span>') +
       line('<span class="text-xs text-slate-500">חזרות שבוע אחרי שבוע: ' + anPctListText(avg.pctList) + ' · לפי ' + anAvgBasisText() + (avg.weeksRecv < avg.weeksBase ? ' · הגיע ב-' + avg.weeksRecv + ' מתוך ' + avg.weeksBase + ' מהם' : '') + '</span>')
     : line('<span class="text-slate-400">לא הגיע ב-4 השבועות הסגורים האחרונים</span>');
   // מבצע על המוצר: מה קרה למכירות מאז שהתחיל
@@ -17239,7 +17243,7 @@ function anProductText(key) {
   L.push('📥 הגיע: ' + anNum(r.recvUnits) + ' יח׳ · ₪' + anMoney(r.recvValue));
   L.push('↩️ חזר: ' + anNum(r.retUnits) + ' יח׳' + (r.retPct != null ? ' (' + anPctText(r) + ')' : '') + (r.retUnits > 0 ? ' · במהלך השבוע ' + anNum(r.retMid) + ', במוצאי שבת ' + anNum(r.retEnd) : ''));
   if (!isCur) L.push('🛒 נמכר: ' + anNum(r.soldUnits) + ' יח׳ · ₪' + anMoney(r.soldValue));
-  if (avg && avg.weeksRecv > 0) L.push('📊 ממוצע לשבוע שלם (' + anAvgBasisText() + '): הגיע ' + anNum(avg.recv) + ' · חזר ' + anNum(avg.ret) + ' · נמכר ' + anNum(avg.sold) + ' יח׳ (בערך ' + anNum(avg.soldPerDay) + ' ליום) · חזרות: ' + anPctListText(avg.pctList));
+  if (avg && avg.weeksRecv > 0) L.push('📊 ממוצע לשבוע שלם (' + anAvgBasisText() + '): הגיע ' + anNum(avg.recv) + ' · חזר ' + anNum(avg.ret) + ' · נמכר ' + anNum(avg.sold) + ' יח׳ (בערך ' + anNum(avg.soldPerDay) + ' ליום מכירה, ' + AN_SELL_DAYS_LABEL + ') · חזרות: ' + anPctListText(avg.pctList));
   const pk = anPromoForKey(key);
   if (pk && pk.promo.weeksIn > 0) {
     const it = pk.item;
