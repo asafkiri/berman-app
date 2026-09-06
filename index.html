@@ -691,6 +691,12 @@ let receiptNotes = [];           // פירוט סכומי תעודות הספק 
 let receiptDocDate = null;       // v21: תאריך התעודה מהנייר — לזיכוי/חיוב שמוקלד באיחור
 let receiptDraftId = null;       // מזהה קבוע לטיוטה — מונע כפילות אחרי שמירה ממתינה/ניתוק
 let receiptPromoOnPaper = [];    // v61: מזהי מוצרים שמחיר המבצע שלהם ירד כבר בתעודה הנוכחית (ראה receiptPromoOnPaperHas)
+// v62: זרימת הצילום-תחילה. במקום להקליד את שלושת העוגנים לפני הקליטה,
+// מצלמים את התעודה, והמספרים נקראים ממנה בזמן שסורקים את הסחורה.
+let receiptEntryMode = 'photo';  // 'photo' — מצלמים תחילה · 'manual' — מקלידים את העוגנים
+let receiptAnchorSource = null;  // 'paper' | 'manual' — מאין הגיעו העוגנים של התעודה הנוכחית
+let receiptPaperScanState = '';  // '' | 'running' | 'ok' | 'failed' — מצב הקריאה שרצה ברקע
+let receiptPaperScanProblems = [];
 let receiptHistoryFilter = 'all';
 let manualOffsetOrigin = null;
 let editingNotes = false;        // עריכת סכומי התעודות במסך פתוח
@@ -744,7 +750,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '61'; // גרסה 61: מוצר במבצע מחיר-קבוע — שני מחירים לגיטימיים בתעודה, ובוחרים לפי הנייר
+const APP_VERSION = '62'; // גרסה 62: צילום התעודה בהתחלה — שלושת העוגנים נקראים מהנייר, הסריקה רצה ברקע
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -1215,7 +1221,7 @@ function saveReceiptDraft() {
   try {
     // v61: ההכרעה "המבצע ירד כבר בתעודה" שורדת ניתוק וריענון יחד עם התעודה —
     // בלעדיה תעודה שנפתחה מחדש הייתה מציגה שוב את אותו פער שכבר נסגר.
-    localStorage.setItem(RECEIPT_DRAFT_KEY, JSON.stringify({ schemaVersion: 2, draftId: receiptDraftId, items: receiptList, notes: receiptNotes, opened: receiptOpened, docDate: receiptDocDate || null, promoOnPaper: receiptPromoOnPaper, updatedAt: Date.now() }));
+    localStorage.setItem(RECEIPT_DRAFT_KEY, JSON.stringify({ schemaVersion: 2, draftId: receiptDraftId, items: receiptList, notes: receiptNotes, opened: receiptOpened, docDate: receiptDocDate || null, promoOnPaper: receiptPromoOnPaper, entryMode: receiptEntryMode, anchorSource: receiptAnchorSource, updatedAt: Date.now() }));
   } catch (e) { showToast('לא ניתן לשמור את טיוטת התעודה במכשיר', null, null, 3200); }
 }
 function restoreReceiptDraft() {
@@ -1230,6 +1236,12 @@ function restoreReceiptDraft() {
       receiptDocDate = o.docDate || null;
       receiptDraftId = o.draftId || null;
       receiptPromoOnPaper = (Array.isArray(o.promoOnPaper) ? o.promoOnPaper : []).map(String);
+      receiptEntryMode = o.entryMode === 'manual' ? 'manual' : 'photo';
+      receiptAnchorSource = o.anchorSource === 'paper' || o.anchorSource === 'manual' ? o.anchorSource : null;
+      // v62: הצילומים עצמם חיים בזיכרון בלבד ואינם שורדים ריענון. העוגנים
+      // שנקראו מהם כן — הם כבר בתוך receiptNotes — ולכן תעודה שנפתחה מחדש
+      // ממשיכה מאותה נקודה, בלי לצלם שוב ובלי להקליד.
+      if (receiptAnchorSource === 'paper' && receiptNotes.length) receiptPaperScanState = 'ok';
     }
     if ((receiptOpened || receiptList.length || receiptNotes.length) && !receiptDraftId) receiptDraftId = makeOperationId('receipt');
     recomputeNoteTotal();
@@ -5301,6 +5313,37 @@ function renderManage() {
     '</div>';
 }
 
+// v62: כרטיס הצילום של מסך הקליטה. מכוון לרגע שבו הנהג עוד בדלת: לצלם,
+// ולהתחיל לסרוק. הוא משתמש באותם כפתורים של כרטיס הסריקה הקיים
+// (ai-add-photo / ai-review-page / ai-remove-page), ולכן גם באותו אישור כיוון.
+function receivingPhotoCardHtml() {
+  const cards = aiScanDocuments.map((doc, i) => {
+    const pages = doc.pages.map((p, pi) =>
+      '<div class="relative w-24 h-24 shrink-0 rounded-lg overflow-hidden border-2 ' + (p.orientationConfirmed ? 'border-emerald-400' : 'border-amber-400') + ' bg-white">' +
+        '<button data-role="ai-review-page" data-doc="' + i + '" data-page="' + pi + '" class="absolute inset-0 w-full h-full"><img src="' + p.dataUrl + '" class="w-full h-full object-contain" alt="פתח בדיקת כיוון"></button>' +
+        '<button data-role="ai-remove-page" data-doc="' + i + '" data-page="' + pi + '" aria-label="מחק עמוד" class="absolute top-1 left-1 w-6 h-6 rounded-full bg-rose-600 text-white text-[10px] shadow z-10"><i class="fa-solid fa-xmark"></i></button>' +
+        '<div class="absolute bottom-0 inset-x-0 ' + (p.orientationConfirmed ? 'bg-emerald-700/90' : 'bg-amber-600/95') + ' text-white text-[9px] font-black text-center py-0.5 pointer-events-none">' + (p.orientationConfirmed ? '✓ אושר' : 'דרוש אישור') + '</div>' +
+      '</div>').join('');
+    return '<div class="rounded-2xl border-2 border-slate-200 p-3 mb-2">' +
+      '<div class="flex items-center justify-between gap-2 mb-1">' +
+        '<span class="font-black text-slate-700 text-sm">' + (aiScanDocuments.length > 1 ? 'תעודה ' + (i + 1) : 'התעודה') + '</span>' +
+        (aiScanDocuments.length > 1 ? '<button data-role="rc-photo-doc-remove" data-doc="' + i + '" class="btn-tap text-[11px] font-black text-rose-500">הסר</button>' : '<span class="text-[11px] font-bold text-slate-400">' + doc.pages.length + ' עמודים</span>') +
+      '</div>' +
+      (pages ? '<div class="flex gap-2 overflow-x-auto py-2">' + pages + '</div>' : '') +
+      '<input id="aiDocCam_' + i + '" data-role="ai-file" data-doc="' + i + '" type="file" accept="image/*" capture="environment" class="hidden">' +
+      '<input id="aiDocFile_' + i + '" data-role="ai-file" data-doc="' + i + '" type="file" accept="image/*" multiple class="hidden">' +
+      '<button data-role="ai-add-photo" data-doc="' + i + '" class="btn-tap w-full bg-slate-100 text-slate-700 rounded-xl py-2.5 font-black text-sm"><i class="fa-solid fa-camera"></i> ' + (doc.pages.length ? 'צלם עמוד נוסף' : 'צלם את התעודה') + '</button>' +
+      '<button data-role="ai-add-photo-gallery" data-doc="' + i + '" class="btn-tap w-full bg-white border border-slate-200 text-slate-500 rounded-xl py-1.5 font-black text-[11px] mt-1.5"><i class="fa-solid fa-images"></i> או: בחר תמונה מהגלריה</button>' +
+    '</div>';
+  }).join('');
+  const ready = aiAllPagesOrientationConfirmed();
+  return cards +
+    '<button data-role="rc-photo-doc-add" class="btn-tap w-full bg-white border-2 border-dashed border-slate-300 text-slate-500 rounded-xl py-2 font-black text-xs mb-2"><i class="fa-solid fa-plus"></i> עוד תעודה מאותו משלוח (זיכוי, למשל)</button>' +
+    (aiScanError ? '<div class="rounded-xl bg-rose-50 border border-rose-300 p-2.5 text-xs font-black text-rose-700 mb-2">' + htmlEscape(aiScanError) + '</div>' : '') +
+    '<button data-role="rc-open-photo" ' + (ready ? '' : 'disabled') + ' class="btn-tap w-full rounded-2xl py-4 font-black text-lg flex items-center justify-center gap-2 mt-1 ' + (ready ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-400') + '"><i class="fa-solid fa-arrow-left"></i> התחל קליטה</button>' +
+    '<div class="text-[11px] text-slate-500 font-bold text-center mt-1.5">הקריאה מהנייר תרוץ ברקע בזמן שאתה סורק את הסחורה. הכמויות שבתעודה לא יוצגו לך תוך כדי — הספירה נשארת עיוורת, וזה מה שתופס חוסר.</div>' +
+    '<button data-role="rc-entry-manual" class="btn-tap w-full text-slate-400 py-2.5 font-black text-xs underline mt-1">אין רשת או שהנייר לא קריא — הקלד את שלושת המספרים</button>';
+}
 function renderReceiving() {
   const t = receiptTotals();
   const opened = receiptOpened || receiptList.length > 0;
@@ -5309,13 +5352,22 @@ function renderReceiving() {
   // v227: כלי הניהול עברו לטאב "ניהול" משלהם בשורת המצבים — מסך הקליטה נשאר נקי
   const topButtons = '';
   if (!opened) {
+    // v62: הצילום הוא ברירת המחדל. ההקלדה נשארת מסלול מלא ושווה-ערך —
+    // לאין-רשת, לנייר שלא נקרא, ולמי שפשוט מעדיף אותה.
+    const photoMode = receiptEntryMode === 'photo' && AI_SCAN_ENABLED;
+    if (photoMode && !aiScanDocuments.length) bermanSeedPhotoFirstScan(1);
+    const dateBox = '<details class="mt-3 bg-slate-50 border border-slate-200 rounded-xl"' + (receiptDocDate ? ' open' : '') + '><summary class="cursor-pointer px-3 py-2.5 text-sm font-black text-slate-600"><i class="fa-solid fa-calendar-day"></i> תעודה מתאריך אחר</summary><div class="px-3 pb-3"><input id="rcDocDate" type="date" value="' + htmlEscape(receiptDocDate || '') + '" class="w-full h-11 text-center text-sm font-black border-2 border-slate-200 rounded-xl outline-none focus:border-blue-500 bg-white"><button data-role="rc-date-clear" class="btn-tap w-full mt-1.5 py-2.5 rounded-xl font-black text-sm bg-white border-2 border-slate-200 text-slate-600"><i class="fa-solid fa-rotate-left"></i> נקה תאריך — חזרה להיום</button><div class="text-xs text-slate-500 font-bold mt-1">ריק = היום</div></div></details>';
+    const steps = '<div class="grid grid-cols-3 gap-1 mb-4 text-center text-xs font-black"><div class="bg-blue-600 text-white rounded-lg py-2">1 · ' + (photoMode ? 'צילום התעודה' : 'נתוני תעודה') + '</div><div class="bg-slate-100 text-slate-400 rounded-lg py-2">2 · סריקה</div><div class="bg-slate-100 text-slate-400 rounded-lg py-2">3 · בדיקה</div></div>';
     app.innerHTML = banner + pendingReturnsBannerHtml() + topButtons +
-      '<div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm mt-2">' +
-        '<div class="grid grid-cols-3 gap-1 mb-4 text-center text-xs font-black"><div class="bg-blue-600 text-white rounded-lg py-2">1 · נתוני תעודה</div><div class="bg-slate-100 text-slate-400 rounded-lg py-2">2 · סריקה</div><div class="bg-slate-100 text-slate-400 rounded-lg py-2">3 · בדיקה</div></div>' +
-        '<div class="text-center mb-3"><i class="fa-solid fa-file-invoice text-blue-600 text-4xl mb-2"></i><div class="font-black text-slate-800 text-lg">נתוני התעודה</div><div class="text-sm text-slate-500">הזן את שלושת העוגנים מהשורה התחתונה: נטו לחיוב (ללא מע״מ), סה"כ כללי וסה"כ שורות.</div></div>' +
-        noteEditorBodyHtml() +
-        '<details class="mt-3 bg-slate-50 border border-slate-200 rounded-xl"' + (receiptDocDate ? ' open' : '') + '><summary class="cursor-pointer px-3 py-2.5 text-sm font-black text-slate-600"><i class="fa-solid fa-calendar-day"></i> תעודה מתאריך אחר</summary><div class="px-3 pb-3"><input id="rcDocDate" type="date" value="' + htmlEscape(receiptDocDate || '') + '" class="w-full h-11 text-center text-sm font-black border-2 border-slate-200 rounded-xl outline-none focus:border-blue-500 bg-white"><button data-role="rc-date-clear" class="btn-tap w-full mt-1.5 py-2.5 rounded-xl font-black text-sm bg-white border-2 border-slate-200 text-slate-600"><i class="fa-solid fa-rotate-left"></i> נקה תאריך — חזרה להיום</button><div class="text-xs text-slate-500 font-bold mt-1">ריק = היום</div></div></details>' +
-        '<button data-role="rc-open" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 font-black text-lg flex items-center justify-center gap-2 mt-4"><i class="fa-solid fa-arrow-left"></i> התחל קליטה</button>' +
+      '<div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm mt-2">' + steps +
+        (photoMode
+          ? '<div class="text-center mb-3"><i class="fa-solid fa-camera-retro text-violet-600 text-4xl mb-2"></i><div class="font-black text-slate-800 text-lg">צלם את התעודה</div><div class="text-sm text-slate-500">בזמן שהנייר עוד ביד. שלושת המספרים ייקראו ממנו לבד — אין מה להקליד.</div></div>' +
+            '<div class="rounded-xl bg-blue-50 border border-blue-200 p-2 text-[11px] font-black text-blue-800 mb-3"><i class="fa-solid fa-expand"></i> כל צילום נפתח בגודל מלא. סובב עד שהכתב ישר ואשר — בלי אישור התמונה לא נשלחת.</div>' +
+            receivingPhotoCardHtml() + dateBox
+          : '<div class="text-center mb-3"><i class="fa-solid fa-file-invoice text-blue-600 text-4xl mb-2"></i><div class="font-black text-slate-800 text-lg">נתוני התעודה</div><div class="text-sm text-slate-500">הזן את שלושת העוגנים מהשורה התחתונה: נטו לחיוב (ללא מע״מ), סה"כ כללי וסה"כ שורות.</div></div>' +
+            noteEditorBodyHtml() + dateBox +
+            '<button data-role="rc-open" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 font-black text-lg flex items-center justify-center gap-2 mt-4"><i class="fa-solid fa-arrow-left"></i> התחל קליטה</button>' +
+            (AI_SCAN_ENABLED ? '<button data-role="rc-entry-photo" class="btn-tap w-full text-violet-600 py-2.5 font-black text-xs underline mt-1"><i class="fa-solid fa-camera-retro"></i> או: צלם את התעודה והמספרים ייקראו לבד</button>' : '')) +
       '</div>';
     return;
   }
@@ -5332,7 +5384,7 @@ function renderReceiving() {
         '<div class="flex items-center gap-1.5 shrink-0"><button data-role="rc-notes-edit" class="btn-tap text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-2 rounded-lg"><i class="fa-solid fa-pen"></i> ערוך</button><button data-role="rc-cancel" class="btn-tap text-xs font-bold text-red-500 bg-red-50 px-2.5 py-2 rounded-lg"><i class="fa-solid fa-xmark"></i></button></div>' +
       '</div>';
   const progress = receivingProgressHtml(t);
-  app.innerHTML = banner + pendingReturnsBannerHtml() + topButtons + noteBar + progress +
+  app.innerHTML = banner + pendingReturnsBannerHtml() + topButtons + noteBar + paperScanStatusHtml() + progress +
     '<button data-role="rc-scan" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 font-black text-lg flex items-center justify-center gap-3 shadow-lg mb-2"><i class="fa-solid fa-barcode text-2xl"></i> סרוק פריט לתעודה</button>' +
     '<button data-role="rc-crates" class="btn-tap w-full bg-amber-50 border-2 border-amber-300 text-amber-900 rounded-2xl py-3 font-black text-base flex items-center justify-center gap-2 mb-2"><i class="fa-solid fa-basket-shopping"></i> הוסף לחם בתפזורת</button>' +
     '<details class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4"><summary class="cursor-pointer p-3 font-black text-sm text-slate-600"><i class="fa-solid fa-circle-question text-slate-400"></i> לא מצליח לסרוק?</summary><div class="px-3 pb-3">' +
@@ -5529,8 +5581,17 @@ function finishReceipt() {
   // היא נבדקת ב-anchorsReady וממשיכה לשרת את הסריקה, שבודקת שורות פר-תעודה.
   const linesAnchorRequired = !receiptHasCreditNote();
   if (!anchorsReady || receiptNoteTotal == null || receiptNoteUnits == null || (linesAnchorRequired && receiptNoteLines == null)) {
+    // v62: בזרימת הצילום המספרים בדרך — הקריאה רצה ברקע בזמן הסריקה. אין
+    // טעם לשלוח להקלדה שנייה לפני שהיא סיימה; רק אם היא נכשלה באמת.
+    if (receiptEntryMode === 'photo' && (aiScanBusy || receiptPaperScanState === 'running')) {
+      showToast('הקריאה מהתעודה עדיין רצה — עוד רגע והמספרים ייכנסו לבד', null, null, 3200);
+      refreshReceipt();
+      return;
+    }
     editingNotes = true;
-    showToast('לפני האישור חובה להזין לכל תעודה את שלושת העוגנים: נטו לחיוב, סה"כ כללי וסה"כ שורות', null, null, 4200);
+    showToast(receiptEntryMode === 'photo' && receiptPaperScanState === 'failed'
+      ? 'הנייר לא אישר את עצמו — הקלד את שלושת המספרים מתחתית התעודה'
+      : 'לפני האישור חובה להזין לכל תעודה את שלושת העוגנים: נטו לחיוב, סה"כ כללי וסה"כ שורות', null, null, 4200);
     refreshReceipt();
     return;
   }
@@ -7010,6 +7071,13 @@ function manualTogglePromoClaim(pid) {
   manualPromoChoiceModal(l, base, disc, qty);
 }
 function refreshReconcile() { if (currentView === 'reconcile') renderReconcile(); }
+// v62: כרטיס הצילום חי משני מסכים — מסך הקליטה (צילום-תחילה) ומסך ההשוואה
+// (הבלש שלא פתר). כל צעד בצנרת הצילום מרענן דרך כאן, כדי שלא יקרא בכוח
+// למסך שאינו מוצג ויימחק את מה שהמשתמש רואה.
+function refreshScanHost() {
+  if (currentView === 'reconcile') renderReconcile();
+  else if (currentView === 'receiving') renderReceiving();
+}
 function refreshReconcileHeader() {
   const g = reconcileGap();
   const rn = $('rcReconNote'); if (rn) rn.textContent = '₪' + fmtMoney(reconcileNoteInc());
@@ -7143,6 +7211,97 @@ function resumeAiInvoiceScan() {
   aiRefreshScanEvaluation();
 }
 function prepareAiInvoiceScan() { if (aiScanCanResume()) resumeAiInvoiceScan(); else resetAiInvoiceScan(); }
+// ===== v62: זרימת הצילום-תחילה =====
+// בזרימה הישנה הצילום היה המוצא האחרון, אחרי שהעוגנים הוקלדו והבלש נכשל.
+// כאן הוא הראשון: מצלמים את הנייר כשהוא ביד, והקריאה רצה ברקע בזמן שסורקים
+// את הסחורה — כך שההמתנה לא נספרת בכלל. שלושת העוגנים ממולאים ממה שנקרא,
+// ורק אם שער האמון (bermanPaperAnchorsFromScan) עבר במלואו.
+// חשוב: הכמויות שנקראו אינן מוצגות בזמן הסריקה הפיזית. סריקה עיוורת היא מה
+// שתופס חוסר — מי שרואה מראש "בתעודה כתוב 15" מאשר במקום לספור.
+function bermanSeedPhotoFirstScan(docCount) {
+  aiCloseOrientationReview();
+  const count = Math.max(1, Math.min(4, Number(docCount) || 1));
+  aiScanDocuments = Array.from({ length: count }, (unused, i) => ({ noteIndex: i, amount: null, units: null, lines: null, kind: 'charge', pages: [] }));
+  aiScanBusy = false; aiScanProgressText = ''; aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; reconcileAiAudit = null; aiUnknownProductCreateContext = null;
+  aiAnalyzeBusy = false; aiAnalyzeError = ''; aiAnalyzeResult = null;
+  aiScanBasis = { notes: aiScanNoteSignature(), lines: null };
+  receiptPaperScanState = ''; receiptPaperScanProblems = [];
+}
+function bermanPhotoFirstAddDoc() {
+  if (aiScanDocuments.length >= 4) { showToast('ניתן לצלם עד 4 תעודות במשלוח אחד', null, null, 3000); return; }
+  aiScanDocuments.push({ noteIndex: aiScanDocuments.length, amount: null, units: null, lines: null, kind: 'charge', pages: [] });
+  refreshScanHost();
+}
+function bermanPhotoFirstRemoveDoc(docIndex) {
+  if (aiScanDocuments.length <= 1) return;
+  aiScanDocuments.splice(docIndex, 1);
+  aiScanDocuments.forEach((d, i) => { d.noteIndex = i; });
+  refreshScanHost();
+}
+// הקריאה שרצה ברקע בזמן הסריקה הפיזית. היא לעולם אינה חוסמת את המסך:
+// כישלון כאן פירושו שיבקשו להקליד את המספרים, לא שהקליטה נעצרת.
+async function bermanRunPaperScanInBackground() {
+  receiptPaperScanState = 'running'; receiptPaperScanProblems = [];
+  try { await aiRunInvoiceScan(); }
+  catch (error) { /* aiRunInvoiceScan תופסת בעצמה ומדווחת ב-aiScanError */ }
+  if (!aiScanResponse) {
+    receiptPaperScanState = 'failed';
+    receiptPaperScanProblems = [aiScanError || 'הקריאה מהנייר לא הצליחה'];
+    if (currentView === 'receiving') renderReceiving();
+    return;
+  }
+  bermanAdoptPaperAnchors();
+}
+// אימוץ העוגנים שנקראו — רק אחרי שהנייר אישר את עצמו.
+function bermanAdoptPaperAnchors() {
+  let paper;
+  try { paper = bermanPaperAnchorsFromScan(aiScanResponse); }
+  catch (error) { paper = { ok: false, problems: ['שגיאה בקריאת בלוק הסיכום מהנייר'], notes: [] }; }
+  if (!paper.ok || paper.notes.length !== aiScanDocuments.length) {
+    receiptPaperScanState = 'failed';
+    receiptPaperScanProblems = paper.problems && paper.problems.length ? paper.problems.slice(0, 4)
+      : ['מספר התעודות שנקראו אינו תואם למספר שצולם'];
+    if (currentView === 'receiving') renderReceiving();
+    return false;
+  }
+  receiptNotes = paper.notes.map(normNote);
+  recomputeNoteTotal();
+  receiptAnchorSource = 'paper';
+  receiptPaperScanState = 'ok'; receiptPaperScanProblems = [];
+  // הציפיות של כל תעודה מסונכרנות למה שנקרא, אחרת חתימת התעודות תשתנה
+  // ברגע שהעוגנים נכנסו — והצילומים והקריאה היו נפסלים בדיוק אחרי שהצליחו.
+  aiScanDocuments = aiScanDocuments.map((doc, i) => Object.assign({}, doc, {
+    amount: paper.notes[i].amount, units: paper.notes[i].units, lines: paper.notes[i].lines, kind: paper.notes[i].kind
+  }));
+  try { aiRefreshScanEvaluation(); } catch (error) { aiScanBasis = { notes: aiScanNoteSignature(), lines: null }; }
+  saveReceiptDraft();
+  if (currentView === 'receiving') renderReceiving();
+  showToast('✓ נקרא מהתעודה: ₪' + fmtMoney(receiptNoteTotal) + ' · ' + receiptNoteUnits + ' יח׳ · ' + (receiptNoteLines != null ? receiptNoteLines + ' שורות' : '—'), null, null, 4000);
+  return true;
+}
+// שורת המצב של הקריאה במסך הקליטה. הכמויות שנקראו לא מופיעות כאן בכוונה.
+function paperScanStatusHtml() {
+  if (receiptEntryMode !== 'photo') return '';
+  if (aiScanBusy || receiptPaperScanState === 'running') {
+    return '<div class="rounded-xl bg-violet-50 border border-violet-200 p-2.5 mb-3 text-[11px] font-black text-violet-800 flex items-center gap-2">' +
+      '<i class="fa-solid fa-circle-notch fa-spin"></i><span>' + htmlEscape(aiScanProgressText || 'קורא את התעודה ברקע…') + ' סרוק את הסחורה כרגיל.</span></div>';
+  }
+  if (receiptPaperScanState === 'ok' && receiptNoteTotal != null) {
+    return '<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-2.5 mb-3 text-[11px] font-black text-emerald-800">' +
+      '<i class="fa-solid fa-file-circle-check"></i> העוגנים נקראו מהתעודה ואומתו מול בלוק הסיכום שלה — ₪' + fmtMoney(receiptNoteTotal) +
+      ' · ' + receiptNoteUnits + ' יח׳' + (receiptNoteLines != null ? ' · ' + receiptNoteLines + ' שורות' : '') + '</div>';
+  }
+  if (receiptPaperScanState === 'failed') {
+    return '<div class="rounded-xl bg-amber-50 border-2 border-amber-300 p-3 mb-3">' +
+      '<div class="text-xs font-black text-amber-900"><i class="fa-solid fa-triangle-exclamation"></i> הנייר לא אישר את עצמו — צריך את המספרים ממך</div>' +
+      '<ul class="list-disc pr-5 mt-1 space-y-0.5 text-[11px] font-bold text-amber-800">' +
+        receiptPaperScanProblems.map(p => '<li>' + htmlEscape(p) + '</li>').join('') + '</ul>' +
+      '<button data-role="rc-notes-edit" class="btn-tap w-full mt-2 bg-amber-600 text-white rounded-xl py-2.5 font-black text-sm"><i class="fa-solid fa-keyboard"></i> הקלד את שלושת המספרים</button>' +
+      '<button data-role="rc-paper-rescan" class="btn-tap w-full mt-1.5 bg-white border-2 border-amber-300 text-amber-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-camera-rotate"></i> או: צלם את התעודה שוב</button>' +
+    '</div>';
+  }
+  return '';
+}
 // v25: כשיש כבר עבודה שמורה, הכפתור אינו מזמין לצלם מחדש אלא לחזור אליה.
 function aiScanEntryLabel(fresh) {
   if (!aiScanCanResume()) return fresh;
@@ -8000,7 +8159,7 @@ async function aiConfirmOrientationReview() {
   location.page.orientationConfirmed = true;
   aiCloseOrientationReview();
   aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0;
-  if (currentView === 'reconcile') renderReconcile();
+  refreshScanHost();
   setTimeout(aiOpenNextUnconfirmedOrientation, 0);
 }
 function aiCancelOrientationReview() {
@@ -8010,7 +8169,7 @@ function aiCancelOrientationReview() {
   location.doc.pages.splice(location.pageIndex, 1);
   aiCloseOrientationReview();
   aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0;
-  if (currentView === 'reconcile') renderReconcile();
+  refreshScanHost();
   setTimeout(aiOpenNextUnconfirmedOrientation, 0);
 }
 function aiAllPagesOrientationConfirmed(documents) {
@@ -8021,7 +8180,7 @@ async function aiAddInvoiceFiles(docIndex, files) {
   const doc = aiScanDocuments[docIndex]; if (!doc || !files || !files.length || aiScanBusy) return;
   const slots = Math.max(0, 8 - aiTotalPages());
   if (!slots) { showToast('ניתן לצרף עד 8 עמודים בסריקה אחת', null, null, 3000); return; }
-  aiScanBusy = true; aiScanProgressText = 'מכין את התמונות באיכות גבוהה…'; aiScanError = ''; renderReconcile();
+  aiScanBusy = true; aiScanProgressText = 'מכין את התמונות באיכות גבוהה…'; aiScanError = ''; refreshScanHost();
   try {
     const picked = Array.from(files).slice(0, slots);
     for (const file of picked) doc.pages.push(await aiCompressInvoiceImage(file));
@@ -8030,7 +8189,7 @@ async function aiAddInvoiceFiles(docIndex, files) {
     aiScanError = error && error.message === 'image_too_large' ? 'התמונה גדולה מדי. צלם שוב מקרוב ובחדות.' : 'לא הצלחתי להכין את התמונה. נסה לצלם שוב.';
   } finally {
     aiScanBusy = false; aiScanProgressText = '';
-    if (currentView === 'reconcile') renderReconcile();
+    refreshScanHost();
     setTimeout(aiOpenNextUnconfirmedOrientation, 0);
   }
 }
@@ -8290,12 +8449,12 @@ async function aiLiveCamTakePhoto() {
 })();
 function aiRemoveInvoicePage(docIndex, pageIndex) {
   const doc = aiScanDocuments[docIndex]; if (!doc || aiScanBusy) return;
-  doc.pages.splice(pageIndex, 1); aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; renderReconcile();
+  doc.pages.splice(pageIndex, 1); aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; refreshScanHost();
 }
 async function aiRotateInvoicePage(docIndex, pageIndex) {
   const doc = aiScanDocuments[docIndex], page = doc && doc.pages[pageIndex];
   if (!page || aiScanBusy) return;
-  aiScanBusy = true; aiScanProgressText = 'מסובב את עמוד ' + (pageIndex + 1) + '…'; aiScanError = ''; renderReconcile();
+  aiScanBusy = true; aiScanProgressText = 'מסובב את עמוד ' + (pageIndex + 1) + '…'; aiScanError = ''; refreshScanHost();
   try {
     const baseDataUrl = page.baseDataUrl || page.dataUrl;
     const currentTurns = aiNormalizeQuarterTurns((Number(page.rotation) || 0) / 90);
@@ -8311,7 +8470,7 @@ async function aiRotateInvoicePage(docIndex, pageIndex) {
     aiScanError = error && error.message === 'image_too_large' ? 'לא ניתן לסובב בלי לחרוג ממגבלת הגודל.' : 'סיבוב התמונה נכשל. התמונה המקורית נשארה ללא שינוי.';
   } finally {
     aiScanBusy = false; aiScanProgressText = '';
-    if (currentView === 'reconcile') renderReconcile();
+    refreshScanHost();
     if (!page.orientationConfirmed) setTimeout(() => aiOpenOrientationReview(docIndex, pageIndex, false), 0);
   }
 }
@@ -10034,6 +10193,67 @@ function aiDocRowUnits(doc) {
     return sum + (row && row.quantity != null ? (Number(row.quantity) || 0) : 0);
   }, 0);
 }
+// ===== v62: שער האמון של זרימת הצילום-תחילה =====
+// כשהעוגנים מוקלדים, הם העד השני שמאשר שה-AI קרא את הנייר נכון. כשהם באים
+// מהנייר עצמו אין מי שיקליד — וצריך עד אחר, אחרת הקריאה מאמתת את עצמה.
+// העד נמצא על אותו נייר: בלוק הסיכום בתחתית התעודה מודפס בנפרד מהשורות,
+// ולכן קריאה שגויה של כמות או מחיר לא תסתדר מולו. שלוש בדיקות, וכולן
+// חייבות לעבור לפני שמספר כלשהו מהנייר נכנס לתעודה:
+//   סכום השורות  == "נטו לחיוב" המודפס  (בתוך סיבולת העיגול של הספק)
+//   מספר השורות  == "שורות" המודפס       (מדויק)
+//   סכום הכמויות == "סה״כ כללי" המודפס   (מדויק)
+// עד v61 שלוש אלה היו אזהרות בלבד בתוך aiEvaluateInvoiceScan, כי העוגנים
+// המוקלדים עשו את העבודה. כאן הן עומדות בפני עצמן, בלי שום תלות במה
+// שהוקלד — וזה בדיוק העניין.
+function bermanPaperAnchorCheck(doc) {
+  const rows = doc && Array.isArray(doc.rows) ? doc.rows : [];
+  const printedNet = aiMoneyCents(doc && doc.subtotalExVat);
+  const printedUnits = doc && doc.printedUnits != null && isFinite(Number(doc.printedUnits)) ? Math.round(Number(doc.printedUnits)) : null;
+  const printedLines = doc && doc.printedLines != null && isFinite(Number(doc.printedLines)) ? Math.round(Number(doc.printedLines)) : null;
+  const rowsCents = Math.round(rows.reduce((sum, row) => sum + (Number(row && row.lineTotalExVat) || 0), 0) * 100);
+  const readUnits = aiDocRowUnits(doc);
+  // אותה סיבולת שבה נמדד הפער מול עוגן מוקלד — 2 אג׳ לשורה, 3 עד 25.
+  const tolCents = Math.min(25, Math.max(3, 2 * rows.length));
+  const money = printedNet == null ? null : Math.abs(rowsCents - printedNet) <= tolCents;
+  const units = printedUnits == null ? null : Math.round(readUnits) === printedUnits;
+  const lines = printedLines == null ? null : rows.length === printedLines;
+  const missing = [];
+  if (printedNet == null) missing.push('"נטו לחיוב"');
+  if (printedUnits == null) missing.push('"סה״כ כללי"');
+  if (printedLines == null) missing.push('"סה״כ שורות"');
+  const failed = [];
+  if (money === false) failed.push('סכום השורות שנקראו (₪' + fmtMoney(rowsCents / 100) + ') אינו מסתכם ל"נטו לחיוב" המודפס (₪' + fmtMoney(printedNet / 100) + ')');
+  if (units === false) failed.push('סכום הכמויות שנקראו (' + Math.round(readUnits) + ') אינו תואם ל"סה״כ כללי" המודפס (' + printedUnits + ')');
+  if (lines === false) failed.push('מספר השורות שנקראו (' + rows.length + ') אינו תואם ל"סה״כ שורות" המודפס (' + printedLines + ')');
+  return {
+    ok: money === true && units === true && lines === true,
+    money, units, lines, missing, failed,
+    amount: printedNet == null ? null : r2(printedNet / 100),
+    printedUnits, printedLines,
+    kind: doc && doc.docType === 'credit' ? 'credit' : 'charge'
+  };
+}
+// העוגנים כפי שנקראו מהנייר, או הסיבה שאי אפשר לסמוך עליהם. כל התעודות
+// במקבץ חייבות לעבור: מספיק שאחת מהן לא נסגרת בתוך עצמה כדי שההקלדה
+// הידנית תידרש, ולו רק למספר החסר.
+function bermanPaperAnchorsFromScan(scan) {
+  const docs = scan && scan.scan && Array.isArray(scan.scan.documents) ? scan.scan.documents : [];
+  if (!docs.length) return { ok: false, notes: [], checks: [], problems: ['הסריקה לא החזירה אף תעודה'] };
+  const checks = docs.map(bermanPaperAnchorCheck);
+  const problems = [];
+  checks.forEach((c, i) => {
+    const prefix = docs.length > 1 ? 'תעודה ' + (i + 1) + ': ' : '';
+    if (c.missing.length) problems.push(prefix + 'לא נקרא ' + c.missing.join(' ולא ') + ' מתחתית הנייר');
+    c.failed.forEach(f => problems.push(prefix + f));
+  });
+  const ok = checks.every(c => c.ok);
+  return {
+    ok,
+    checks,
+    problems,
+    notes: ok ? checks.map(c => ({ amount: c.amount, units: c.printedUnits, lines: c.printedLines, kind: c.kind })) : []
+  };
+}
 function aiSingleDocScore(returnedDoc, inputDoc) {
   const rows = returnedDoc && Array.isArray(returnedDoc.rows) ? returnedDoc.rows : [];
   const units = aiDocRowUnits(returnedDoc);
@@ -10119,7 +10339,7 @@ async function aiRunInvoiceScan() {
   if (!aiAllPagesOrientationConfirmed()) { showToast('אשר שכל התמונות ישרות לפני הפענוח', null, null, 3200); aiOpenNextUnconfirmedOrientation(); return; }
   if (!auth || !auth.currentUser) { showToast('עדיין אין חיבור מאובטח — המתן רגע ונסה שוב', null, null, 3000); return; }
   aiDetailsOpen = false; // v43: כל סריקה מתחילה במסך הפשוט
-  aiScanBusy = true; aiScanProgressText = aiScanDocuments.length > 1 ? 'ה-AI קורא ' + aiScanDocuments.length + ' תעודות, אחת אחרי השנייה…' : 'ה-AI קורא את דפי התעודה…'; aiScanError = ''; aiScanResponse = null; aiScanEvaluation = null; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; renderReconcile();
+  aiScanBusy = true; aiScanProgressText = aiScanDocuments.length > 1 ? 'ה-AI קורא ' + aiScanDocuments.length + ' תעודות, אחת אחרי השנייה…' : 'ה-AI קורא את דפי התעודה…'; aiScanError = ''; aiScanResponse = null; aiScanEvaluation = null; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; refreshScanHost();
   try {
     const token = await auth.currentUser.getIdToken();
     // v132: כל תעודה נסרקת בבקשה משלה, במקביל. כשל בתעודה אחת אינו מפיל
@@ -10133,7 +10353,7 @@ async function aiRunInvoiceScan() {
       aiScanProgressText = aiScanDocuments.length > 1
         ? 'ה-AI קורא תעודה ' + (docIndex + 1) + ' מתוך ' + aiScanDocuments.length + '…'
         : 'ה-AI קורא את דפי התעודה…';
-      if (currentView === 'reconcile') renderReconcile();
+      refreshScanHost();
       try {
         results.push(await aiScanSingleDocPipeline(token, docIndex));
       } catch (error) {
@@ -10172,11 +10392,11 @@ async function aiRunInvoiceScan() {
     aiScanBusy = false; aiScanProgressText = '';
     // v41: רשת ביטחון אחרונה. גם אם רינדור נופל בכל זאת, אסור שהמסך יישאר
     // על הספינר — המשתמש נשאר אז בלי שום דרך להתקדם, וזה בדיוק מה שקרה.
-    try { if (currentView === 'reconcile') renderReconcile(); }
+    try { refreshScanHost(); }
     catch (renderError) {
-      try { console.error('renderReconcile failed after scan', renderError); } catch (logError) {}
+      try { console.error('render failed after scan', renderError); } catch (logError) {}
       aiScanError = 'התצוגה נכשלה אחרי הסריקה (' + ((renderError && renderError.message) || 'שגיאה') + '). התוצאות נשמרו — צא וחזור למסך.';
-      try { if (currentView === 'reconcile') renderReconcile(); } catch (secondError) {}
+      try { refreshScanHost(); } catch (secondError) {}
       try { showToast(aiScanError, null, null, 6000); } catch (toastError) {}
     }
     // v188: המנתח רץ מעצמו מיד אחרי הסריקה, בלי לחיצה — אבל רק כשיש מה
@@ -13229,7 +13449,7 @@ async function confirmReceipt() {
   if (!saved) return;
   hideReceiptSummary();
   aiCloseOrientationReview();
-  receiptList = []; pendingReceipt = null; receiptNotes = []; receiptDocDate = null; receiptDraftId = null; receiptPromoOnPaper = []; recomputeNoteTotal(); receiptOpened = false; editingNotes = false; reconcileData = null; reconcileSupplierDiscount = 0; reconcileSupplierPromoItems = []; reconcilePromoMismatchItems = []; reconcileSupplierCreditClaim = null; reconcileAiAudit = null; aiScanDocuments = []; aiScanBusy = false; aiScanProgressText = ''; aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; aiScanBasis = null; receiptDupConfirmed = false; receiptLinesConfirmed = false; saveReceiptDraft(); // v25: תעודה שנסגרה משחררת גם את בסיס הסריקה
+  receiptList = []; pendingReceipt = null; receiptNotes = []; receiptDocDate = null; receiptDraftId = null; receiptPromoOnPaper = []; receiptEntryMode = 'photo'; receiptAnchorSource = null; receiptPaperScanState = ''; receiptPaperScanProblems = []; recomputeNoteTotal(); receiptOpened = false; editingNotes = false; reconcileData = null; reconcileSupplierDiscount = 0; reconcileSupplierPromoItems = []; reconcilePromoMismatchItems = []; reconcileSupplierCreditClaim = null; reconcileAiAudit = null; aiScanDocuments = []; aiScanBusy = false; aiScanProgressText = ''; aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; aiScanBasis = null; receiptDupConfirmed = false; receiptLinesConfirmed = false; saveReceiptDraft(); // v25: תעודה שנסגרה משחררת גם את בסיס הסריקה
   setView('receiptsHistory');
   const newOpen = receipts.filter(r => receiptDiscrepancyInfo(r).open).find(r => findOffsetMatch(r));
   if (newOpen) showToast('💡 זוהה קיזוז אפשרי מול תעודה קודמת — ראה בכרטיס התעודה', null, null, 3500);
@@ -17876,7 +18096,7 @@ app.addEventListener('click', (e) => {
   if (role === 'ai-add-photo') { const input = $('aiDocCam_' + (parseInt(t.dataset.doc, 10) || 0)); if (input) input.click(); return; }
   if (role === 'ai-add-photo-gallery') { const input = $('aiDocFile_' + (parseInt(t.dataset.doc, 10) || 0)); if (input) input.click(); return; }
   if (role === 'ai-live-cam') { aiOpenLiveCamera(parseInt(t.dataset.doc, 10) || 0); return; }
-  if (role === 'ai-review-page') { aiOpenOrientationReview(parseInt(t.dataset.doc, 10) || 0, parseInt(t.dataset.page, 10) || 0, true); if (currentView === 'reconcile') renderReconcile(); return; }
+  if (role === 'ai-review-page') { aiOpenOrientationReview(parseInt(t.dataset.doc, 10) || 0, parseInt(t.dataset.page, 10) || 0, true); refreshScanHost(); return; }
   if (role === 'ai-remove-page') { aiRemoveInvoicePage(parseInt(t.dataset.doc, 10) || 0, parseInt(t.dataset.page, 10) || 0); return; }
   if (role === 'ai-run') { aiRunInvoiceScan(); return; }
   if (role === 'ai-edit-images') { aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; aiAnalyzeResult = null; aiAnalyzeError = ''; renderReconcile(); return; }
@@ -17973,8 +18193,24 @@ app.addEventListener('click', (e) => {
   else if (role === 'rc-crates') { openCratePicker('receipt'); }
   else if (role === 'ret-crates') { openCratePicker('returns'); }
   else if (role === 'ret-slot') { const de = $('retDocDate'); if (de) returnsDocDate = de.value || ''; switchReturnsSlot(t.dataset.slot); }
-  else if (role === 'rc-open') { const en = readNoteEntry(receiptNotes.length === 0); if (en === false) return; if (en) receiptNotes.push(en); noteEntryKind = 'charge'; recomputeNoteTotal(); if (!receiptNetPositive()) { showToast(receiptNetProblemText(), null, null, 5000); saveReceiptDraft(); refreshReceipt(); return; } receiptDocDate = (($('rcDocDate') || {}).value || '').trim() || null; recomputeNoteTotal(); receiptOpened = true; receiptDupConfirmed = false; receiptLinesConfirmed = false; saveReceiptDraft(); refreshReceipt(); openReceivingScanner(); }
-  else if (role === 'rc-cancel') { showConfirm('ביטול תעודה', 'לבטל את התעודה הנוכחית? כל הפריטים שנסרקו יימחקו.', 'בטל תעודה', () => { receiptList = []; receiptNotes = []; receiptDocDate = null; receiptDraftId = null; receiptPromoOnPaper = []; recomputeNoteTotal(); receiptOpened = false; editingNotes = false; reconcileData = null; receiptDupConfirmed = false; receiptLinesConfirmed = false; resetAiInvoiceScan(); saveReceiptDraft(); setView('receiving'); }); } // v25: ביטול תעודה משחרר גם את צילומי הסריקה
+  // v62: מסלול הצילום. פותח את התעודה, מפעיל את הסורק, ומשגר את הקריאה
+  // לרקע — בלי await, כדי שהעובד יתחיל לסרוק מיד. העוגנים ייכנסו לבד.
+  else if (role === 'rc-open-photo') {
+    if (!aiAllPagesOrientationConfirmed()) { showToast('אשר שכל התמונות ישרות לפני שמתחילים', null, null, 3200); aiOpenNextUnconfirmedOrientation(); return; }
+    receiptDocDate = (($('rcDocDate') || {}).value || '').trim() || null;
+    receiptOpened = true; receiptEntryMode = 'photo'; receiptAnchorSource = null;
+    receiptDupConfirmed = false; receiptLinesConfirmed = false;
+    saveReceiptDraft(); refreshReceipt(); openReceivingScanner();
+    bermanRunPaperScanInBackground();
+  }
+  else if (role === 'rc-entry-photo') { receiptEntryMode = 'photo'; bermanSeedPhotoFirstScan(1); renderReceiving(); }
+  else if (role === 'rc-entry-manual') { receiptEntryMode = 'manual'; renderReceiving(); }
+  else if (role === 'rc-photo-doc-add') { bermanPhotoFirstAddDoc(); }
+  else if (role === 'rc-photo-doc-remove') { bermanPhotoFirstRemoveDoc(parseInt(t.dataset.doc, 10) || 0); }
+  // צילום חוזר אחרי שהנייר לא אישר את עצמו — מוחק את הצילומים ומחזיר לשלב הצילום
+  else if (role === 'rc-paper-rescan') { bermanSeedPhotoFirstScan(1); receiptEntryMode = 'photo'; receiptOpened = false; saveReceiptDraft(); renderReceiving(); }
+  else if (role === 'rc-open') { const en = readNoteEntry(receiptNotes.length === 0); if (en === false) return; if (en) receiptNotes.push(en); noteEntryKind = 'charge'; recomputeNoteTotal(); if (!receiptNetPositive()) { showToast(receiptNetProblemText(), null, null, 5000); saveReceiptDraft(); refreshReceipt(); return; } receiptDocDate = (($('rcDocDate') || {}).value || '').trim() || null; recomputeNoteTotal(); receiptOpened = true; receiptAnchorSource = 'manual'; receiptDupConfirmed = false; receiptLinesConfirmed = false; saveReceiptDraft(); refreshReceipt(); openReceivingScanner(); }
+  else if (role === 'rc-cancel') { showConfirm('ביטול תעודה', 'לבטל את התעודה הנוכחית? כל הפריטים שנסרקו יימחקו.', 'בטל תעודה', () => { receiptList = []; receiptNotes = []; receiptDocDate = null; receiptDraftId = null; receiptPromoOnPaper = []; receiptEntryMode = 'photo'; receiptAnchorSource = null; receiptPaperScanState = ''; receiptPaperScanProblems = []; recomputeNoteTotal(); receiptOpened = false; editingNotes = false; reconcileData = null; receiptDupConfirmed = false; receiptLinesConfirmed = false; resetAiInvoiceScan(); saveReceiptDraft(); setView('receiving'); }); } // v25: ביטול תעודה משחרר גם את צילומי הסריקה
   else if (role === 'rc-note-add') { const en = readNoteEntry(true); if (en === false) return; if (en) { receiptNotes.push(en); noteEntryKind = 'charge'; recomputeNoteTotal(); saveReceiptDraft(); } refreshReceipt(); const inp = $('rcNoteInput'); if (inp) inp.focus(); }
   // v51: הבורר אינו בונה את המסך מחדש — רק מסמן את עצמו. כך אפשר להקליד
   // סכום, להיזכר שזו תעודת זיכוי וללחוץ מינוס בלי לאבד את מה שכבר הוקלד.
