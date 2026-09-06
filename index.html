@@ -13537,7 +13537,7 @@ function cancelReceiptAttach() {
   receiptPaperScanState = ''; receiptPaperScanProblems = [];
   recomputeNoteTotal(); reconcileData = null;
   receiptDupConfirmed = false; receiptLinesConfirmed = false;
-  resetAiInvoiceScan(); saveReceiptDraft();
+  resetAiInvoiceScan(); aiScanDocuments = []; saveReceiptDraft();
   setView('receiptsHistory');
   showToast('הצירוף בוטל — התעודה נשארה ממתינה לנייר', null, null, 2800);
 }
@@ -18344,7 +18344,7 @@ app.addEventListener('click', (e) => {
     receiptNoDoc = true; receiptAttachTarget = null;
     receiptOpened = true; receiptEntryMode = 'manual'; receiptAnchorSource = null;
     receiptDupConfirmed = false; receiptLinesConfirmed = false; editingNotes = false;
-    resetAiInvoiceScan();
+    resetAiInvoiceScan(); aiScanDocuments = []; receiptPaperScanState = ''; receiptPaperScanProblems = [];
     saveReceiptDraft(); refreshReceipt(); openReceivingScanner();
   }
   // v63: הנייר נמצא באמצע הסריקה — פותחים את שדות העוגנים, ומרגע שיש בהם
