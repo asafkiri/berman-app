@@ -730,7 +730,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '56'; // גרסה 56: אחוז חזרות בכסף (כמו שברמן מודדים), עם האחוז ביחידות לצידו
+const APP_VERSION = '57'; // גרסה 57: קיזוז המבצעים במרכזת מחושב על כמות נטו — יחידת מבצע שחזרה כבר זוכתה במחיר המבצע
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -14117,7 +14117,30 @@ function receiptRangeData(from, to) {
       meMap[key].inc = r2(meMap[key].inc + rebInc);
     });
   });
-  meEx = r2(meEx); meInc = r2(meInc);
+  // v57: המרכזת של ברמן מקזזת החזרות בתוך הכמות, ומחיר השורה הוא מחיר המבצע
+  // (מאומת מול חשבונית 30/06/26: שורה 324 במחיר המבצע ₪7.20, ושורות שכל
+  // החודש שלהן החזרה יצאו בכמות שלילית). לכן יחידה במבצע שחזרה כבר מזוכה
+  // במחיר המבצע, והקיזוז מגיע רק על מה שנשאר. בלי הקיזוז הזה התחזית נמוכה
+  // מהחשבונית בדיוק בגובה ההחזרות של מוצרי המבצע.
+  let meBackEx = 0, meBackInc = 0;
+  rets.forEach(r => {
+    const dd = String((r && (r.docDate || r.date)) || '').slice(0, 10);
+    (r.items || []).forEach(l => {
+      if (!l || l.isDeposit || !l.productId) return;
+      const pr = monthEndPromoForProduct(l.productId, dd);
+      if (!pr) return;
+      const back = monthEndUnitRebate(pr, Number(l.unitPrice) || 0) * (Number(l.qty) || 0);
+      if (!(back > 0)) return;
+      const backInc = amountIncForDoc(r, back);
+      meBackEx += back; meBackInc += backInc;
+      const key = pr.id || (String(promoTitle(pr) || '') + '|' + String(pr.pct || 0));
+      const e = meMap[key];
+      if (e) { e.backEx = r2((e.backEx || 0) + back); e.ex = r2(Math.max(0, e.ex - back)); e.inc = r2(Math.max(0, e.inc - backInc)); }
+    });
+  });
+  Object.keys(meMap).forEach(k => { if (!(meMap[k].ex > 0) && !(meMap[k].backEx > 0)) delete meMap[k]; });
+  meBackEx = r2(meBackEx); meBackInc = r2(meBackInc);
+  meEx = r2(Math.max(0, meEx - meBackEx)); meInc = r2(Math.max(0, meInc - meBackInc));
   let openShortEx = 0, openOverEx = 0, openCnt = 0;
   recs.forEach(r => { const di = receiptDiscrepancyInfo(r); if (di.open) { openCnt++; openShortEx += di.shortVal; openOverEx += di.overVal; } });
   openShortEx = r2(openShortEx); openOverEx = r2(openOverEx);
@@ -14150,7 +14173,7 @@ function receiptRangeData(from, to) {
   const netSafeInc = r2(netBeforeSupplierCreditsInc - verifiedSupplierCreditInc);
   const netSafeVat = r2(netSafeInc - netSafeEx);
   const vatRates = [...new Set(recs.concat(rets).map(r => r2(vatRateForDoc(r) * 100)))].sort((a, b) => a - b);
-  return { from, to, fromT, toT, recs, rets, recEx, recInc, retEx, retInc, meMap, meList: Object.values(meMap), meEx, meInc, openCnt, shortOffsetByOverEx, openShortNetEx, openOverNetEx, openShortEx, openOverEx, openSupplierCredits, openSupplierCreditEx, openSupplierCreditInc, deferredDueCredits, deferredSupplierCreditEx, deferredSupplierCreditInc, pendingSupplierCreditEx, pendingSupplierCreditInc, verifiedSupplierCredits, verifiedSupplierCreditEx, verifiedSupplierCreditInc, netBeforeSupplierCredits, netBeforeSupplierCreditsInc, netSafeEx, netSafeVat, netSafeInc, netEx, vatAmount, netInc, vatRates };
+  return { from, to, fromT, toT, recs, rets, recEx, recInc, retEx, retInc, meMap, meList: Object.values(meMap), meEx, meInc, meBackEx, meBackInc, openCnt, shortOffsetByOverEx, openShortNetEx, openOverNetEx, openShortEx, openOverEx, openSupplierCredits, openSupplierCreditEx, openSupplierCreditInc, deferredDueCredits, deferredSupplierCreditEx, deferredSupplierCreditInc, pendingSupplierCreditEx, pendingSupplierCreditInc, verifiedSupplierCredits, verifiedSupplierCreditEx, verifiedSupplierCreditInc, netBeforeSupplierCredits, netBeforeSupplierCreditsInc, netSafeEx, netSafeVat, netSafeInc, netEx, vatAmount, netInc, vatRates };
 }
 function moneyRow(label, amount, cls, prefix) {
   prefix = prefix || '';
@@ -14198,7 +14221,8 @@ function supplierCalculationStepsHtml(d) {
 
     (d.meEx > 0
       ? moneyRow('פחות קיזוז מבצעים במרכזת (צפי)', d.meEx, 'text-rose-700', '− ') +
-        d.meList.map(s => '<div class="flex items-center justify-between text-[11px] text-rose-600/80 font-bold pr-3"><span>· ' + htmlEscape(s.name) + '</span><span>− ₪' + fmtMoney(r2(s.ex)) + '</span></div>').join('')
+        d.meList.map(s => '<div class="flex items-center justify-between text-[11px] text-rose-600/80 font-bold pr-3"><span>· ' + htmlEscape(s.name) + (s.backEx > 0 ? ' <span class="text-slate-400">(אחרי החזרות: ₪' + fmtMoney(r2(s.backEx)) + ' לא מקוזזים)</span>' : '') + '</span><span>− ₪' + fmtMoney(r2(s.ex)) + '</span></div>').join('') +
+        (d.meBackEx > 0 ? '<div class="text-[11px] text-slate-500 font-bold bg-slate-50 rounded-lg px-2 py-1.5 my-1"><i class="fa-solid fa-circle-info text-slate-400"></i> ₪' + fmtMoney(d.meBackEx) + ' לא נכללים בקיזוז: אלה יחידות מבצע שחזרו. במרכזת הכמות היא נטו והמחיר הוא מחיר המבצע, ולכן הן כבר זוכו במחיר המבצע.</div>' : '')
       : '') +
     (d.verifiedSupplierCreditEx > 0 ? moneyRow('פחות זיכויי מבצע שכבר אומתו', d.verifiedSupplierCreditEx, 'text-emerald-700', '− ') : '') +
     (d.pendingSupplierCreditEx > 0 ? moneyRow('פחות זיכויי מבצע פתוחים שמגיעים לכם', d.pendingSupplierCreditEx, 'text-orange-700', '− ') : '') +
