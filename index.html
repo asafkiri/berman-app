@@ -730,7 +730,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '57'; // גרסה 57: קיזוז המבצעים במרכזת מחושב על כמות נטו — יחידת מבצע שחזרה כבר זוכתה במחיר המבצע
+const APP_VERSION = '58'; // גרסה 58: שורת ההנחות אינה סופרת מוצרי מבצע — בחשבונית המחירון שלהם הוא מחיר המבצע
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -13323,24 +13323,28 @@ function setRangeMonth(offset) {
 }
 // סה"כ ההנחות של התקופה — ההפרש בין מחירי המחירון למחירים ששולמו בפועל.
 // מקביל לשורת "כוללת הנחות בסך" שבחשבונית ברמן. החזרות מקטינות את ההנחות.
+// שורת "כוללת הנחות בסך" בחשבונית = (מחירון − מה ששולם) × כמות נטו.
+// v58: מוצר במבצע אינו נספר בה. בחשבונית המחירון שלו מוחלף במחיר המבצע —
+// אומת בשורה 324 בחשבונית יוני (7.20/7.200) ובשורה 1220 ביולי (10.00/10.000) —
+// ולכן ההפרש שלו שם הוא אפס. קודם נספר גם הפרש המחירון וגם קיזוז המבצע
+// מעליו, וזה ניפח את הצפי בכל חודש עם מבצע (באוגוסט: ₪432 מול סיבולת ₪5).
 function rangeDiscountsTotal(d) {
-  let disc = 0, lineCount = 0;
+  let disc = 0, lineCount = 0, promoLines = 0, promoEx = 0;
   const lineList = (l) => {
     if (Number(l.listPrice) > 0) return Number(l.listPrice);
     const p = products.find(x => x.id === l.productId);
     return productListPrice(p) || Number(l.basePrice) || Number(l.unitPrice) || 0;
   };
-  (d.recs || []).forEach(r => (r.items || []).forEach(l => {
-    if (l.isDeposit) return;
+  const addLine = (l, sign, dateStr) => {
+    if (!l || l.isDeposit) return;
     lineCount++;
-    disc += (lineList(l) - (Number(l.unitPrice) || 0)) * (Number(l.qty) || 0);
-  }));
-  (d.rets || []).forEach(r => (r.items || []).forEach(l => {
-    if (l.isDeposit) return;
-    lineCount++;
-    disc -= (lineList(l) - (Number(l.unitPrice) || 0)) * (Number(l.qty) || 0);
-  }));
-  return { disc: r2(disc), lineCount };
+    const gap = (lineList(l) - (Number(l.unitPrice) || 0)) * (Number(l.qty) || 0) * sign;
+    if (monthEndPromoForProduct(l.productId, dateStr)) { promoLines++; promoEx += gap; return; }
+    disc += gap;
+  };
+  (d.recs || []).forEach(r => { const dd = storedReceiptDate(r); (r.items || []).forEach(l => addLine(l, 1, dd)); });
+  (d.rets || []).forEach(r => { const dd = String((r && (r.docDate || r.date)) || '').slice(0, 10); (r.items || []).forEach(l => addLine(l, -1, dd)); });
+  return { disc: r2(disc), lineCount, promoLines, promoEx: r2(promoEx) };
 }
 // פירוט יומי — מול עמוד הסיכום של חשבונית ברמן (שורה לכל תעודה: מס', סכום, כמות)
 function rangeDailyHtml(d) {
@@ -14262,7 +14266,6 @@ function compareSupplierStatement() {
   // ברמן: ההשוואה לפני מע"מ, עם סיבולת של אגורות בודדות לכל שורה
   // (המחירים הסופיים זזים במיליריות בין חודשים — ראה הקיקאוף)
   const dt = rangeDiscountsTotal(d);
-  dt.disc = r2(dt.disc + (Number(d.meEx) || 0)); // קיזוזי מבצעים כלולים בשורת ההנחות
   const tolerance = Math.max(1, r2(dt.lineCount * 0.03));
   const discInp = $('rcSupplierDisc');
   const supplierDisc = discInp && discInp.value.trim() !== '' ? parseNoteVal(discInp.value) : null;
@@ -14271,7 +14274,7 @@ function compareSupplierStatement() {
     const dDiff = r2(supplierDisc - dt.disc);
     discHtml = Math.abs(dDiff) <= tolerance
       ? '<div class="mt-2 bg-emerald-50 border border-emerald-200 rounded-lg p-2 text-emerald-800 text-xs font-bold"><i class="fa-solid fa-circle-check"></i> שורת ההנחות תואמת: לפי החשבונית ₪' + fmtMoney(supplierDisc) + ' · לפי המערכת ₪' + fmtMoney(dt.disc) + '</div>'
-      : '<div class="mt-2 bg-rose-50 border border-rose-200 rounded-lg p-2 text-rose-800 text-xs font-bold"><i class="fa-solid fa-triangle-exclamation"></i> שורת ההנחות לא תואמת: לפי החשבונית ₪' + fmtMoney(supplierDisc) + ' · לפי המערכת ₪' + fmtMoney(dt.disc) + ' (פער ₪' + fmtMoney(Math.abs(dDiff)) + '). ייתכן שאחוז הנחה של מוצר השתנה, או שמבצע לא הוזן</div>';
+      : '<div class="mt-2 bg-rose-50 border border-rose-200 rounded-lg p-2 text-rose-800 text-xs font-bold"><i class="fa-solid fa-triangle-exclamation"></i> שורת ההנחות לא תואמת: לפי החשבונית ₪' + fmtMoney(supplierDisc) + ' · לפי המערכת ₪' + fmtMoney(dt.disc) + ' (פער ₪' + fmtMoney(Math.abs(dDiff)) + '). ייתכן שאחוז הנחה של מוצר השתנה. מוצרי מבצע אינם נספרים כאן, כי בחשבונית המחירון שלהם הוא מחיר המבצע.</div>';
   }
   const diff = r2(supplierInc - d.netEx); // חיובי = החשבונית גבוהה מהמערכת (לפני מע"מ)
   const abs = Math.abs(diff);
@@ -14306,7 +14309,6 @@ function calcReceiptRange() {
   const supplierCreditHtml = d.openSupplierCredits.length ? supplierCreditWarningHtml(d.openSupplierCredits, false) : '';
   const deferredHtml = d.deferredDueCredits.length ? '<div class="bg-blue-600 text-white rounded-2xl p-4 mb-3 shadow-lg border-2 border-blue-300"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-calendar-days fa-beat"></i> זיכויים מחודש קודם שממתינים לאימות</div><div class="font-black text-2xl mt-1">₪' + fmtMoney(d.deferredSupplierCreditEx) + '</div><div class="text-xs text-white/95 mt-1 font-bold">הספק התחייב להוציא אותם בחודש הזה. ודא מול המרכזת לפני סגירת חשבון.</div>' + supplierCreditMiniList(d.deferredDueCredits) + '</div>' : '';
   const dt = rangeDiscountsTotal(d);
-  dt.disc = r2(dt.disc + (Number(d.meEx) || 0)); // קיזוזי מבצעים הם חלק משורת ההנחות בחשבונית
   out.innerHTML = supplierCreditHtml + deferredHtml +
     '<div class="text-[11px] font-bold text-slate-500 mb-2">' + d.recs.length + ' תעודות קליטה · ' + d.rets.length + ' תעודות החזרה · ' + dt.lineCount + ' שורות</div>' +
     supplierPaymentModeCardsHtml(d) +
@@ -14315,6 +14317,7 @@ function calcReceiptRange() {
       '<div class="font-black text-slate-800 mb-1 flex items-center gap-2"><i class="fa-solid fa-percent text-rose-600"></i> כוללת הנחות בסך</div>' +
       '<div class="text-[11px] text-slate-500 font-bold mb-2">ההפרש בין מחירי המחירון למחירים ששולמו בפועל בתקופה — להשוואה מול שורת ההנחות בחשבונית ברמן</div>' +
       '<div class="font-black text-2xl text-rose-700">₪' + fmtMoney(dt.disc) + '</div>' +
+      (dt.promoLines > 0 ? '<div class="text-[11px] text-slate-500 font-bold mt-2 bg-slate-50 rounded-lg px-2 py-1.5"><i class="fa-solid fa-circle-info text-slate-400"></i> ' + dt.promoLines + ' שורות של מוצרים במבצע אינן נכללות כאן. בחשבונית המחירון שלהן הוא מחיר המבצע, ולכן הן תורמות אפס לשורת ההנחות. הקיזוז שלהן מופיע בנפרד ב"איך הגענו לסכום?".</div>' : '') +
     '</div>' +
     rangeDailyHtml(d) +
     (d.meEx > 0 ? '<div class="text-[11px] text-rose-700/80 font-bold mt-2 bg-rose-50 rounded-lg p-2"><i class="fa-solid fa-triangle-exclamation"></i> הנחות מרכזת הן צפי — ודא שהספק זיכה אותן בחשבון החודשי</div>' : '') +
