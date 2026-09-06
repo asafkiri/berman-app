@@ -755,7 +755,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '63'; // גרסה 63: קליטה בלי תעודה — סורקים לפי ספירה, התעודה נשמרת פתוחה, וכשהנייר מגיע מצלמים אותו והבדיקה הרגילה רצה
+const APP_VERSION = '64'; // גרסה 64: פירוט לפי מוצר × ימים במרכזת — במבנה החשבונית המפורטת של ברמן, כדי להשוות שורה מול שורה
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -13779,7 +13779,7 @@ function receiptsRangeHtml() {
         '<div class="flex-1"><label class="text-[11px] text-slate-400 font-bold block mb-1">מתאריך</label><input id="rcFrom" type="date" class="w-full p-2 rounded-lg border-2 border-slate-200 outline-none text-sm font-bold focus:border-blue-500"></div>' +
         '<div class="flex-1"><label class="text-[11px] text-slate-400 font-bold block mb-1">עד תאריך</label><input id="rcTo" type="date" class="w-full p-2 rounded-lg border-2 border-slate-200 outline-none text-sm font-bold focus:border-blue-500"></div>' +
       '</div>' +
-      '<button data-role="rc-calc" class="btn-tap w-full bg-amber-500 text-white rounded-xl py-2.5 font-black flex items-center justify-center gap-2"><i class="fa-solid fa-calculator"></i> בנה את החודש</button>' +
+      '<button data-role="rc-calc" class="btn-tap w-full bg-amber-500 text-white rounded-xl py-2.5 font-black flex items-center justify-center gap-2"><i class="fa-solid fa-calculator"></i> חשב סכום</button>' +
       '<div id="rcRangeResult" class="hidden mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3"></div>' +
     '</div>';
 }
@@ -13847,6 +13847,149 @@ function rangeDailyHtml(d) {
   }).join('');
   return '<details class="mt-3 bg-white border-2 border-slate-200 rounded-xl overflow-hidden"><summary class="cursor-pointer p-3 font-black text-sm text-slate-700"><i class="fa-solid fa-calendar-days text-blue-600"></i> פירוט יומי — להשוואה מול עמוד הסיכום של החשבונית</summary>' +
     '<div class="px-3 pb-3"><div class="text-[11px] text-slate-400 font-bold mb-1">בעמוד הסיכום של חשבונית ברמן יש שורה לכל תעודה (מס׳ תעודה, סכום וכמות) — השווה יום מול יום</div>' + rows + '</div></details>';
+}
+// ===== פירוט לפי מוצר × ימים — במבנה החשבונית המפורטת של ברמן =====
+// בחשבונית יש שורה לכל פריט (ממוינת לפי קוד פריט כמחרוזת: 101, 119, 1231, 207…),
+// עמודה לכל יום עם תנועה, ובכל תא הכמות שסופקה — וההחזרה של אותו יום בשורה
+// שנייה מתחתיה. משמאל: סה"כ כמות, מחיר סופי וסה"כ לתשלום. הטבלה כאן נבנית
+// באותו מבנה בדיוק כדי שאפשר יהיה לרוץ שורה מול שורה מול הנייר.
+function mtxQty(n) {
+  const v = Math.round((Number(n) || 0) * 100) / 100;
+  return v.toLocaleString('he-IL', { maximumFractionDigits: 2 });
+}
+// מחיר יחידה לשורת החזרה — אותה נפילה לאחור כמו ב-returnTotals
+function mtxReturnUnit(it) {
+  const unit = Number(it && it.unitPrice);
+  if (unit > 0) return unit;
+  const p = products.find(x => (it.barcode && x.barcode === it.barcode) || x.name === it.name);
+  return Number(p && (Number(p.creditPrice) > 0 ? p.creditPrice : p.price)) || 0;
+}
+function rangeProductMatrixData(d) {
+  const wd = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ש'];
+  const dayAgg = {}, rows = {};
+  const agg = (day) => (dayAgg[day] = dayAgg[day] || { q: 0, amount: 0 });
+  const rowFor = (l) => {
+    const p = (l.productId && products.find(x => x.id === l.productId)) ||
+      products.find(x => (l.barcode && x.barcode === l.barcode) || x.name === l.name) || null;
+    const key = (p && p.id) || l.productId || ('n:' + String(l.name || ''));
+    if (!rows[key]) rows[key] = {
+      key, pid: (p && p.id) || l.productId || '',
+      code: p ? productCode(p) : '',
+      name: (p && p.name) || l.name || '(ללא שם)',
+      list: p ? (productListPrice(p) || Number(p.price) || 0) : (Number(l.listPrice) || 0),
+      days: {}, qty: 0, rets: 0, amount: 0, prices: [], promo: false
+    };
+    return rows[key];
+  };
+  const cell = (row, day) => (row.days[day] = row.days[day] || { q: 0, r: 0 });
+  (d.recs || []).forEach(rc => {
+    const day = storedReceiptDate(rc);
+    (rc.items || []).forEach(l => {
+      if (!l || l.isDeposit) return;
+      const qty = Number(l.qty) || 0, unit = Number(l.unitPrice) || 0;
+      const row = rowFor(l);
+      cell(row, day).q += qty;
+      row.qty += qty; row.amount += unit * qty;
+      const a = agg(day); a.q += qty; a.amount += unit * qty;
+      if (qty > 0 && row.prices.indexOf(unit) === -1) row.prices.push(unit);
+      if (!row.promo && row.pid && monthEndPromoForProduct(row.pid, day)) row.promo = true;
+    });
+  });
+  (d.rets || []).forEach(rt => {
+    const day = String((rt && (rt.docDate || rt.date)) || todayStr()).slice(0, 10);
+    (rt.items || []).forEach(l => {
+      if (!l || l.isDeposit) return;
+      const qty = Number(l.qty) || 0, unit = mtxReturnUnit(l);
+      const row = rowFor(l);
+      cell(row, day).r += qty;
+      row.qty -= qty; row.rets += qty; row.amount -= unit * qty;
+      const a = agg(day); a.q -= qty; a.amount -= unit * qty;
+      if (!row.promo && row.pid && monthEndPromoForProduct(row.pid, day)) row.promo = true;
+    });
+  });
+  const days = Object.keys(dayAgg).sort().map(day => {
+    const dt = new Date(day + 'T12:00:00');
+    return { day, num: String(dt.getDate()).padStart(2, '0'), wd: wd[dt.getDay()] };
+  });
+  // ברמן ממיינת את קודי הפריט כמחרוזת (101 → 119 → 1231 → 207), לא כמספר
+  const list = Object.keys(rows).map(k => rows[k]).sort((a, b) => {
+    if (a.code && b.code) return a.code < b.code ? -1 : (a.code > b.code ? 1 : a.name.localeCompare(b.name, 'he'));
+    if (a.code) return -1;
+    if (b.code) return 1;
+    return a.name.localeCompare(b.name, 'he');
+  });
+  const total = list.reduce((s, r) => s + r.amount, 0);
+  return { days, list, dayAgg, total: r2(total) };
+}
+function rangeProductMatrixHtml(d) {
+  const m = rangeProductMatrixData(d);
+  if (!m.days.length || !m.list.length) return '';
+  const stickyName = 'position:sticky;right:0;z-index:2;';
+  const headCell = 'px-1.5 py-1 text-center font-black text-slate-500 border-b-2 border-slate-200 border-l border-slate-100 whitespace-nowrap';
+  const stickyTop = 'position:sticky;top:0;z-index:3;';
+  const head = '<tr>' +
+    '<th class="' + headCell + ' text-right bg-slate-50" style="position:sticky;right:0;top:0;z-index:4;min-width:9.5rem">פריט</th>' +
+    '<th class="' + headCell + ' bg-slate-50" style="' + stickyTop + '">מחירון</th>' +
+    m.days.map(x => '<th class="' + headCell + ' bg-slate-50" style="' + stickyTop + '">' + x.num + '<div class="text-[9px] font-bold text-slate-300">' + x.wd + '</div></th>').join('') +
+    '<th class="' + headCell + ' bg-amber-50 text-amber-800" style="' + stickyTop + '">כמות</th>' +
+    '<th class="' + headCell + ' bg-amber-50 text-amber-800" style="' + stickyTop + '">מחיר</th>' +
+    '<th class="' + headCell + ' bg-amber-50 text-amber-800" style="' + stickyTop + '">לתשלום</th>' +
+  '</tr>';
+  const body = m.list.map(row => {
+    const cells = m.days.map(x => {
+      const c = row.days[x.day];
+      if (!c || (!c.q && !c.r)) return '<td class="px-1.5 py-1 text-center text-slate-200 border-l border-slate-100">·</td>';
+      // dir=ltr כדי שהמינוס יישב משמאל לספרה, כמו בנייר — ולא יתהפך ב-RTL
+      return '<td dir="ltr" class="px-1.5 py-1 text-center border-l border-slate-100 whitespace-nowrap leading-tight">' +
+        (c.q ? '<div class="font-black text-slate-700">' + mtxQty(c.q) + '</div>' : '') +
+        (c.r ? '<div class="text-[9px] font-black text-rose-600">-' + mtxQty(c.r) + '</div>' : '') +
+      '</td>';
+    }).join('');
+    const avg = row.qty ? row.amount / row.qty : 0;
+    const flags = (row.promo ? ' <i class="fa-solid fa-tag text-rose-500" title="מוצר במבצע — בחשבונית המחירון שלו הוא מחיר המבצע"></i>' : '') +
+      (row.prices.length > 1 ? ' <i class="fa-solid fa-arrow-right-arrow-left text-amber-600" title="המחיר השתנה במהלך התקופה — בחשבונית מופיע מחיר אחד לשורה"></i>' : '');
+    return '<tr class="border-b border-slate-100 even:bg-slate-50/40">' +
+      '<th scope="row" class="px-1.5 py-1 text-right font-bold text-slate-700 border-l border-slate-100 bg-white" style="' + stickyName + '">' +
+        '<div class="truncate max-w-[9rem]">' + htmlEscape(row.name) + flags + '</div>' +
+        '<div class="text-[9px] text-slate-400 font-black">' + htmlEscape(row.code || '—') + '</div>' +
+      '</th>' +
+      '<td dir="ltr" class="px-1.5 py-1 text-center text-slate-400 font-bold border-l border-slate-100 whitespace-nowrap">' + (row.list ? fmt3(row.list) : '—') + '</td>' +
+      cells +
+      '<td dir="ltr" class="px-1.5 py-1 text-center font-black text-slate-800 bg-amber-50/60 border-l border-slate-100 whitespace-nowrap leading-tight">' + mtxQty(row.qty) + (row.rets ? '<div class="text-[9px] font-black text-rose-600">-' + mtxQty(row.rets) + '</div>' : '') + '</td>' +
+      '<td dir="ltr" class="px-1.5 py-1 text-center font-bold text-slate-600 bg-amber-50/60 border-l border-slate-100 whitespace-nowrap">' + fmt3(avg) + '</td>' +
+      '<td dir="ltr" class="px-1.5 py-1 text-center font-black text-slate-800 bg-amber-50/60 whitespace-nowrap">' + fmtMoney(row.amount) + '</td>' +
+    '</tr>';
+  }).join('');
+  const totQty = m.list.reduce((s, r) => s + r.qty, 0);
+  const foot =
+    '<tr class="bg-slate-100 border-t-2 border-slate-300">' +
+      '<th scope="row" class="px-1.5 py-1 text-right font-black text-slate-700 border-l border-slate-200 bg-slate-100" style="' + stickyName + '">סה״כ כמות</th>' +
+      '<td class="border-l border-slate-200"></td>' +
+      m.days.map(x => '<td dir="ltr" class="px-1.5 py-1 text-center font-black text-slate-700 border-l border-slate-200 whitespace-nowrap">' + mtxQty(m.dayAgg[x.day].q) + '</td>').join('') +
+      '<td dir="ltr" class="px-1.5 py-1 text-center font-black text-slate-800 border-l border-slate-200">' + mtxQty(totQty) + '</td><td class="border-l border-slate-200"></td><td></td>' +
+    '</tr>' +
+    '<tr class="bg-slate-100">' +
+      '<th scope="row" class="px-1.5 py-1 text-right font-black text-slate-700 border-l border-slate-200 bg-slate-100" style="' + stickyName + '">סה״כ ₪ <span class="text-[9px] font-bold text-slate-400">(מעוגל)</span></th>' +
+      '<td class="border-l border-slate-200"></td>' +
+      m.days.map(x => '<td dir="ltr" class="px-1.5 py-1 text-center font-black text-slate-700 border-l border-slate-200 whitespace-nowrap">' + Math.round(m.dayAgg[x.day].amount).toLocaleString('he-IL') + '</td>').join('') +
+      '<td class="border-l border-slate-200"></td><td class="border-l border-slate-200"></td>' +
+      '<td dir="ltr" class="px-1.5 py-1 text-center font-black text-slate-900 whitespace-nowrap">' + fmtMoney(m.total) + '</td>' +
+    '</tr>';
+  const gap = r2(m.total - (Number(d.netEx) || 0));
+  const gapNote = Math.abs(gap) > 0.05
+    ? '<div class="text-[11px] text-slate-500 font-bold mt-2 bg-slate-50 rounded-lg px-2 py-1.5"><i class="fa-solid fa-circle-info text-slate-400"></i> סה״כ הטבלה ₪' + fmtMoney(m.total) + ' מול ₪' + fmtMoney(d.netEx) + ' לתשלום — הפרש של ₪' + fmtMoney(Math.abs(gap)) + '. הטבלה מחשבת מחיר × כמות לפי השורות; הסכום לתשלום מביא בחשבון גם סכום נייר שהוקלד, הפרשים פתוחים וקיזוזי מבצע.</div>'
+    : '';
+  return '<details class="mt-3 bg-white border-2 border-slate-200 rounded-xl overflow-hidden"><summary class="cursor-pointer p-3 font-black text-sm text-slate-700"><i class="fa-solid fa-table-cells text-amber-600"></i> פירוט לפי מוצר — כמו בחשבונית המפורטת</summary>' +
+    '<div class="px-3 pb-3">' +
+      '<div class="text-[11px] text-slate-400 font-bold mb-2">שורה לכל פריט לפי קוד, עמודה לכל יום. בכל תא הכמות שסופקה, ומתחתיה באדום ההחזרה של אותו יום — בדיוק כמו בנייר. גלול לצדדים.</div>' +
+      '<div class="overflow-auto max-h-[70vh] border border-slate-200 rounded-lg">' +
+        // border-separate ולא collapse: תא sticky בטבלה עם border-collapse מאבד
+        // את המסגרת שלו בספארי, וכאן ממילא כל תא נושא מסגרת בצד אחד בלבד
+        '<table class="text-[10px]" style="width:max-content;border-collapse:separate;border-spacing:0"><thead>' + head + '</thead><tbody>' + body + '</tbody><tfoot>' + foot + '</tfoot></table>' +
+      '</div>' +
+      '<div class="text-[10px] text-slate-400 font-bold mt-2">' + m.list.length + ' פריטים · ' + m.days.length + ' ימי תנועה · <i class="fa-solid fa-tag text-rose-500"></i> מבצע · <i class="fa-solid fa-arrow-right-arrow-left text-amber-600"></i> המחיר השתנה בתקופה</div>' +
+      gapNote +
+    '</div></details>';
 }
 function cloneReceiptDiffItem(it) {
   return { productId: it.productId || '', name: it.name || '', n: Number(it.n) || 0, price: Number(it.price) || 0 };
@@ -14887,13 +15030,8 @@ function calcReceiptRange() {
     '<div class="text-[11px] font-bold text-slate-500 mb-2">' + d.recs.length + ' תעודות קליטה · ' + d.rets.length + ' תעודות החזרה · ' + dt.lineCount + ' שורות</div>' +
     supplierPaymentModeCardsHtml(d) +
     supplierCalculationStepsHtml(d) +
-    '<div class="bg-white border-2 border-slate-200 rounded-2xl p-4 mb-3">' +
-      '<div class="font-black text-slate-800 mb-1 flex items-center gap-2"><i class="fa-solid fa-percent text-rose-600"></i> כוללת הנחות בסך</div>' +
-      '<div class="text-[11px] text-slate-500 font-bold mb-2">ההפרש בין מחירי המחירון למחירים ששולמו בפועל בתקופה — להשוואה מול שורת ההנחות בחשבונית ברמן</div>' +
-      '<div class="font-black text-2xl text-rose-700">₪' + fmtMoney(dt.disc) + '</div>' +
-      (dt.promoLines > 0 ? '<div class="text-[11px] text-slate-500 font-bold mt-2 bg-slate-50 rounded-lg px-2 py-1.5"><i class="fa-solid fa-circle-info text-slate-400"></i> ' + dt.promoLines + ' שורות של מוצרים במבצע אינן נכללות כאן. בחשבונית המחירון שלהן הוא מחיר המבצע, ולכן הן תורמות אפס לשורת ההנחות. הקיזוז שלהן מופיע בנפרד ב"איך הגענו לסכום?".</div>' : '') +
-    '</div>' +
     rangeDailyHtml(d) +
+    rangeProductMatrixHtml(d) +
     (d.meEx > 0 ? '<div class="text-[11px] text-rose-700/80 font-bold mt-2 bg-rose-50 rounded-lg p-2"><i class="fa-solid fa-triangle-exclamation"></i> הנחות מרכזת הן צפי — ודא שהספק זיכה אותן בחשבון החודשי</div>' : '') +
     (d.openCnt ? '<div class="text-[11px] text-rose-700/80 font-bold mt-2 bg-rose-50 rounded-lg p-2"><i class="fa-solid fa-clipboard-question"></i> ' + d.openCnt + ' תעודות עם הפרש פתוח' +
       (d.openShortEx > 0 ? '<br>· חוסר ₪' + fmtMoney(d.openShortEx) + ' — <b>כבר הופחת מהתעודות</b>' : '') +
