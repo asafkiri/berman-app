@@ -16810,6 +16810,13 @@ let anWeekPick = '';           // מפתח שבוע (תאריך יום ראשו�
 let anQuery = '';
 let anSelectedKey = null;
 let anRank = 'returns';
+// מה נחשב "רווח נמוך" נקבע במסך עצמו ולא בקוד. היעד הוא אחוז על מחיר
+// הקנייה — 35 פירושו מחיר קופה של לפחות קנייה × 1.35, ועוד מע״מ — בדיוק
+// ההגדרה של marginPct. נשמר במכשיר: זו זווית הסתכלות, לא נתון עסקי שצריך
+// לרוץ בענן. שדה ריק = 25%, ברירת מחדל אחידה בכל האפליקציות.
+const AN_MARGIN_GOAL_KEY = 'bm_an_margin_goal';
+const AN_MARGIN_GOAL_DEFAULT = 25;
+let anMarginGoalInput = (() => { try { return localStorage.getItem(AN_MARGIN_GOAL_KEY) || ''; } catch (e) { return ''; } })();
 let anData = null;
 let anBusy = false;
 let anError = '';
@@ -17500,7 +17507,7 @@ const AN_RANKS = [
   { k: 'missing', label: 'לא הגיע', title: 'לא הגיע, למרות שמגיע כל שבוע', icon: 'fa-clock', color: 'text-slate-500', help: 'הגיע בכל אחד מ-4 השבועות שלפני, ובשבוע הזה לא הגיע בכלל.', empty: 'כל הלחמים שמגיעים בקביעות הגיעו' },
   { k: 'money', label: 'הוצאות', title: 'לאן הולך הכסף', icon: 'fa-sack-dollar', color: 'text-amber-600', help: 'על איזה לחמים משלמים הכי הרבה לספק.', empty: 'אין קליטות בשבוע הזה' },
   { k: 'profit', label: 'הכי רווחי', title: 'הכי רווחי', icon: 'fa-coins', color: 'text-emerald-600', help: 'מחיר הקופה בלי מע״מ פחות מחיר הקנייה, על מה שנמכר. רק לחמים עם מחיר קופה.', empty: 'אין לחמים עם מחיר קופה שנמכרו' },
-  { k: 'margin', label: 'רווח נמוך', title: 'רווח נמוך', icon: 'fa-triangle-exclamation', color: 'text-amber-600', help: 'כמה מרוויחים על כל שקל שמשלמים לספק, מהנמוך לגבוה. אדום = מוכרים בהפסד.', empty: 'אין לחמים עם מחיר קופה' },
+  { k: 'margin', label: 'רווח נמוך', title: 'רווח נמוך', icon: 'fa-triangle-exclamation', color: 'text-amber-600', help: 'הרווח באחוזים על מחיר הקנייה, מהנמוך לגבוה. מוצג כל מה שמתחת ליעד שקבעת. אדום = מוכרים בהפסד.', empty: 'אין לחמים עם מחיר קופה' },
   { k: 'prices', label: 'מחירים עלו', title: 'המחירים שעלו', icon: 'fa-arrow-trend-up', color: 'text-rose-600', help: 'המחיר הרגיל בקליטה האחרונה גבוה מזה שבקליטה הראשונה. קליטות במחיר מבצע לא נספרות.', empty: 'אף מחיר רגיל לא השתנה' }
 ];
 const anByPct = (a, b) => {
@@ -17516,7 +17523,19 @@ function anRankMoney(rows) { return rows.filter(r => r.recvValue > 0).sort((a, b
 function anRankPriceUp(rows) { return rows.filter(r => r.priceChangePct != null && r.priceChangePct > 0.5).sort((a, b) => b.priceChangePct - a.priceChangePct); }
 function anRankPriceDown(rows) { return rows.filter(r => r.priceChangePct != null && r.priceChangePct < -0.5).sort((a, b) => a.priceChangePct - b.priceChangePct); }
 function anRankProfit(rows) { return rows.filter(r => r.grossProfit != null && r.soldUnits > 0).sort((a, b) => b.grossProfit - a.grossProfit); }
-function anRankMargin(rows) { return rows.filter(r => r.marginPct != null && r.recvUnits > 0).sort((a, b) => a.marginPct - b.marginPct); }
+// הרשימה היא "כל מה שמתחת ליעד", לא עשרת התחתונים. לחם ב-31% אינו בעיה
+// כשהיעד 25, והוא כן בעיה כשהיעד 35 — ולכן הגבול הוא של המשתמש.
+function anMarginGoalDefault() { return AN_MARGIN_GOAL_DEFAULT; }
+function anMarginGoal() {
+  const v = parseFloat(String(anMarginGoalInput).replace(',', '.'));
+  return (isFinite(v) && v >= 0) ? v : anMarginGoalDefault();
+}
+// מחיר הקופה שהיה מביא את הלחם בדיוק ליעד: קנייה × (1 + היעד), ועוד מע״מ
+function anMarginTargetPrice(r, goal) { return r.cost > 0 ? r2(r.cost * (1 + goal / 100) * (1 + VAT)) : null; }
+function anRankMargin(rows, goal) {
+  const g = goal == null ? anMarginGoal() : goal;
+  return rows.filter(r => r.marginPct != null && r.recvUnits > 0 && r.marginPct < g).sort((a, b) => a.marginPct - b.marginPct);
+}
 function anPctListText(list) { return list.map(x => x == null ? '—' : anPlainPct(x)).join(' · '); }
 
 function anRankRowHtml(i, key, name, sub, big, bigCls, label, badgeCls) {
@@ -17569,13 +17588,36 @@ function anPromoHeadHtml(pi) {
       (pi.weeksIn ? ' · ' + pi.weeksIn + ' שבועות סגורים מאז שהתחיל' + (pi.weeksBase ? ', מול ' + pi.weeksBase + ' שלפניו' : '') : '') +
       (pi.partial ? ' · שבועות שנחתכים עם תחילת המבצע' : '') + '</div>' + head + '</div>';
 }
-function anRankingsHtml() {
+// תיבת היעד של "רווח נמוך". היא יושבת מחוץ ל-anRankBody כדי שהקלדה בתוכה
+// תצייר מחדש רק את הרשימה — אחרת השדה היה נבנה מחדש והפוקוס היה קופץ.
+function anMarginGoalHintHtml() {
+  const g = anMarginGoal();
+  return 'מחיר קופה נמוך ממחיר הקנייה × ' + (1 + g / 100).toFixed(2) + ' (ועוד מע״מ) נחשב רווח נמוך.' +
+    (String(anMarginGoalInput).trim() === '' ? ' שדה ריק = ' + anMarginGoalDefault() + '%.' : '');
+}
+function anMarginGoalHtml() {
+  return '<div class="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5 mb-2">' +
+    '<div class="flex items-center gap-2">' +
+      '<span class="text-xs font-black text-amber-900 shrink-0">רווח נמוך = פחות מ־</span>' +
+      '<input id="anMarginGoal" data-role="an-margin-goal" type="text" inputmode="decimal" value="' + htmlEscape(anMarginGoalInput) + '" placeholder="' + anMarginGoalDefault() + '" class="w-16 h-9 text-center text-base font-black text-amber-900 bg-white border border-amber-300 rounded-lg outline-none focus:border-amber-500" dir="ltr">' +
+      '<span class="text-base font-black text-amber-900 shrink-0">%</span>' +
+    '</div>' +
+    '<div id="anMarginGoalHint" class="text-[10px] font-bold text-amber-700 mt-1.5 leading-relaxed">' + anMarginGoalHintHtml() + '</div>' +
+  '</div>';
+}
+function setAnMarginGoal(val) {
+  anMarginGoalInput = String(val == null ? '' : val);
+  try { localStorage.setItem(AN_MARGIN_GOAL_KEY, anMarginGoalInput); } catch (e) {}
+  const body = $('anRankBody'); if (body) body.innerHTML = anRankBodyHtml();
+  const hint = $('anMarginGoalHint'); if (hint) hint.innerHTML = anMarginGoalHintHtml();
+}
+
+function anRankParts() {
   const rowsArr = anRows();
   const d = anData, single = d && d.single, isCur = anPreset === 'cur';
   const def = AN_RANKS.find(x => x.k === anRank) || AN_RANKS[0];
-  const chips = AN_RANKS.map(c => '<button data-role="an-rank" data-rank="' + c.k + '" class="btn-tap py-2 rounded-xl text-xs font-black border ' + (anRank === c.k ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-600') + '">' + c.label + '</button>').join('');
   const avgTxt = (r) => (r.avg4 && r.avg4.weeksRecv > 0) ? ' · ממוצע ' + anNum(r.avg4.sold) + ' יח׳ לשבוע' : '';
-  let body = '', note = '', title = def.title, help = def.help;
+  let body = '', note = '', title = def.title, help = def.help, empty = def.empty;
   if (def.k === 'sold') {
     body = anRankSold(rowsArr).slice(0, 10).map((r, i) => anRankRowHtml(i, r.key, r.name, 'הגיע ' + anNum(r.recvUnits) + ' · חזר ' + anNum(r.retUnits) + avgTxt(r), anNum(r.soldUnits), 'text-blue-700', isCur ? 'יח׳ עד עכשיו' : 'יח׳ נמכרו', 'bg-blue-50 text-blue-700')).join('');
     note = 'הממוצע הוא לשבוע שלם (ראשון–שבת), לא ליום — לפי ' + anAvgBasisText() + '. הרשימה המלאה של כל המוצרים נמצאת בלשונית "ממוצעים".';
@@ -17621,9 +17663,25 @@ function anRankingsHtml() {
     const noPos = rowsArr.filter(r => r.soldUnits > 0 && r.posPrice == null).length;
     if (noPos) note = noPos + ' לחמים שנמכרו בלי מחיר קופה לא נכללים. אפשר להוסיף מחיר קופה במסך "מוצרים ומחירים".';
   } else if (def.k === 'margin') {
-    body = anRankMargin(rowsArr).slice(0, 10).map((r, i) => { const u = anUnitProfit(r); return anRankRowHtml(i, r.key, r.name, (r.belowCost ? '<span class="text-rose-600">מוכר בהפסד!</span> · ' : '') + 'קונה ₪' + fmtMoney(r.cost) + ' · מוכר ₪' + fmtMoney(r.posPrice) + (u != null ? ' · ' + (u >= 0 ? 'נשאר ₪' + fmtMoney(u) : 'מפסיד ₪' + fmtMoney(-u)) + ' ליח׳' : ''), anPlainPct(r.marginPct), r.belowCost ? 'text-rose-600' : (r.marginPct < 10 ? 'text-amber-600' : 'text-slate-700'), 'רווח', r.belowCost ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-700'); }).join('');
+    // השורה מדברת באחוזים — הרווח הגדול באחוזים, ובשורת הפירוט מחיר הקנייה,
+    // מחיר הקופה, וכמה צריך לגבות כדי להגיע ליעד. הרווח בשקלים ליחידה ירד:
+    // על לחם במחיר 5₪ הוא תמיד נראה זניח, וזה בדיוק המוצר שהאחוז חושף.
+    const goal = anMarginGoal();
+    const list = anRankMargin(rowsArr, goal);
+    body = list.slice(0, 20).map((r, i) => {
+      const target = anMarginTargetPrice(r, goal);
+      return anRankRowHtml(i, r.key, r.name,
+        (r.belowCost ? '<span class="text-rose-600">מוכר בהפסד!</span> · ' : '') +
+        'קונה ₪' + fmtMoney(r.cost) + ' · מוכר ₪' + fmtMoney(r.posPrice) +
+        (target != null ? ' · ל-' + anPlainPct(goal) + ' צריך ₪' + fmtMoney(target) : ''),
+        anPlainPct(r.marginPct),
+        r.belowCost ? 'text-rose-600' : (r.marginPct < 10 ? 'text-amber-600' : 'text-slate-700'),
+        'רווח', r.belowCost ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-700');
+    }).join('');
+    empty = 'אין לחם עם רווח מתחת ל-' + anPlainPct(goal) + '.';
     const noPos = rowsArr.filter(r => r.recvUnits > 0 && r.posPrice == null).length;
-    if (noPos) note = noPos + ' לחמים שהגיעו בלי מחיר קופה לא נכללים.';
+    note = (list.length > 20 ? 'ועוד ' + (list.length - 20) + ' לחמים מתחת ל-' + anPlainPct(goal) + '. ' : '') +
+      (noPos ? noPos + ' לחמים שהגיעו בלי מחיר קופה לא נכללים.' : '');
   } else if (def.k === 'prices') {
     const up = anRankPriceUp(rowsArr), down = anRankPriceDown(rowsArr);
     body = up.slice(0, 10).map((r, i) => anRankRowHtml(i, r.key, r.name, 'מחיר רגיל: מ-₪' + fmtMoney(r.priceFirst) + ' ל-₪' + fmtMoney(r.priceLast) + ' · ' + r.prices.length + ' קליטות' + (r.promoLines ? ' (' + r.promoLines + ' במבצע, לא נספרות)' : ''), '+' + anPlainPct(r.priceChangePct), 'text-rose-600', 'עלה', 'bg-rose-50 text-rose-600')).join('');
@@ -17633,13 +17691,22 @@ function anRankingsHtml() {
       (r.retPct == null ? 'חזרו ' + anNum(r.retUnits) + ' יח׳ · לא הגיע בשבוע הזה' : 'חזרו ' + anNum(r.retUnits) + ' מתוך ' + anNum(r.recvUnits) + ' שהגיעו · ₪' + anMoney(r.retValue) + (anPctUnitsNote(r) ? ' · ' + anPctUnitsNote(r) : '')) + (single && !isCur ? ' · במהלך השבוע ' + anNum(r.retMid) + ' · במוצאי שבת ' + anNum(r.retEnd) : '') + avgTxt(r),
       anPctText(r), 'text-rose-600', 'חזר', 'bg-rose-50 text-rose-600')).join('');
   }
+  return { def: def, title: title, help: help,
+    html: (body || '<div class="text-center text-sm text-slate-400 font-bold py-4">' + empty + '</div>') +
+      (note ? '<div class="text-[11px] text-slate-400 font-bold pt-2">' + note + '</div>' : '') };
+}
+function anRankBodyHtml() { return anRankParts().html; }
+
+function anRankingsHtml() {
+  const p = anRankParts(), def = p.def;
+  const chips = AN_RANKS.map(c => '<button data-role="an-rank" data-rank="' + c.k + '" class="btn-tap py-2 rounded-xl text-xs font-black border ' + (anRank === c.k ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-600') + '">' + c.label + '</button>').join('');
   return '<div id="anRankBox" class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm mb-3">' +
     '<div class="text-xs font-black text-slate-500 mb-2"><i class="fa-solid fa-list-ol ml-1"></i>מה רוצים לראות?</div>' +
     '<div class="grid grid-cols-3 gap-1.5 mb-3">' + chips + '</div>' +
-    '<div class="font-black text-slate-800 text-base"><i class="fa-solid ' + def.icon + ' ' + def.color + ' ml-1"></i>' + title + '</div>' +
-    '<div class="text-[11px] text-slate-500 font-bold leading-relaxed mb-1">' + help + '</div>' +
-    (body || '<div class="text-center text-sm text-slate-400 font-bold py-4">' + def.empty + '</div>') +
-    (note ? '<div class="text-[11px] text-slate-400 font-bold pt-2">' + note + '</div>' : '') +
+    '<div class="font-black text-slate-800 text-base"><i class="fa-solid ' + def.icon + ' ' + def.color + ' ml-1"></i>' + p.title + '</div>' +
+    '<div class="text-[11px] text-slate-500 font-bold leading-relaxed mb-1">' + p.help + '</div>' +
+    (def.k === 'margin' ? anMarginGoalHtml() : '') +
+    '<div id="anRankBody">' + p.html + '</div>' +
   '</div>';
 }
 
@@ -18019,6 +18086,7 @@ app.addEventListener('input', (e) => {
   if (t.id === 'retDigits') { refreshReturnsDigits(t.value); return; }
   if (t.id === 'priceSearch') { priceQuery = t.value; refreshPricesList(priceQuery); return; }
   if (t.id === 'anSearch') { anQuery = t.value; const el = $('anSearchResults'); if (el) el.innerHTML = anSearchResultsHtml(); return; } // v33
+  if (role === 'an-margin-goal') { setAnMarginGoal(t.value); return; }
   if (t.id === 'promoSearch') { promoSearch = t.value; refreshPromoProdList(promoSearch); return; }
   if (t.id === 'promoMin' || t.id === 'promoCarton') { updatePromoHint(); return; }
   if (role === 'rc-qty') { setReceiptQty(t.dataset.id, t.value); return; }
