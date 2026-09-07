@@ -776,7 +776,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '66'; // גרסה 66: תעודת זיכוי אחת יכולה לסגור גם חזרות וגם חוסר של תעודת קליטה אחרת — העודף מזוהה ומשויך במקום להיחשב "הספק זיכה יותר מדי"
+const APP_VERSION = '67'; // גרסה 67: אימות הצילום מכיר במחיר רגיל ובמבצע שכבר מודפס בתעודה, לכל שורה בנפרד
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10184,14 +10184,30 @@ function tnuvaLinesVerified(returnedMap, docsInput) {
     return (Array.isArray(doc.rows) ? doc.rows.length : 0) === typed;
   });
 }
+// תוקף המבצע נבדק לפי תאריך הנייר, גם בצילום מאוחר של תעודה ישנה.
+function bermanScanDocumentDate(doc) {
+  const raw = String((doc && doc.docDate) || '').trim();
+  let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  let y, month, day;
+  if (m) { y = Number(m[1]); month = Number(m[2]); day = Number(m[3]); }
+  else {
+    m = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2}|\d{4})$/.exec(raw);
+    if (!m) return activeReceiptDate();
+    y = Number(m[3]); if (y < 100) y += 2000;
+    month = Number(m[2]); day = Number(m[1]);
+  }
+  const date = new Date(Date.UTC(y, month - 1, day));
+  if (date.getUTCFullYear() !== y || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return activeReceiptDate();
+  return String(y) + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+}
 function bermanAdaptScanPayload(payload) {
   const scan = payload && payload.scan;
   if (!scan || !Array.isArray(scan.documents)) return payload;
   if (!Array.isArray(scan.warnings)) scan.warnings = [];
   const built = bermanBuildCodeIndex();
-  const day = todayStr();
   scan.documents.forEach(doc => {
     if (!doc) return;
+    const day = bermanScanDocumentDate(doc);
     const rows = Array.isArray(doc.rows) ? doc.rows : [];
     // v51: תעודת זיכוי כבר אינה נזרקת. עד כאן הסורק קרא אותה במלואה ואז
     // האפליקציה השליכה את השורות והפנתה למסך החזרות — וזה הכריח לפצל מקבץ
@@ -10238,6 +10254,9 @@ function bermanAdaptScanPayload(payload) {
       // קוד שלא נמצא — ניסיון תיקון של ספרה אחת (מועמד יחיד + מחירון מאשר).
       let repair = null;
       if (!product && code) { repair = bermanRepairCode(code, row, built); if (repair) { product = repair.product; matchedBy = 'repair'; } }
+      const activeFixedPromo = product ? aiActiveFixedPromoFor(product.id, day) : null;
+      const printedPromo = activeFixedPromo && printedUnit != null && isFinite(printedUnit)
+        && Math.abs(aiMoneyCents(printedUnit) - aiMoneyCents(promoFixedPrice(activeFixedPromo))) <= 2;
       // הצלבת מחירון: המחיר המודפס הוא המחירון המלא. סטייה מול המאגר אינה
       // חוסמת את הזהות, אבל חייבת להישמע — היא הסימן הראשון לעדכון מחירון,
       // והיא גם תפיל את סגירת הכסף מול "נטו לחיוב" אם ההנחה כבר אינה נכונה.
@@ -10247,8 +10266,7 @@ function bermanAdaptScanPayload(payload) {
         // מדפיס מחירון ומקזז את המבצע במרכזת, אבל לפעמים המבצע יורד כבר
         // בתעודה עצמה. מחיר מודפס ששווה למחיר המבצע הפעיל אינו "מחירון
         // שהתעדכן" אלא מבצע שכבר ניתן — וההערה צריכה להרגיע, לא להבהיל.
-        const printedPromo = aiActiveFixedPromoFor(product.id, day);
-        if (printedPromo && Math.abs(aiMoneyCents(printedUnit) - aiMoneyCents(promoFixedPrice(printedPromo))) <= 2) {
+        if (printedPromo) {
           scan.warnings.push(String(product.name || '') + ': בתעודה מודפס מחיר המבצע (₪' + fmtMoney(printedUnit) + ') במקום המחירון (₪' + fmtMoney(productListPrice(product)) + ') — מבצע החודש ירד כבר בתעודה, ולכן לא צפוי עליו קיזוז במרכזת. המחירון לא השתנה.');
         } else {
           scan.warnings.push(String(product.name || '') + ': המחיר המודפס בתעודה (₪' + fmtMoney(printedUnit) + ') שונה ממחיר המחירון במאגר (₪' + fmtMoney(productListPrice(product)) + ') — ייתכן שהמחירון עודכן. בדוק את המוצר ואת אחוז ההנחה.');
@@ -10259,6 +10277,12 @@ function bermanAdaptScanPayload(payload) {
       // זוהתה נושאת את המחיר המודפס לצורכי אבחון — היא ממילא חוסמת עד הכרעה.
       const unit = product ? effectivePrice(product, qty == null ? 0 : qty, day) : printedUnit;
       const total = unit != null && isFinite(unit) && qty != null && isFinite(qty) ? lineTotalFromUnit(unit, qty) : null;
+      // שער הצילום בודק את מה שחויב בנייר: מחיר המבצע כשהוא מודפס,
+      // אחרת המחיר הרגיל אחרי ההנחה הקבועה. הבסיס לפתרון ההפרשים נשמר
+      // בנפרד, כדי שההכרעה הקיימת בקליטה תמנע קיזוז מבצע כפול במרכזת.
+      const paperUnit = printedPromo ? printedUnit : unit;
+      const paperTotal = product && paperUnit != null && isFinite(paperUnit) && qty != null && isFinite(qty)
+        ? lineTotalFromUnit(paperUnit, qty) : null;
       const fullBarcode = product ? normalizeBarcode(product.barcode || '') : '';
       // exact_full רק כשהזיהוי נעשה לפי הברקוד המודפס והוא זהה לברקוד יחיד
       // במאגר (≥6 ספרות). זיהוי לפי קוד נשאר בענף הדטרמיניסטי tnuva_code_exact —
@@ -10287,6 +10311,7 @@ function bermanAdaptScanPayload(payload) {
         grossLineTotalExVat: null,
         lineDiscountExVat: null,
         lineTotalExVat: total,
+        __bermanPaperLineTotalExVat: paperTotal,
         printedListUnitPrice: printedUnit == null || !isFinite(printedUnit) ? null : printedUnit, // המחירון כפי שנקרא מהנייר — אבחון בלבד
         promotionText: null, // על הנייר של ברמן אין סימוני מבצע — הקיזוז במרכזת
         confidence: row && isFinite(Number(row.confidence)) ? Number(row.confidence) : 0
@@ -10369,17 +10394,21 @@ function bermanPaperAnchorCheck(doc) {
   const printedNet = aiMoneyCents(doc && doc.subtotalExVat);
   const printedUnits = doc && doc.printedUnits != null && isFinite(Number(doc.printedUnits)) ? Math.round(Number(doc.printedUnits)) : null;
   const printedLines = doc && doc.printedLines != null && isFinite(Number(doc.printedLines)) ? Math.round(Number(doc.printedLines)) : null;
-  const rowsCents = Math.round(rows.reduce((sum, row) => sum + (Number(row && row.lineTotalExVat) || 0), 0) * 100);
+  const rowTotals = rows.map(row => row && Object.prototype.hasOwnProperty.call(row, '__bermanPaperLineTotalExVat')
+    ? row.__bermanPaperLineTotalExVat : row && row.lineTotalExVat);
+  const pricesKnown = rowTotals.every(value => value != null && Number.isFinite(value));
+  const rowsCents = Math.round(rowTotals.reduce((sum, value) => sum + (Number(value) || 0), 0) * 100);
   const readUnits = aiDocRowUnits(doc);
   // אותה סיבולת שבה נמדד הפער מול עוגן מוקלד — 2 אג׳ לשורה, 3 עד 25.
   const tolCents = Math.min(25, Math.max(3, 2 * rows.length));
-  const money = printedNet == null ? null : Math.abs(rowsCents - printedNet) <= tolCents;
+  const money = printedNet == null || !pricesKnown ? null : Math.abs(rowsCents - printedNet) <= tolCents;
   const units = printedUnits == null ? null : Math.round(readUnits) === printedUnits;
   const lines = printedLines == null ? null : rows.length === printedLines;
   const missing = [];
   if (printedNet == null) missing.push('"נטו לחיוב"');
   if (printedUnits == null) missing.push('"סה״כ כללי"');
   if (printedLines == null) missing.push('"סה״כ שורות"');
+  if (!pricesKnown) missing.push('מחיר או זיהוי מוצר לחישוב אחת השורות');
   const failed = [];
   if (money === false) failed.push('סכום השורות שנקראו (₪' + fmtMoney(rowsCents / 100) + ') אינו מסתכם ל"נטו לחיוב" המודפס (₪' + fmtMoney(printedNet / 100) + ')');
   if (units === false) failed.push('סכום הכמויות שנקראו (' + Math.round(readUnits) + ') אינו תואם ל"סה״כ כללי" המודפס (' + printedUnits + ')');
@@ -11069,7 +11098,7 @@ function aiPriceBreakdownRows() {
       // ולכן הוא יכול לסטות מהם בשקט: ההנחה עדיין אומרת 30% בזמן שהחישוב רץ
       // על מחיר אחר לגמרי. זו הסטייה היחידה שאינה סותרת "ההנחות לא משתנות".
       const expectedNet = catalogList > 0 ? finalUnitPrice(catalogList, productDiscountPct(product)) : null;
-      const activePromo = aiActiveFixedPromoFor(product.id, activeReceiptDate());
+      const activePromo = aiActiveFixedPromoFor(product.id, bermanScanDocumentDate(doc));
       // v47: המקרה ההפוך לשורה שהגיעה במחירון מלא — שורה שהגיעה כבר במחיר
       // המבצע. המחיר המודפס שווה למחיר המבצע הפעיל (±2 אגורות), כלומר הספק
       // הוריד את המבצע בתעודה עצמה במקום להשאיר אותו לקיזוז במרכזת. זו אינה
