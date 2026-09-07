@@ -7,7 +7,7 @@
 // הרצה: node tests/paper-anchors.test.mjs
 import { extractSource } from './extract.mjs';
 
-const FNS = ['r2', 'fmtMoney', 'aiMoneyCents', 'aiDocRowUnits', 'bermanPaperAnchorCheck', 'bermanPaperAnchorsFromScan'];
+const FNS = ['r2', 'fmtMoney', 'aiMoneyCents', 'aiDocRowUnits', 'bermanFullListMatch', 'bermanPaperAnchorCheck', 'bermanPaperAnchorsFromScan'];
 // eslint-disable-next-line no-eval
 const api = eval(extractSource(FNS, []) + '\n({ ' + FNS.join(', ') + ' })');
 const { bermanPaperAnchorCheck, bermanPaperAnchorsFromScan } = api;
@@ -98,3 +98,4 @@ check('לא ok, ולא קורס', empty.ok === false && empty.problems.length ==
 
 console.log('\n' + (fail ? '✗ ' + fail + ' נכשלו' : '✓ הכל עבר') + ' (' + pass + '/' + (pass + fail) + ')');
 process.exit(fail ? 1 : 0);
+

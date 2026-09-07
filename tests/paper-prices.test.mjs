@@ -12,7 +12,7 @@ const FNS = ['r2', 'fmtMoney', 'normalizeBarcode', 'productCode', 'productListPr
   'productDiscountPct', 'finalUnitPrice', 'promoFixedPrice', 'promoActive', 'promoForProduct',
   'promoTriggered', 'promoUnitPriceOf', 'effectivePrice', 'lineTotalFromUnit', 'todayStr',
   'activeReceiptDate', 'aiMoneyCents', 'aiDocRowUnits', 'bermanBuildCodeIndex',
-  'aiActiveFixedPromoFor', 'bermanAdaptScanPayload', 'bermanPaperAnchorCheck',
+  'aiActiveFixedPromoFor', 'bermanAdaptScanPayload', 'bermanFullListMatch', 'bermanPaperAnchorCheck',
   'bermanPaperAnchorsFromScan', 'monthEndPromoForProduct', 'monthEndUnitRebate',
   'receiptPromoOnPaperHas', 'receivingUnitPrice', 'bermanScanDocumentDate'];
 const api = eval(extractSource(FNS, []) + '\n({ ' + FNS.join(', ') + ' })');
