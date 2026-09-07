@@ -21,6 +21,14 @@ function extractOne(src, name) {
       if (escaped) escaped = false;
       else if (ch === '\\') escaped = true;
       else if (ch === quote) quote = null;
+    } else if (ch === '/' && src[j + 1] === '/') {
+      const end = src.indexOf('\n', j + 2);
+      if (end < 0) return null;
+      j = end;
+    } else if (ch === '/' && src[j + 1] === '*') {
+      const end = src.indexOf('*/', j + 2);
+      if (end < 0) return null;
+      j = end + 1;
     } else if (ch === '"' || ch === "'" || ch === '`') quote = ch;
     else if (ch === '{') depth++;
     else if (ch === '}' && --depth === 0) return src.slice(head.index, j + 1);
