@@ -56,3 +56,14 @@ node tests/promo-on-paper.test.mjs --backup ~/Downloads/bermanbackup.json
 
 
 `node tests/paper-prices.test.mjs` — 14 בדיקות v67 של המתאם ושער האימות יחד, החל משורות בפורמט שהשרת באמת מחזיר. מחיר מבצע שכבר מודפס מחליף את המחיר הרגיל לצורך אימות הנייר בלבד; הבדיקה מכסה גם תעודות מעורבות, תוקף לפי תאריך הנייר והמשך מניעת קיזוז כפול. הנתונים סינתטיים ומשתמשים במחירון הקיים ב-fixture.
+
+## v68: Three monthly-promotion billing modes
+
+`node tests/monthly-billing.test.mjs` runs 19 integration cases through the real
+adapter, paper anchor gate, price-gap explanation and pending monthly rebate.
+It covers the reported 759.32 / 91 / 15 invoice, all nine combinations of regular,
+full and promotional billing for two products, multiple pending rows, ambiguity,
+expired promotions and real mismatches. No live OCR request is made.
+
+To repeat against a private backup without committing it:
+`node tests/monthly-billing.test.mjs --backup /path/to/backup.json`.

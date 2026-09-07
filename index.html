@@ -776,7 +776,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '67'; // גרסה 67: אימות הצילום מכיר במחיר רגיל ובמבצע שכבר מודפס בתעודה, לכל שורה בנפרד
+const APP_VERSION = '68'; // גרסה 68: שלושת מצבי החיוב של מוצר במבצע חודשי
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -7446,9 +7446,12 @@ function paperScanStatusHtml() {
       '<i class="fa-solid fa-circle-notch fa-spin"></i><span>' + htmlEscape(aiScanProgressText || 'קורא את התעודה ברקע…') + ' סרוק את הסחורה כרגיל.</span></div>';
   }
   if (receiptPaperScanState === 'ok' && receiptNoteTotal != null) {
+    const fullListRows = aiScanResponse && aiScanResponse.scan && Array.isArray(aiScanResponse.scan.documents)
+      ? aiScanResponse.scan.documents.reduce((n, d) => n + (d.__bermanFullListRowIndexes || []).length, 0) : 0;
     return '<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-2.5 mb-3 text-[11px] font-black text-emerald-800">' +
       '<i class="fa-solid fa-file-circle-check"></i> העוגנים נקראו מהתעודה ואומתו מול בלוק הסיכום שלה — ₪' + fmtMoney(receiptNoteTotal) +
-      ' · ' + receiptNoteUnits + ' יח׳' + (receiptNoteLines != null ? ' · ' + receiptNoteLines + ' שורות' : '') + '</div>';
+      ' · ' + receiptNoteUnits + ' יח׳' + (receiptNoteLines != null ? ' · ' + receiptNoteLines + ' שורות' : '') +
+      (fullListRows ? '<div class="mt-1">הסכום תואם לחיוב מוצרי מבצע במחיר מלא. ההפרש ייבדק בסיום הקליטה ויישמר למעקב מול המרכזת.</div>' : '') + '</div>';
   }
   if (receiptPaperScanState === 'failed') {
     return '<div class="rounded-xl bg-amber-50 border-2 border-amber-300 p-3 mb-3">' +
@@ -10312,6 +10315,12 @@ function bermanAdaptScanPayload(payload) {
         lineDiscountExVat: null,
         lineTotalExVat: total,
         __bermanPaperLineTotalExVat: paperTotal,
+        // Only an active monthly promotion can legitimately lose the regular
+        // discount. The printed list price must independently support it.
+        __bermanFullListTotalExVat: product && activeFixedPromo && !printedPromo
+          && qty > 0 && printedUnit > 0 && unit > 0 && productListPrice(product) > unit
+          && Math.abs(aiMoneyCents(printedUnit) - aiMoneyCents(productListPrice(product))) <= 2
+          ? lineTotalFromUnit(printedUnit, qty) : null,
         printedListUnitPrice: printedUnit == null || !isFinite(printedUnit) ? null : printedUnit, // המחירון כפי שנקרא מהנייר — אבחון בלבד
         promotionText: null, // על הנייר של ברמן אין סימוני מבצע — הקיזוז במרכזת
         confidence: row && isFinite(Number(row.confidence)) ? Number(row.confidence) : 0
@@ -10389,6 +10398,34 @@ function aiDocRowUnits(doc) {
 // עד v61 שלוש אלה היו אזהרות בלבד בתוך aiEvaluateInvoiceScan, כי העוגנים
 // המוקלדים עשו את העבודה. כאן הן עומדות בפני עצמן, בלי שום תלות במה
 // שהוקלד — וזה בדיוק העניין.
+// Resolve only known monthly-promotion alternatives; never invent a price to
+// close the anchor. Ambiguous subsets and excessive search both fail closed.
+function bermanFullListMatch(rows, rowTotals, targetDelta, tolerance) {
+  if (targetDelta <= tolerance) return null;
+  let states = new Map([[0, { indexes: [], ways: 1 }]]);
+  for (let i = 0; i < rows.length; i++) {
+    const full = rows[i] && rows[i].__bermanFullListTotalExVat;
+    if (full == null || !Number.isFinite(full)) continue;
+    const delta = aiMoneyCents(full) - aiMoneyCents(rowTotals[i]);
+    if (!(delta > 0)) continue;
+    const next = new Map(states);
+    for (const [sum, path] of states) {
+      const total = sum + delta;
+      if (total > targetDelta + tolerance) continue;
+      const prior = next.get(total);
+      next.set(total, { indexes: path.indexes.concat(i), ways: Math.min(2, path.ways + (prior ? prior.ways : 0)) });
+      if (next.size > 4096) return null;
+    }
+    states = next;
+  }
+  let match = null;
+  for (const [sum, path] of states) {
+    if (Math.abs(sum - targetDelta) > tolerance) continue;
+    if (match || path.ways !== 1) return null;
+    match = { indexes: path.indexes, deltaCents: sum };
+  }
+  return match;
+}
 function bermanPaperAnchorCheck(doc) {
   const rows = doc && Array.isArray(doc.rows) ? doc.rows : [];
   const printedNet = aiMoneyCents(doc && doc.subtotalExVat);
@@ -10401,16 +10438,23 @@ function bermanPaperAnchorCheck(doc) {
   const readUnits = aiDocRowUnits(doc);
   // אותה סיבולת שבה נמדד הפער מול עוגן מוקלד — 2 אג׳ לשורה, 3 עד 25.
   const tolCents = Math.min(25, Math.max(3, 2 * rows.length));
-  const money = printedNet == null || !pricesKnown ? null : Math.abs(rowsCents - printedNet) <= tolCents;
+  let money = printedNet == null || !pricesKnown ? null : Math.abs(rowsCents - printedNet) <= tolCents;
   const units = printedUnits == null ? null : Math.round(readUnits) === printedUnits;
   const lines = printedLines == null ? null : rows.length === printedLines;
+  if (doc) doc.__bermanFullListRowIndexes = [];
+  const fullListMatch = money === false && units === true && lines === true
+    ? bermanFullListMatch(rows, rowTotals, printedNet - rowsCents, tolCents) : null;
+  if (fullListMatch) {
+    money = true;
+    doc.__bermanFullListRowIndexes = fullListMatch.indexes;
+  }
   const missing = [];
   if (printedNet == null) missing.push('"נטו לחיוב"');
   if (printedUnits == null) missing.push('"סה״כ כללי"');
   if (printedLines == null) missing.push('"סה״כ שורות"');
   if (!pricesKnown) missing.push('מחיר או זיהוי מוצר לחישוב אחת השורות');
   const failed = [];
-  if (money === false) failed.push('סכום השורות שנקראו (₪' + fmtMoney(rowsCents / 100) + ') אינו מסתכם ל"נטו לחיוב" המודפס (₪' + fmtMoney(printedNet / 100) + ')');
+  if (money === false) failed.push('החישוב לפי המחירון והמבצעים (₪' + fmtMoney(rowsCents / 100) + ') אינו תואם ל"נטו לחיוב" המודפס (₪' + fmtMoney(printedNet / 100) + ') — יש לבדוק מחירים, הנחות או את קריאת השורות');
   if (units === false) failed.push('סכום הכמויות שנקראו (' + Math.round(readUnits) + ') אינו תואם ל"סה״כ כללי" המודפס (' + printedUnits + ')');
   if (lines === false) failed.push('מספר השורות שנקראו (' + rows.length + ') אינו תואם ל"סה״כ שורות" המודפס (' + printedLines + ')');
   return {
@@ -11084,7 +11128,9 @@ function aiPriceBreakdownRows() {
     ? aiScanResponse.scan.documents : [];
   const out = [];
   documents.forEach(doc => {
-    (Array.isArray(doc && doc.rows) ? doc.rows : []).forEach(row => {
+    // The same per-document proof serves photo-first and manually anchored scans.
+    bermanPaperAnchorCheck(doc);
+    (Array.isArray(doc && doc.rows) ? doc.rows : []).forEach((row, rowIndex) => {
       const resolution = aiResolveInvoiceBarcode(row);
       const product = resolution && !resolution.error ? resolution.product : null;
       const qty = row && row.quantity == null ? null : Number(row.quantity);
@@ -11108,6 +11154,8 @@ function aiPriceBreakdownRows() {
         && Math.abs(aiMoneyCents(printedList) - aiMoneyCents(promoFixed)) <= 2);
       out.push({
         product, qty, printedList, catalogList, net, expectedNet, activePromo, promoFixed, promoOnPaper,
+        fullListOnPaper: (doc.__bermanFullListRowIndexes || []).includes(rowIndex),
+        credit: doc.docType === 'credit',
         pct: productDiscountPct(product),
         lineTotal: lineTotalFromUnit(net, qty),
         netDrift: expectedNet != null && Math.abs(net - expectedNet) > 0.005 ? r2((net - expectedNet) * qty) : 0,
@@ -11243,6 +11291,19 @@ function aiPriceGapContext(ev) {
   // הסבר נכון עד האגורה יכול לפספס את הפער בכמה אגורות על תעודה ארוכה
   // (16 שורות: הסבר של ₪26.60 מול פער של ₪26.58). אגורה לשורה, ולפחות 5.
   const roundingTol = Math.max(0.05, 0.01 * rows.length);
+  // v68: Multiple full-list rows are accepted only when each document has its
+  // own unique monetary/quantity/line-count proof. Never cancel mismatches
+  // across different documents or attribute a credit to a delivery rebate.
+  const provenFullRows = rows.filter(r => r.fullListOnPaper && r.activePromo && !r.credit);
+  const provenPromoRows = rows.filter(r => r.promoOnPaper && r.net > r.promoFixed + 0.005 && !r.credit);
+  const provenFullGap = r2(provenFullRows.reduce((s, r) => s + lineTotalFromUnit(r.printedList, r.qty) - r.lineTotal, 0));
+  const provenPromoGap = r2(provenPromoRows.reduce((s, r) => s + lineTotalFromUnit(r.printedList, r.qty) - r.lineTotal, 0));
+  if (quantitiesAnchored && provenFullRows.length && !rows.some(r => r.credit)
+      && gap != null && Math.abs(gap - provenFullGap - provenPromoGap) <= roundingTol) {
+    return { rows, appTotal, paperTotal, gap, quantitiesAnchored, anchorText, roundingTol,
+      fullListRows: provenFullRows, fullListRow: provenFullRows[0], fullListGap: r2(gap - provenPromoGap),
+      promoOnPaperRows: provenPromoRows, promoOnPaperTotal: provenPromoGap, gapExplained: true };
+  }
   // v47: שורות שהגיעו כבר במחיר המבצע (המחיר המודפס = מחיר המבצע הפעיל).
   // אלה עובדות מהנייר, לא ניחוש — ולכן הן מוסברות ראשונות, וכל חיפוש אחר
   // (שורה במחירון מלא) נעשה על מה שנשאר מהפער אחריהן. כך גם תעודה שבה
@@ -11273,9 +11334,9 @@ function aiPriceGapContext(ev) {
 // את כרטיסי ההסבר, כדי שהכותרת והפירוט לעולם לא יאמרו דברים שונים.
 function aiGapExplainedLine(ctx) {
   if (!ctx || !ctx.gapExplained) return '';
-  const fullListLine = ctx.fullListRow && ctx.fullListRow.activePromo
-    ? String(ctx.fullListRow.product.name || '') + ' הגיע בלי ההנחה הרגילה, אבל יש עליו מבצע החודש — הכסף יחזור בקיזוז בסוף החודש.'
-    : '';
+  const fullRows = ctx.fullListRows || (ctx.fullListRow ? [ctx.fullListRow] : []);
+  const fullListLine = fullRows.filter(r => r.activePromo).map(r =>
+    String(r.product.name || '') + ' הגיע בלי ההנחה הרגילה, ויש עליו מבצע חודשי — ההפרש יישמר למעקב מול המרכזת.').join(' ');
   // המקרה של אתמול לבדו — בדיוק המשפט של v46, מילה במילה.
   if (!ctx.promoOnPaperRows.length) return fullListLine ? fullListLine + ' אפשר לקלוט.' : '';
   const names = ctx.promoOnPaperRows.map(r => String(r.product.name || '')).join(', ');
@@ -11293,7 +11354,21 @@ function aiGapExplainedLine(ctx) {
 function aiMonthEndPendingRecord(ev) {
   const ctx = aiPriceGapContext(ev);
   if (!ctx || !ctx.fullListRow) return null;
-  const r = ctx.fullListRow, promo = r.activePromo;
+  if (ctx.fullListRows && ctx.fullListRows.length > 1) {
+    const items = ctx.fullListRows.map(r => ({
+      productId: String(r.product.id), name: String(r.product.name || '').slice(0, 160),
+      qty: r.qty, listPrice: r.printedList, expectedNet: r.net,
+      gap: r2(lineTotalFromUnit(r.printedList, r.qty) - r.lineTotal),
+      promoName: String(r.activePromo.name || '').slice(0, 160),
+      promoFixedPrice: r.promoFixed, finalUnitPrice: r.promoFixed,
+      expectedRebate: r2(lineTotalFromUnit(r.printedList, r.qty) - lineTotalFromUnit(r.promoFixed, r.qty))
+    }));
+    return { items, gap: ctx.fullListGap,
+      expectedRebate: r2(items.reduce((s, r) => s + r.expectedRebate, 0)), recordedAt: Date.now() };
+  }
+  const r = ctx.fullListRow.fullListOnPaper
+    ? Object.assign({}, ctx.fullListRow, { catalogList: ctx.fullListRow.printedList }) : ctx.fullListRow;
+  const promo = r.activePromo;
   if (!promo) return null; // בלי מבצע אין קיזוז צפוי — זו באמת בעיה פתוחה
   const fixed = promoFixedPrice(promo);
   if (!(fixed > 0)) return null;
@@ -11489,7 +11564,17 @@ function aiFullListExplanationHtml(ev) {
   if (!ctx) return '';
   const promoOnPaperHtml = aiSafeBlock('מבצע שירד בתעודה', () => aiPromoOnPaperExplanationHtml(ctx));
   if (!ctx.fullListRow) return promoOnPaperHtml;
-  const r = ctx.fullListRow, promo = r.activePromo;
+  if (ctx.fullListRows && ctx.fullListRows.length > 1) {
+    return promoOnPaperHtml + '<div class="rounded-xl border-2 border-emerald-400 bg-emerald-50 p-3">' +
+      '<div class="font-black text-base text-emerald-900">מוצרי מבצע חויבו במחיר מלא — ממתינים למרכזת</div>' +
+      ctx.fullListRows.map(r => '<div class="text-sm mt-2">' + htmlEscape(String(r.product.name || '')) +
+        ': ' + r.qty + ' יח׳ במחיר ₪' + fmtMoney(r.printedList) +
+        ', מחיר המבצע הצפוי במרכזת ₪' + fmtMoney(r.promoFixed) + ' ליח׳.</div>').join('') +
+      '<div class="font-bold mt-2">ההפרש ₪' + fmtMoney(ctx.fullListGap) + ' יישמר למעקב מול המרכזת. אפשר להמשיך בקליטה.</div></div>';
+  }
+  const r = ctx.fullListRow.fullListOnPaper
+    ? Object.assign({}, ctx.fullListRow, { catalogList: ctx.fullListRow.printedList }) : ctx.fullListRow;
+  const promo = r.activePromo;
   const perUnitGap = r2(r.catalogList - r.net);
   const explainedGap = ctx.fullListGap != null ? ctx.fullListGap : ctx.gap;
   const head = htmlEscape(String(r.product.name || ''));
@@ -15142,6 +15227,14 @@ function renderReceiptsHistory() {
           // v40: מי שפותח את התעודה חודש אחרי כן צריך לראות בשנייה למה היא
           // אינה "בעיה" — עם השם, הסכום, והמחיר הסופי שכבר ידוע.
           const mp = di.monthEndPending;
+          if (Array.isArray(mp.items)) {
+            return '<div class="mt-2 bg-violet-50 border border-violet-200 rounded-xl p-2.5 text-xs">' +
+              '<div class="font-black text-violet-800 mb-1">ממתינה לקיזוז המרכזת</div>' +
+              mp.items.map(item => '<div class="font-bold text-violet-900">' + htmlEscape(String(item.name || '')) +
+                ': ' + item.qty + ' יח׳ חויבו במחיר מלא ₪' + fmtMoney(item.listPrice) +
+                '. מחיר המבצע ₪' + fmtMoney(item.promoFixedPrice) +
+                ', קיזוז צפוי ₪' + fmtMoney(item.expectedRebate) + '.</div>').join('') + '</div>';
+          }
           return '<div class="mt-2 bg-violet-50 border border-violet-200 rounded-xl p-2.5 text-xs">' +
             '<div class="font-black text-violet-800 mb-1"><i class="fa-solid fa-hourglass-half"></i> ממתינה לקיזוז המרכזת \u2014 לא נדרש טיפול</div>' +
             '<div class="font-bold text-violet-900 leading-relaxed">' + htmlEscape(String(mp.name || '')) + ' חויב בתעודה במחירון מלא \u20aa' + fmtMoney(mp.listPrice) + ' במקום \u20aa' + fmt3(mp.expectedNet) + ' \u2014 הפרש של \u20aa' + fmtMoney(mp.gap) + '.<br>' +
