@@ -13,7 +13,7 @@ const byCode = code => products.find(p => p.code === String(code));
 // Identity resolution is isolated here; the real adapter has already assigned IDs.
 function aiResolveInvoiceBarcode(row) { return { product: products.find(p => p.id === row.__tnuvaProductId) }; }
 function findProductsByBarcode(barcode) { return products.filter(p => p.barcode === barcode); }
-const FNS = ['r2', 'fmtMoney', 'normalizeBarcode', 'productCode', 'productListPrice',
+const FNS = ['priceAuditCapture','makeOperationId','r2', 'fmtMoney', 'normalizeBarcode', 'productCode', 'productListPrice',
   'productDiscountPct', 'finalUnitPrice', 'promoFixedPrice', 'promoActive', 'promoForProduct',
   'promoTriggered', 'promoUnitPriceOf', 'effectivePrice', 'lineTotalFromUnit', 'todayStr',
   'activeReceiptDate', 'aiMoneyCents', 'aiDocRowUnits', 'bermanBuildCodeIndex',

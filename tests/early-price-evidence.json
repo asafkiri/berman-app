@@ -1,0 +1,722 @@
+[
+  {
+    "scenario": "matching price",
+    "scannedProducts": 0,
+    "report": {
+      "version": 1,
+      "supplier": "berman",
+      "documents": [
+        {
+          "id": "paper_price_local-enbt7555i7",
+          "index": 0,
+          "number": "INV-100",
+          "date": "2026-09-09",
+          "complete": true,
+          "summaryDiscount": 0,
+          "summaryStatus": ""
+        }
+      ],
+      "rows": [
+        {
+          "id": "paper_price_local-enbt7555i7:0",
+          "documentId": "paper_price_local-enbt7555i7",
+          "documentNumber": "INV-100",
+          "documentIndex": 0,
+          "page": 1,
+          "line": 1,
+          "productId": "milk",
+          "name": "מוצר בדיקה",
+          "code": "8",
+          "quantity": 10,
+          "date": "2026-09-09",
+          "originalUnitPrice": 5,
+          "adaptedUnitPrice": 5,
+          "chargedUnitPrice": null,
+          "chargeDerivation": "מחיר המאגר לאחר ההנחה הקבועה: ₪5.00. אין בתעודה פירוט שמוכיח את החיוב לשורה.",
+          "catalogBasePrice": 5,
+          "regularDiscountPct": 0,
+          "promo": null,
+          "expectedOptions": [
+            {
+              "label": "מחיר רגיל לפני הנחה קבועה",
+              "price": 5,
+              "unitDifference": 0,
+              "lineDifference": 0
+            }
+          ],
+          "comparisonPrice": 5,
+          "comparisonBasis": "ללא מע״מ; פיקדון נבדק בשורה נפרדת",
+          "capability": "checkable",
+          "result": "match",
+          "reason": "המחיר תואם: מחיר רגיל לפני הנחה קבועה",
+          "monthlyStatus": null,
+          "catalogRegularNetPrice": 5,
+          "matchedForms": [
+            "מחיר רגיל לפני הנחה קבועה"
+          ]
+        }
+      ],
+      "complete": true,
+      "state": "ready"
+    },
+    "screenText": "נטו לחיוב (ללא מע״מ) · 10 יח׳ · 1 שורות ₪50.00 ערוך העוגנים נקראו מהתעודה ואומתו מול בלוק הסיכום שלה — ₪50.00 · 10 יח׳ · 1 שורות המחירים שנבדקו תואמים 0 שורות עם פער · 0 שורות שלא ניתן לבדוק ללא מע״מ · אותה יחידת מוצר · פיקדון בנפרד · לפי הכמות בנייר. הספירה אינה משפיעה על בדיקה זו. תאריך התעודה: 2026-09-09 · עריכה השלם תאריך לתעודה INV-100 פתח פירוט מחירים ומצבים לבדיקה (1) מוצר בדיקה 8 · כמות בתעודה: 10 תעודה INV-100 · עמוד 1 · שורה 1 · 2026-09-09 מחיר יחידה מודפס: ₪5.00 מחיר המאגר לאחר ההנחה הקבועה: ₪5.00. אין בתעודה פירוט שמוכיח את החיוב לשורה. מחיר מאגר לפני הנחה: ₪5.00 מחיר צפוי · מחיר רגיל לפני הנחה קבועה: ₪5.00 מחיר בתעודה באותו בסיס: ₪5.00 המחיר תואם: מחיר רגיל לפני הנחה קבועה שלב 2 · סריקת מוצרים ₪0.00 / ₪50.00 0/10 יח׳ · 0/1 שורות פער ₪50.00 סרוק פריט לתעודה הוסף לחם בתפזורת לא מצליח לסרוק? הקלד את קוד הפריט שמודפס בתעודה (2–4 ספרות) — או חפש לפי שם המוצר שורות שנקלטו 0 שורות אין פריטים עדיין סרוק ברקוד כדי להתחיל תעודה",
+    "additionalAIRequests": 0
+  },
+  {
+    "scenario": "price difference before first counted item",
+    "scannedProducts": 0,
+    "report": {
+      "version": 1,
+      "supplier": "berman",
+      "documents": [
+        {
+          "id": "paper_price_local-sc7t50xykss",
+          "index": 0,
+          "number": "INV-100",
+          "date": "2026-09-09",
+          "complete": true,
+          "summaryDiscount": 0,
+          "summaryStatus": ""
+        }
+      ],
+      "rows": [
+        {
+          "id": "paper_price_local-sc7t50xykss:0",
+          "documentId": "paper_price_local-sc7t50xykss",
+          "documentNumber": "INV-100",
+          "documentIndex": 0,
+          "page": 1,
+          "line": 1,
+          "productId": "milk",
+          "name": "מוצר בדיקה",
+          "code": "8",
+          "quantity": 10,
+          "date": "2026-09-09",
+          "originalUnitPrice": 6,
+          "adaptedUnitPrice": 5,
+          "chargedUnitPrice": null,
+          "chargeDerivation": "מחיר המאגר לאחר ההנחה הקבועה: ₪5.00. אין בתעודה פירוט שמוכיח את החיוב לשורה.",
+          "catalogBasePrice": 5,
+          "regularDiscountPct": 0,
+          "promo": null,
+          "expectedOptions": [
+            {
+              "label": "מחיר רגיל לפני הנחה קבועה",
+              "price": 5,
+              "unitDifference": 1,
+              "lineDifference": 10
+            }
+          ],
+          "comparisonPrice": 6,
+          "comparisonBasis": "ללא מע״מ; פיקדון נבדק בשורה נפרדת",
+          "capability": "checkable",
+          "result": "difference",
+          "reason": "המחיר בתעודה שונה מהמחיר שבמאגר",
+          "monthlyStatus": null,
+          "catalogRegularNetPrice": 5,
+          "matchedForms": []
+        }
+      ],
+      "complete": true,
+      "state": "ready"
+    },
+    "screenText": "נטו לחיוב (ללא מע״מ) ללא אימות ערוך הנייר לא אישר את עצמו — צריך את המספרים ממך החישוב לפי המחירון והמבצעים (₪50.00) אינו תואם ל&quot;נטו לחיוב&quot; המודפס (₪60.00) — יש לבדוק מחירים, הנחות או את קריאת השורות הקלד את שלושת המספרים או: צלם את התעודה שוב המחיר בתעודה שונה מהמחיר שבמאגר 1 שורות עם פער · 0 שורות שלא ניתן לבדוק ללא מע״מ · אותה יחידת מוצר · פיקדון בנפרד · לפי הכמות בנייר. הספירה אינה משפיעה על בדיקה זו. תאריך התעודה: 2026-09-09 · עריכה השלם תאריך לתעודה INV-100 פתח פירוט מחירים ומצבים לבדיקה (1) מוצר בדיקה 8 · כמות בתעודה: 10 תעודה INV-100 · עמוד 1 · שורה 1 · 2026-09-09 מחיר יחידה מודפס: ₪6.00 מחיר המאגר לאחר ההנחה הקבועה: ₪5.00. אין בתעודה פירוט שמוכיח את החיוב לשורה. מחיר מאגר לפני הנחה: ₪5.00 מחיר צפוי · מחיר רגיל לפני הנחה קבועה: ₪5.00 מחיר בתעודה באותו בסיס: ₪6.00 הפרש ליחידה: ₪1.00 · הפרש לשורה: ₪10.00 המחיר בתעודה שונה מהמחיר שבמאגר שלב 2 · סריקת מוצרים ₪0.00 0 יח׳ · 0 שורות ללא יעד סכום סרוק פריט לתעודה הוסף לחם בתפזורת לא מצליח לסרוק? הקלד את קוד הפריט שמודפס בתעודה (2–4 ספרות) — או חפש לפי שם המוצר שורות שנקלטו 0 שורות אין פריטים עדיין סרוק ברקוד כדי להתחיל תעודה",
+    "additionalAIRequests": 0
+  },
+  {
+    "scenario": "monthly price 10",
+    "scannedProducts": 0,
+    "report": {
+      "version": 1,
+      "supplier": "berman",
+      "documents": [
+        {
+          "id": "paper_price_local-d3rj2kmq9bv",
+          "index": 0,
+          "number": "INV-100",
+          "date": "2026-09-09",
+          "complete": true,
+          "summaryDiscount": 0,
+          "summaryStatus": ""
+        }
+      ],
+      "rows": [
+        {
+          "id": "paper_price_local-d3rj2kmq9bv:0",
+          "documentId": "paper_price_local-d3rj2kmq9bv",
+          "documentNumber": "INV-100",
+          "documentIndex": 0,
+          "page": 1,
+          "line": 1,
+          "productId": "milk",
+          "name": "מוצר בדיקה",
+          "code": "8",
+          "quantity": 10,
+          "date": "2026-09-09",
+          "originalUnitPrice": 10,
+          "adaptedUnitPrice": 8,
+          "chargedUnitPrice": null,
+          "chargeDerivation": "",
+          "catalogBasePrice": 10,
+          "regularDiscountPct": 20,
+          "promo": {
+            "id": "p1",
+            "name": "מבצע בדיקה",
+            "pct": 20,
+            "fixedPrice": 6,
+            "start": "2026-09-01",
+            "end": "2026-09-30",
+            "minUnits": 1
+          },
+          "expectedOptions": [
+            {
+              "label": "מחיר מלא",
+              "price": 10,
+              "unitDifference": 0,
+              "lineDifference": 0
+            },
+            {
+              "label": "מבצע חודשי",
+              "price": 6,
+              "unitDifference": 4,
+              "lineDifference": 40
+            },
+            {
+              "label": "הנחה קבועה",
+              "price": 8,
+              "unitDifference": 2,
+              "lineDifference": 20
+            }
+          ],
+          "comparisonPrice": 10,
+          "comparisonBasis": "ללא מע״מ; פיקדון נבדק בשורה נפרדת",
+          "capability": "checkable",
+          "result": "match",
+          "reason": "המחיר תואם: מחיר מלא",
+          "monthlyStatus": "בדיקת ההתחשבנות החודשית נפרדת. זיהוי המחיר אינו אישור שהתקבל זיכוי ואינו מפחית הנחה נוספת.",
+          "catalogRegularNetPrice": 8,
+          "matchedForms": [
+            "מחיר מלא"
+          ]
+        }
+      ],
+      "complete": true,
+      "state": "ready"
+    },
+    "screenText": "נטו לחיוב (ללא מע״מ) · 10 יח׳ · 1 שורות ₪100.00 ערוך העוגנים נקראו מהתעודה ואומתו מול בלוק הסיכום שלה — ₪100.00 · 10 יח׳ · 1 שורות הסכום תואם לחיוב מוצרי מבצע במחיר מלא. ההפרש ייבדק בסיום הקליטה ויישמר למעקב מול המרכזת. המחירים שנבדקו תואמים 0 שורות עם פער · 0 שורות שלא ניתן לבדוק ללא מע״מ · אותה יחידת מוצר · פיקדון בנפרד · לפי הכמות בנייר. הספירה אינה משפיעה על בדיקה זו. תאריך התעודה: 2026-09-09 · עריכה השלם תאריך לתעודה INV-100 פתח פירוט מחירים ומצבים לבדיקה (1) מוצר בדיקה 8 · כמות בתעודה: 10 תעודה INV-100 · עמוד 1 · שורה 1 · 2026-09-09 מחיר יחידה מודפס: ₪10.00 מחיר מאגר לפני הנחה: ₪10.00 · הנחה קבועה 20% מבצע: מבצע בדיקה · 2026-09-01 עד 2026-09-30 · מינימום 1 מחיר צפוי · מחיר מלא: ₪10.00 מחיר בתעודה באותו בסיס: ₪10.00 מחיר צפוי · מבצע חודשי: ₪6.00 מחיר בתעודה באותו בסיס: ₪10.00 מחיר צפוי · הנחה קבועה: ₪8.00 מחיר בתעודה באותו בסיס: ₪10.00 המחיר תואם: מחיר מלא בדיקת ההתחשבנות החודשית נפרדת. זיהוי המחיר אינו אישור שהתקבל זיכוי ואינו מפחית הנחה נוספת. שלב 2 · סריקת מוצרים ₪0.00 / ₪100.00 0/10 יח׳ · 0/1 שורות פער ₪100.00 סרוק פריט לתעודה הוסף לחם בתפזורת לא מצליח לסרוק? הקלד את קוד הפריט שמודפס בתעודה (2–4 ספרות) — או חפש לפי שם המוצר שורות שנקלטו 0 שורות אין פריטים עדיין סרוק ברקוד כדי להתחיל תעודה",
+    "additionalAIRequests": 0
+  },
+  {
+    "scenario": "monthly price 6",
+    "scannedProducts": 0,
+    "report": {
+      "version": 1,
+      "supplier": "berman",
+      "documents": [
+        {
+          "id": "paper_price_local-5e8nckw5vb",
+          "index": 0,
+          "number": "INV-100",
+          "date": "2026-09-09",
+          "complete": true,
+          "summaryDiscount": 0,
+          "summaryStatus": ""
+        }
+      ],
+      "rows": [
+        {
+          "id": "paper_price_local-5e8nckw5vb:0",
+          "documentId": "paper_price_local-5e8nckw5vb",
+          "documentNumber": "INV-100",
+          "documentIndex": 0,
+          "page": 1,
+          "line": 1,
+          "productId": "milk",
+          "name": "מוצר בדיקה",
+          "code": "8",
+          "quantity": 10,
+          "date": "2026-09-09",
+          "originalUnitPrice": 6,
+          "adaptedUnitPrice": 8,
+          "chargedUnitPrice": null,
+          "chargeDerivation": "",
+          "catalogBasePrice": 10,
+          "regularDiscountPct": 20,
+          "promo": {
+            "id": "p1",
+            "name": "מבצע בדיקה",
+            "pct": 20,
+            "fixedPrice": 6,
+            "start": "2026-09-01",
+            "end": "2026-09-30",
+            "minUnits": 1
+          },
+          "expectedOptions": [
+            {
+              "label": "מחיר מלא",
+              "price": 10,
+              "unitDifference": -4,
+              "lineDifference": -40
+            },
+            {
+              "label": "מבצע חודשי",
+              "price": 6,
+              "unitDifference": 0,
+              "lineDifference": 0
+            },
+            {
+              "label": "הנחה קבועה",
+              "price": 8,
+              "unitDifference": -2,
+              "lineDifference": -20
+            }
+          ],
+          "comparisonPrice": 6,
+          "comparisonBasis": "ללא מע״מ; פיקדון נבדק בשורה נפרדת",
+          "capability": "checkable",
+          "result": "match",
+          "reason": "המחיר תואם: מבצע חודשי",
+          "monthlyStatus": "בדיקת ההתחשבנות החודשית נפרדת. זיהוי המחיר אינו אישור שהתקבל זיכוי ואינו מפחית הנחה נוספת.",
+          "catalogRegularNetPrice": 8,
+          "matchedForms": [
+            "מבצע חודשי"
+          ]
+        }
+      ],
+      "complete": true,
+      "state": "ready"
+    },
+    "screenText": "נטו לחיוב (ללא מע״מ) · 10 יח׳ · 1 שורות ₪60.00 ערוך העוגנים נקראו מהתעודה ואומתו מול בלוק הסיכום שלה — ₪60.00 · 10 יח׳ · 1 שורות המחירים שנבדקו תואמים 0 שורות עם פער · 0 שורות שלא ניתן לבדוק ללא מע״מ · אותה יחידת מוצר · פיקדון בנפרד · לפי הכמות בנייר. הספירה אינה משפיעה על בדיקה זו. תאריך התעודה: 2026-09-09 · עריכה השלם תאריך לתעודה INV-100 פתח פירוט מחירים ומצבים לבדיקה (1) מוצר בדיקה 8 · כמות בתעודה: 10 תעודה INV-100 · עמוד 1 · שורה 1 · 2026-09-09 מחיר יחידה מודפס: ₪6.00 מחיר מאגר לפני הנחה: ₪10.00 · הנחה קבועה 20% מבצע: מבצע בדיקה · 2026-09-01 עד 2026-09-30 · מינימום 1 מחיר צפוי · מחיר מלא: ₪10.00 מחיר בתעודה באותו בסיס: ₪6.00 מחיר צפוי · מבצע חודשי: ₪6.00 מחיר בתעודה באותו בסיס: ₪6.00 מחיר צפוי · הנחה קבועה: ₪8.00 מחיר בתעודה באותו בסיס: ₪6.00 המחיר תואם: מבצע חודשי בדיקת ההתחשבנות החודשית נפרדת. זיהוי המחיר אינו אישור שהתקבל זיכוי ואינו מפחית הנחה נוספת. שלב 2 · סריקת מוצרים ₪0.00 / ₪60.00 0/10 יח׳ · 0/1 שורות פער ₪60.00 סרוק פריט לתעודה הוסף לחם בתפזורת לא מצליח לסרוק? הקלד את קוד הפריט שמודפס בתעודה (2–4 ספרות) — או חפש לפי שם המוצר שורות שנקלטו 0 שורות אין פריטים עדיין סרוק ברקוד כדי להתחיל תעודה",
+    "additionalAIRequests": 0
+  },
+  {
+    "scenario": "monthly price 8",
+    "scannedProducts": 0,
+    "report": {
+      "version": 1,
+      "supplier": "berman",
+      "documents": [
+        {
+          "id": "paper_price_local-d1do1vj81cv",
+          "index": 0,
+          "number": "INV-100",
+          "date": "2026-09-09",
+          "complete": true,
+          "summaryDiscount": 0,
+          "summaryStatus": ""
+        }
+      ],
+      "rows": [
+        {
+          "id": "paper_price_local-d1do1vj81cv:0",
+          "documentId": "paper_price_local-d1do1vj81cv",
+          "documentNumber": "INV-100",
+          "documentIndex": 0,
+          "page": 1,
+          "line": 1,
+          "productId": "milk",
+          "name": "מוצר בדיקה",
+          "code": "8",
+          "quantity": 10,
+          "date": "2026-09-09",
+          "originalUnitPrice": 8,
+          "adaptedUnitPrice": 8,
+          "chargedUnitPrice": null,
+          "chargeDerivation": "",
+          "catalogBasePrice": 10,
+          "regularDiscountPct": 20,
+          "promo": {
+            "id": "p1",
+            "name": "מבצע בדיקה",
+            "pct": 20,
+            "fixedPrice": 6,
+            "start": "2026-09-01",
+            "end": "2026-09-30",
+            "minUnits": 1
+          },
+          "expectedOptions": [
+            {
+              "label": "מחיר מלא",
+              "price": 10,
+              "unitDifference": -2,
+              "lineDifference": -20
+            },
+            {
+              "label": "מבצע חודשי",
+              "price": 6,
+              "unitDifference": 2,
+              "lineDifference": 20
+            },
+            {
+              "label": "הנחה קבועה",
+              "price": 8,
+              "unitDifference": 0,
+              "lineDifference": 0
+            }
+          ],
+          "comparisonPrice": 8,
+          "comparisonBasis": "ללא מע״מ; פיקדון נבדק בשורה נפרדת",
+          "capability": "checkable",
+          "result": "match",
+          "reason": "המחיר תואם: הנחה קבועה",
+          "monthlyStatus": "בדיקת ההתחשבנות החודשית נפרדת. זיהוי המחיר אינו אישור שהתקבל זיכוי ואינו מפחית הנחה נוספת.",
+          "catalogRegularNetPrice": 8,
+          "matchedForms": [
+            "הנחה קבועה"
+          ]
+        }
+      ],
+      "complete": true,
+      "state": "ready"
+    },
+    "screenText": "נטו לחיוב (ללא מע״מ) · 10 יח׳ · 1 שורות ₪80.00 ערוך העוגנים נקראו מהתעודה ואומתו מול בלוק הסיכום שלה — ₪80.00 · 10 יח׳ · 1 שורות המחירים שנבדקו תואמים 0 שורות עם פער · 0 שורות שלא ניתן לבדוק ללא מע״מ · אותה יחידת מוצר · פיקדון בנפרד · לפי הכמות בנייר. הספירה אינה משפיעה על בדיקה זו. תאריך התעודה: 2026-09-09 · עריכה השלם תאריך לתעודה INV-100 פתח פירוט מחירים ומצבים לבדיקה (1) מוצר בדיקה 8 · כמות בתעודה: 10 תעודה INV-100 · עמוד 1 · שורה 1 · 2026-09-09 מחיר יחידה מודפס: ₪8.00 מחיר מאגר לפני הנחה: ₪10.00 · הנחה קבועה 20% מבצע: מבצע בדיקה · 2026-09-01 עד 2026-09-30 · מינימום 1 מחיר צפוי · מחיר מלא: ₪10.00 מחיר בתעודה באותו בסיס: ₪8.00 מחיר צפוי · מבצע חודשי: ₪6.00 מחיר בתעודה באותו בסיס: ₪8.00 מחיר צפוי · הנחה קבועה: ₪8.00 מחיר בתעודה באותו בסיס: ₪8.00 המחיר תואם: הנחה קבועה בדיקת ההתחשבנות החודשית נפרדת. זיהוי המחיר אינו אישור שהתקבל זיכוי ואינו מפחית הנחה נוספת. שלב 2 · סריקת מוצרים ₪0.00 / ₪80.00 0/10 יח׳ · 0/1 שורות פער ₪80.00 סרוק פריט לתעודה הוסף לחם בתפזורת לא מצליח לסרוק? הקלד את קוד הפריט שמודפס בתעודה (2–4 ספרות) — או חפש לפי שם המוצר שורות שנקלטו 0 שורות אין פריטים עדיין סרוק ברקוד כדי להתחיל תעודה",
+    "additionalAIRequests": 0
+  },
+  {
+    "scenario": "monthly price 7",
+    "scannedProducts": 0,
+    "report": {
+      "version": 1,
+      "supplier": "berman",
+      "documents": [
+        {
+          "id": "paper_price_local-3kd00iqpiyu",
+          "index": 0,
+          "number": "INV-100",
+          "date": "2026-09-09",
+          "complete": true,
+          "summaryDiscount": 0,
+          "summaryStatus": ""
+        }
+      ],
+      "rows": [
+        {
+          "id": "paper_price_local-3kd00iqpiyu:0",
+          "documentId": "paper_price_local-3kd00iqpiyu",
+          "documentNumber": "INV-100",
+          "documentIndex": 0,
+          "page": 1,
+          "line": 1,
+          "productId": "milk",
+          "name": "מוצר בדיקה",
+          "code": "8",
+          "quantity": 10,
+          "date": "2026-09-09",
+          "originalUnitPrice": 7,
+          "adaptedUnitPrice": 8,
+          "chargedUnitPrice": null,
+          "chargeDerivation": "",
+          "catalogBasePrice": 10,
+          "regularDiscountPct": 20,
+          "promo": {
+            "id": "p1",
+            "name": "מבצע בדיקה",
+            "pct": 20,
+            "fixedPrice": 6,
+            "start": "2026-09-01",
+            "end": "2026-09-30",
+            "minUnits": 1
+          },
+          "expectedOptions": [
+            {
+              "label": "מחיר מלא",
+              "price": 10,
+              "unitDifference": -3,
+              "lineDifference": -30
+            },
+            {
+              "label": "מבצע חודשי",
+              "price": 6,
+              "unitDifference": 1,
+              "lineDifference": 10
+            },
+            {
+              "label": "הנחה קבועה",
+              "price": 8,
+              "unitDifference": -1,
+              "lineDifference": -10
+            }
+          ],
+          "comparisonPrice": 7,
+          "comparisonBasis": "ללא מע״מ; פיקדון נבדק בשורה נפרדת",
+          "capability": "checkable",
+          "result": "difference",
+          "reason": "המחיר בתעודה שונה מהמחיר שבמאגר",
+          "monthlyStatus": "בדיקת ההתחשבנות החודשית נפרדת. זיהוי המחיר אינו אישור שהתקבל זיכוי ואינו מפחית הנחה נוספת.",
+          "catalogRegularNetPrice": 8,
+          "matchedForms": []
+        }
+      ],
+      "complete": true,
+      "state": "ready"
+    },
+    "screenText": "נטו לחיוב (ללא מע״מ) ללא אימות ערוך הנייר לא אישר את עצמו — צריך את המספרים ממך החישוב לפי המחירון והמבצעים (₪80.00) אינו תואם ל&quot;נטו לחיוב&quot; המודפס (₪70.00) — יש לבדוק מחירים, הנחות או את קריאת השורות הקלד את שלושת המספרים או: צלם את התעודה שוב המחיר בתעודה שונה מהמחיר שבמאגר 1 שורות עם פער · 0 שורות שלא ניתן לבדוק ללא מע״מ · אותה יחידת מוצר · פיקדון בנפרד · לפי הכמות בנייר. הספירה אינה משפיעה על בדיקה זו. תאריך התעודה: 2026-09-09 · עריכה השלם תאריך לתעודה INV-100 פתח פירוט מחירים ומצבים לבדיקה (1) מוצר בדיקה 8 · כמות בתעודה: 10 תעודה INV-100 · עמוד 1 · שורה 1 · 2026-09-09 מחיר יחידה מודפס: ₪7.00 מחיר מאגר לפני הנחה: ₪10.00 · הנחה קבועה 20% מבצע: מבצע בדיקה · 2026-09-01 עד 2026-09-30 · מינימום 1 מחיר צפוי · מחיר מלא: ₪10.00 מחיר בתעודה באותו בסיס: ₪7.00 הפרש ליחידה: ₪‎-3.00 · הפרש לשורה: ₪‎-30.00 מחיר צפוי · מבצע חודשי: ₪6.00 מחיר בתעודה באותו בסיס: ₪7.00 הפרש ליחידה: ₪1.00 · הפרש לשורה: ₪10.00 מחיר צפוי · הנחה קבועה: ₪8.00 מחיר בתעודה באותו בסיס: ₪7.00 הפרש ליחידה: ₪‎-1.00 · הפרש לשורה: ₪‎-10.00 המחיר בתעודה שונה מהמחיר שבמאגר בדיקת ההתחשבנות החודשית נפרדת. זיהוי המחיר אינו אישור שהתקבל זיכוי ואינו מפחית הנחה נוספת. שלב 2 · סריקת מוצרים ₪0.00 0 יח׳ · 0 שורות ללא יעד סכום סרוק פריט לתעודה הוסף לחם בתפזורת לא מצליח לסרוק? הקלד את קוד הפריט שמודפס בתעודה (2–4 ספרות) — או חפש לפי שם המוצר שורות שנקלטו 0 שורות אין פריטים עדיין סרוק ברקוד כדי להתחיל תעודה",
+    "additionalAIRequests": 0
+  },
+  {
+    "scenario": "monthly price 4.8",
+    "scannedProducts": 0,
+    "report": {
+      "version": 1,
+      "supplier": "berman",
+      "documents": [
+        {
+          "id": "paper_price_local-d7wkk42xotg",
+          "index": 0,
+          "number": "INV-100",
+          "date": "2026-09-09",
+          "complete": true,
+          "summaryDiscount": 0,
+          "summaryStatus": ""
+        }
+      ],
+      "rows": [
+        {
+          "id": "paper_price_local-d7wkk42xotg:0",
+          "documentId": "paper_price_local-d7wkk42xotg",
+          "documentNumber": "INV-100",
+          "documentIndex": 0,
+          "page": 1,
+          "line": 1,
+          "productId": "milk",
+          "name": "מוצר בדיקה",
+          "code": "8",
+          "quantity": 10,
+          "date": "2026-09-09",
+          "originalUnitPrice": 4.8,
+          "adaptedUnitPrice": 8,
+          "chargedUnitPrice": null,
+          "chargeDerivation": "",
+          "catalogBasePrice": 10,
+          "regularDiscountPct": 20,
+          "promo": {
+            "id": "p1",
+            "name": "מבצע בדיקה",
+            "pct": 20,
+            "fixedPrice": 6,
+            "start": "2026-09-01",
+            "end": "2026-09-30",
+            "minUnits": 1
+          },
+          "expectedOptions": [
+            {
+              "label": "מחיר מלא",
+              "price": 10,
+              "unitDifference": -5.2,
+              "lineDifference": -52
+            },
+            {
+              "label": "מבצע חודשי",
+              "price": 6,
+              "unitDifference": -1.2000000000000002,
+              "lineDifference": -12
+            },
+            {
+              "label": "הנחה קבועה",
+              "price": 8,
+              "unitDifference": -3.2,
+              "lineDifference": -32
+            }
+          ],
+          "comparisonPrice": 4.8,
+          "comparisonBasis": "ללא מע״מ; פיקדון נבדק בשורה נפרדת",
+          "capability": "checkable",
+          "result": "difference",
+          "reason": "המחיר בתעודה שונה מהמחיר שבמאגר",
+          "monthlyStatus": "בדיקת ההתחשבנות החודשית נפרדת. זיהוי המחיר אינו אישור שהתקבל זיכוי ואינו מפחית הנחה נוספת.",
+          "catalogRegularNetPrice": 8,
+          "matchedForms": []
+        }
+      ],
+      "complete": true,
+      "state": "ready"
+    },
+    "screenText": "נטו לחיוב (ללא מע״מ) ללא אימות ערוך הנייר לא אישר את עצמו — צריך את המספרים ממך החישוב לפי המחירון והמבצעים (₪80.00) אינו תואם ל&quot;נטו לחיוב&quot; המודפס (₪48.00) — יש לבדוק מחירים, הנחות או את קריאת השורות הקלד את שלושת המספרים או: צלם את התעודה שוב המחיר בתעודה שונה מהמחיר שבמאגר 1 שורות עם פער · 0 שורות שלא ניתן לבדוק ללא מע״מ · אותה יחידת מוצר · פיקדון בנפרד · לפי הכמות בנייר. הספירה אינה משפיעה על בדיקה זו. תאריך התעודה: 2026-09-09 · עריכה השלם תאריך לתעודה INV-100 פתח פירוט מחירים ומצבים לבדיקה (1) מוצר בדיקה 8 · כמות בתעודה: 10 תעודה INV-100 · עמוד 1 · שורה 1 · 2026-09-09 מחיר יחידה מודפס: ₪4.80 מחיר מאגר לפני הנחה: ₪10.00 · הנחה קבועה 20% מבצע: מבצע בדיקה · 2026-09-01 עד 2026-09-30 · מינימום 1 מחיר צפוי · מחיר מלא: ₪10.00 מחיר בתעודה באותו בסיס: ₪4.80 הפרש ליחידה: ₪‎-5.20 · הפרש לשורה: ₪‎-52.00 מחיר צפוי · מבצע חודשי: ₪6.00 מחיר בתעודה באותו בסיס: ₪4.80 הפרש ליחידה: ₪‎-1.20 · הפרש לשורה: ₪‎-12.00 מחיר צפוי · הנחה קבועה: ₪8.00 מחיר בתעודה באותו בסיס: ₪4.80 הפרש ליחידה: ₪‎-3.20 · הפרש לשורה: ₪‎-32.00 המחיר בתעודה שונה מהמחיר שבמאגר בדיקת ההתחשבנות החודשית נפרדת. זיהוי המחיר אינו אישור שהתקבל זיכוי ואינו מפחית הנחה נוספת. שלב 2 · סריקת מוצרים ₪0.00 0 יח׳ · 0 שורות ללא יעד סכום סרוק פריט לתעודה הוסף לחם בתפזורת לא מצליח לסרוק? הקלד את קוד הפריט שמודפס בתעודה (2–4 ספרות) — או חפש לפי שם המוצר שורות שנקלטו 0 שורות אין פריטים עדיין סרוק ברקוד כדי להתחיל תעודה",
+    "additionalAIRequests": 0
+  },
+  {
+    "scenario": "shortage only final summary",
+    "scannedProducts": 1,
+    "report": {
+      "version": 1,
+      "supplier": "berman",
+      "documents": [
+        {
+          "id": "paper_price_local-qd6af7y39g",
+          "index": 0,
+          "number": "INV-100",
+          "date": "2026-09-09",
+          "complete": true,
+          "summaryDiscount": 0,
+          "summaryStatus": ""
+        }
+      ],
+      "rows": [
+        {
+          "id": "paper_price_local-qd6af7y39g:0",
+          "documentId": "paper_price_local-qd6af7y39g",
+          "documentNumber": "INV-100",
+          "documentIndex": 0,
+          "page": 1,
+          "line": 1,
+          "productId": "milk",
+          "name": "מוצר בדיקה",
+          "code": "8",
+          "quantity": 10,
+          "date": "2026-09-09",
+          "originalUnitPrice": 5,
+          "adaptedUnitPrice": 5,
+          "chargedUnitPrice": null,
+          "chargeDerivation": "מחיר המאגר לאחר ההנחה הקבועה: ₪5.00. אין בתעודה פירוט שמוכיח את החיוב לשורה.",
+          "catalogBasePrice": 5,
+          "regularDiscountPct": 0,
+          "promo": null,
+          "expectedOptions": [
+            {
+              "label": "מחיר רגיל לפני הנחה קבועה",
+              "price": 5,
+              "unitDifference": 0,
+              "lineDifference": 0
+            }
+          ],
+          "comparisonPrice": 5,
+          "comparisonBasis": "ללא מע״מ; פיקדון נבדק בשורה נפרדת",
+          "capability": "checkable",
+          "result": "match",
+          "reason": "המחיר תואם: מחיר רגיל לפני הנחה קבועה",
+          "monthlyStatus": null,
+          "catalogRegularNetPrice": 5,
+          "matchedForms": [
+            "מחיר רגיל לפני הנחה קבועה"
+          ]
+        }
+      ],
+      "complete": true,
+      "state": "ready"
+    },
+    "screenText": "המחירים שנבדקו תואמים 0 שורות עם פער · 0 שורות שלא ניתן לבדוק ללא מע״מ · אותה יחידת מוצר · פיקדון בנפרד · לפי הכמות בנייר. הספירה אינה משפיעה על בדיקה זו. תאריך התעודה: 2026-09-09 · עריכה השלם תאריך לתעודה INV-100 פתח פירוט מחירים ומצבים לבדיקה (1) מוצר בדיקה 8 · כמות בתעודה: 10 תעודה INV-100 · עמוד 1 · שורה 1 · 2026-09-09 מחיר יחידה מודפס: ₪5.00 מחיר המאגר לאחר ההנחה הקבועה: ₪5.00. אין בתעודה פירוט שמוכיח את החיוב לשורה. מחיר מאגר לפני הנחה: ₪5.00 מחיר צפוי · מחיר רגיל לפני הנחה קבועה: ₪5.00 מחיר בתעודה באותו בסיס: ₪5.00 המחיר תואם: מחיר רגיל לפני הנחה קבועה נשמר עם הפרשים — התעודה תסומן כפתוחה עד שתתוקן מוצר בדיקה התקבל 9 × ₪5.00 · חסר 1 ₪45.00 שווי הסחורה שנסרקה ₪45.00 לתשלום ללא מע״מ ₪45.00 חוסר הופחת · עודף לא נוסף ומופיע כהערה בלבד סכום התעודה מהספק: ₪50.00",
+    "additionalAIRequests": 0
+  },
+  {
+    "scenario": "price only final summary",
+    "scannedProducts": 1,
+    "report": {
+      "version": 1,
+      "supplier": "berman",
+      "documents": [
+        {
+          "id": "paper_price_local-r6jwo613x6q",
+          "index": 0,
+          "number": "INV-100",
+          "date": "2026-09-09",
+          "complete": true,
+          "summaryDiscount": 0,
+          "summaryStatus": ""
+        }
+      ],
+      "rows": [
+        {
+          "id": "paper_price_local-r6jwo613x6q:0",
+          "documentId": "paper_price_local-r6jwo613x6q",
+          "documentNumber": "INV-100",
+          "documentIndex": 0,
+          "page": 1,
+          "line": 1,
+          "productId": "milk",
+          "name": "מוצר בדיקה",
+          "code": "8",
+          "quantity": 10,
+          "date": "2026-09-09",
+          "originalUnitPrice": 6,
+          "adaptedUnitPrice": 5,
+          "chargedUnitPrice": null,
+          "chargeDerivation": "מחיר המאגר לאחר ההנחה הקבועה: ₪5.00. אין בתעודה פירוט שמוכיח את החיוב לשורה.",
+          "catalogBasePrice": 5,
+          "regularDiscountPct": 0,
+          "promo": null,
+          "expectedOptions": [
+            {
+              "label": "מחיר רגיל לפני הנחה קבועה",
+              "price": 5,
+              "unitDifference": 1,
+              "lineDifference": 10
+            }
+          ],
+          "comparisonPrice": 6,
+          "comparisonBasis": "ללא מע״מ; פיקדון נבדק בשורה נפרדת",
+          "capability": "checkable",
+          "result": "difference",
+          "reason": "המחיר בתעודה שונה מהמחיר שבמאגר",
+          "monthlyStatus": null,
+          "catalogRegularNetPrice": 5,
+          "matchedForms": []
+        }
+      ],
+      "complete": true,
+      "state": "ready"
+    },
+    "screenText": "המחיר בתעודה שונה מהמחיר שבמאגר 1 שורות עם פער · 0 שורות שלא ניתן לבדוק ללא מע״מ · אותה יחידת מוצר · פיקדון בנפרד · לפי הכמות בנייר. הספירה אינה משפיעה על בדיקה זו. תאריך התעודה: 2026-09-09 · עריכה השלם תאריך לתעודה INV-100 פתח פירוט מחירים ומצבים לבדיקה (1) מוצר בדיקה 8 · כמות בתעודה: 10 תעודה INV-100 · עמוד 1 · שורה 1 · 2026-09-09 מחיר יחידה מודפס: ₪6.00 מחיר המאגר לאחר ההנחה הקבועה: ₪5.00. אין בתעודה פירוט שמוכיח את החיוב לשורה. מחיר מאגר לפני הנחה: ₪5.00 מחיר צפוי · מחיר רגיל לפני הנחה קבועה: ₪5.00 מחיר בתעודה באותו בסיס: ₪6.00 הפרש ליחידה: ₪1.00 · הפרש לשורה: ₪10.00 המחיר בתעודה שונה מהמחיר שבמאגר מוצר בדיקה 10 × ₪5.00 ₪50.00 נטו לחיוב (ללא מע\"מ) ₪50.00",
+    "additionalAIRequests": 0
+  },
+  {
+    "scenario": "price and shortage final summary",
+    "scannedProducts": 1,
+    "report": {
+      "version": 1,
+      "supplier": "berman",
+      "documents": [
+        {
+          "id": "paper_price_local-chbnbn2gj7e",
+          "index": 0,
+          "number": "INV-100",
+          "date": "2026-09-09",
+          "complete": true,
+          "summaryDiscount": 0,
+          "summaryStatus": ""
+        }
+      ],
+      "rows": [
+        {
+          "id": "paper_price_local-chbnbn2gj7e:0",
+          "documentId": "paper_price_local-chbnbn2gj7e",
+          "documentNumber": "INV-100",
+          "documentIndex": 0,
+          "page": 1,
+          "line": 1,
+          "productId": "milk",
+          "name": "מוצר בדיקה",
+          "code": "8",
+          "quantity": 10,
+          "date": "2026-09-09",
+          "originalUnitPrice": 6,
+          "adaptedUnitPrice": 5,
+          "chargedUnitPrice": null,
+          "chargeDerivation": "מחיר המאגר לאחר ההנחה הקבועה: ₪5.00. אין בתעודה פירוט שמוכיח את החיוב לשורה.",
+          "catalogBasePrice": 5,
+          "regularDiscountPct": 0,
+          "promo": null,
+          "expectedOptions": [
+            {
+              "label": "מחיר רגיל לפני הנחה קבועה",
+              "price": 5,
+              "unitDifference": 1,
+              "lineDifference": 10
+            }
+          ],
+          "comparisonPrice": 6,
+          "comparisonBasis": "ללא מע״מ; פיקדון נבדק בשורה נפרדת",
+          "capability": "checkable",
+          "result": "difference",
+          "reason": "המחיר בתעודה שונה מהמחיר שבמאגר",
+          "monthlyStatus": null,
+          "catalogRegularNetPrice": 5,
+          "matchedForms": []
+        }
+      ],
+      "complete": true,
+      "state": "ready"
+    },
+    "screenText": "המחיר בתעודה שונה מהמחיר שבמאגר 1 שורות עם פער · 0 שורות שלא ניתן לבדוק ללא מע״מ · אותה יחידת מוצר · פיקדון בנפרד · לפי הכמות בנייר. הספירה אינה משפיעה על בדיקה זו. תאריך התעודה: 2026-09-09 · עריכה השלם תאריך לתעודה INV-100 פתח פירוט מחירים ומצבים לבדיקה (1) מוצר בדיקה 8 · כמות בתעודה: 10 תעודה INV-100 · עמוד 1 · שורה 1 · 2026-09-09 מחיר יחידה מודפס: ₪6.00 מחיר המאגר לאחר ההנחה הקבועה: ₪5.00. אין בתעודה פירוט שמוכיח את החיוב לשורה. מחיר מאגר לפני הנחה: ₪5.00 מחיר צפוי · מחיר רגיל לפני הנחה קבועה: ₪5.00 מחיר בתעודה באותו בסיס: ₪6.00 הפרש ליחידה: ₪1.00 · הפרש לשורה: ₪10.00 המחיר בתעודה שונה מהמחיר שבמאגר נשמר עם הפרשים — התעודה תסומן כפתוחה עד שתתוקן מוצר בדיקה התקבל 9 × ₪5.00 · חסר 1 ₪45.00 שווי הסחורה שנסרקה ₪45.00 לתשלום ללא מע״מ ₪45.00 חוסר הופחת · עודף לא נוסף ומופיע כהערה בלבד סכום התעודה מהספק: ₪50.00",
+    "additionalAIRequests": 0
+  }
+]
