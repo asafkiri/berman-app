@@ -36,7 +36,7 @@ node tests/promo-on-paper.test.mjs --backup ~/Downloads/bermanbackup.json
 
 `paper-anchors.test.mjs` — שער האמון של זרימת הצילום-תחילה (v62): מתי מותר
 לקבל את שלושת העוגנים מהנייר עצמו, ומה נאמר כשלא. רץ על תשובות סריקה
-סינתטיות, כי גיבוי אינו שומר את גוף התשובה של הפענוח.
+סינתטיות (בגרסאות שלפני v70 גיבוי לא שמר את גוף התשובה של הפענוח).
 
 
 `no-doc-receipt.test.mjs` — קליטה בלי תעודה (v63): מתי תעודה נחשבת "ממתינה
@@ -67,3 +67,38 @@ expired promotions and real mismatches. No live OCR request is made.
 
 To repeat against a private backup without committing it:
 `node tests/monthly-billing.test.mjs --backup /path/to/backup.json`.
+
+## v70: Receipt scan persistence
+
+`node --test tests/receipt-scan-persistence.test.mjs` runs 26 cases against the
+**complete application module**, with only DOM, Firebase and HTTP boundaries
+replaced. It exercises the actual Finish click handler, scan pipeline, adapter,
+anchor gate, local-storage serialization/startup restore, findings renderer,
+image/reset/cancel handlers and final receipt write. It checks that reload renders
+the same shortages/surplus instead of the capture form, with zero new scan requests.
+
+Coverage includes edits to counted quantities and supplier anchors, matching
+receipts, multiple pages/documents, credit documents, partial/failed scans,
+legacy/corrupt/wrong-receipt snapshots, storage exhaustion, failed final writes,
+and late responses after a new capture. Photos are not persisted; page count is
+stored separately and still checked independently against the returned count.
+
+Private incident replay (neither file is committed):
+
+```sh
+BERMAN_TEST_BACKUP=/path/to/backup.json BERMAN_TEST_PAPER=/path/to/transcribed-scan.json node --test tests/receipt-scan-persistence.test.mjs
+```
+
+The paper file is a manually transcribed response in the server's output schema,
+not the lost original OCR response. No live OCR or production database writes run.
+Set `BERMAN_TEST_APP` to an older `index.html` to reproduce the old behavior.
+
+For browser verification, run `node tests/receipt-scan-preview.mjs 8766`, open
+`http://localhost:8766`, click **שחזר צילום וספירה**, reload, and click **בדיקה וסיום**.
+The isolated preview uses the same application module and real localStorage;
+Firebase and AI are replaced, and external API connections are blocked by CSP.
+The same two private-fixture environment variables can be used locally.
+
+Browser verification remains pending in the authoring environment: its remote
+browser rejected the localhost preview with `ERR_BLOCKED_BY_CLIENT`. Rendered
+HTML/event-handler assertions passed, but they are not an iPhone/Safari test.

@@ -752,6 +752,7 @@ let aiScanAttemptCount = 0;
 // וחתימת הרשימה שנסרקה בקליטה. כל עוד תעודות הספק לא השתנו, יציאה מהמסך
 // וחזרה אליו אינן מוחקות את הצילומים ואת קריאת ה-AI.
 let aiScanBasis = null;
+let aiScanSession = 0;          // v70: תוצאה מאוחרת אינה שייכת לצילום/קליטה שהוחלפו
 // v43: המסך נפתח פשוט. כל ההסבר המפורט יושב מאחורי לחיצה אחת, כי מי שעובד
 // עם התעודה בפועל אינו בהכרח מי שבנה את האפליקציה.
 let aiDetailsOpen = false;
@@ -780,7 +781,7 @@ let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכ
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '69'; // גרסה 68: שלושת מצבי החיוב של מוצר במבצע חודשי
+const APP_VERSION = '70'; // שמירת פענוח התעודה עם הטיוטה, גם אחרי טעינה מחדש
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -1248,11 +1249,20 @@ function readNoteEntry(required) {
 }
 function saveReceiptDraft() {
   if ((receiptOpened || receiptList.length || receiptNotes.length) && !receiptDraftId) receiptDraftId = makeOperationId('receipt');
+  const draft = { schemaVersion: 2, draftId: receiptDraftId, items: receiptList, notes: receiptNotes, opened: receiptOpened, docDate: receiptDocDate || null, promoOnPaper: receiptPromoOnPaper, entryMode: receiptEntryMode, anchorSource: receiptAnchorSource, noDoc: receiptNoDoc, attach: receiptAttachTarget, paperScan: null, updatedAt: Date.now() };
   try {
     // v61: ההכרעה "המבצע ירד כבר בתעודה" שורדת ניתוק וריענון יחד עם התעודה —
     // בלעדיה תעודה שנפתחה מחדש הייתה מציגה שוב את אותו פער שכבר נסגר.
-    localStorage.setItem(RECEIPT_DRAFT_KEY, JSON.stringify({ schemaVersion: 2, draftId: receiptDraftId, items: receiptList, notes: receiptNotes, opened: receiptOpened, docDate: receiptDocDate || null, promoOnPaper: receiptPromoOnPaper, entryMode: receiptEntryMode, anchorSource: receiptAnchorSource, noDoc: receiptNoDoc, attach: receiptAttachTarget, updatedAt: Date.now() }));
-  } catch (e) { showToast('לא ניתן לשמור את טיוטת התעודה במכשיר', null, null, 3200); }
+    draft.paperScan = receiptScanSnapshot();
+    localStorage.setItem(RECEIPT_DRAFT_KEY, JSON.stringify(draft));
+    return true;
+  } catch (e) {
+    // אם רק הפענוח חורג ממקום האחסון, שומרים לפחות את הספירה העדכנית
+    // ומחליפים פענוח ישן שהיה עלול לחזור בטעות אחרי צילום חדש שנכשל בשמירה.
+    try { draft.paperScan = null; localStorage.setItem(RECEIPT_DRAFT_KEY, JSON.stringify(draft)); } catch (draftError) {}
+    showToast(aiScanResponse ? 'לא ניתן לשמור את הפענוח במכשיר. הוא עדיין פתוח כאן — אל תרענן או תסגור לפני שמירת התעודה.' : 'לא ניתן לשמור את טיוטת התעודה במכשיר', null, null, 7000);
+    return false;
+  }
 }
 function restoreReceiptDraft() {
   try {
@@ -1271,10 +1281,17 @@ function restoreReceiptDraft() {
       // v63: קליטה בלי תעודה, וצירוף נייר לקליטה כזאת, שורדים ריענון וניתוק
       receiptNoDoc = !!o.noDoc;
       receiptAttachTarget = (o.attach && typeof o.attach === 'object' && o.attach.id) ? o.attach : null;
-      // v62: הצילומים עצמם חיים בזיכרון בלבד ואינם שורדים ריענון. העוגנים
-      // שנקראו מהם כן — הם כבר בתוך receiptNotes — ולכן תעודה שנפתחה מחדש
-      // ממשיכה מאותה נקודה, בלי לצלם שוב ובלי להקליד.
-      if (receiptAnchorSource === 'paper' && receiptNotes.length) receiptPaperScanState = 'ok';
+      // v70: משחזרים את הפענוח עצמו. מפות ההתאמה וההפרשים ייבנו רק כשייפתח
+      // מסך הבדיקה, אחרי שהקטלוג נטען ומול הספירה העדכנית.
+      recomputeNoteTotal();
+      const restoredScan = restoreReceiptScanSnapshot(o.paperScan);
+      if (restoredScan && receiptEntryMode === 'photo' && receiptAnchorSource !== 'manual') {
+        const paper = bermanPaperAnchorsFromScan(aiScanResponse);
+        const sameAnchors = !receiptNotes.length || (paper.notes.length === receiptNotes.length
+          && paper.notes.every((note, i) => JSON.stringify(normNote(note)) === JSON.stringify(normNote(receiptNotes[i]))));
+        if (paper.ok && paper.notes.length === aiScanDocuments.length && sameAnchors) bermanSetPaperAnchors(paper);
+        else { receiptPaperScanState = 'failed'; receiptPaperScanProblems = paper.problems.length ? paper.problems : ['הפענוח השמור אינו תואם לכל נתוני התעודות']; }
+      } else if (receiptAnchorSource === 'paper' && receiptNotes.length) receiptPaperScanState = 'summary-only';
     }
     if ((receiptOpened || receiptList.length || receiptNotes.length) && !receiptDraftId) receiptDraftId = makeOperationId('receipt');
     recomputeNoteTotal();
@@ -7342,9 +7359,56 @@ function aiScanLinesSignature() {
   ]));
 }
 function aiRefreshScanEvaluation() {
-  aiScanEvaluation = aiEvaluateInvoiceScan(aiScanResponse);
   aiScanBasis = { notes: aiScanNoteSignature(), lines: aiScanLinesSignature() };
+  // גם תקלה בהשוואה/תצוגה אינה מאבדת קריאה שכבר התקבלה מהשרת.
+  try { aiScanEvaluation = aiEvaluateInvoiceScan(aiScanResponse); }
+  finally { saveReceiptDraft(); }
   return aiScanEvaluation;
+}
+// התמונות נשארות זמניות; כל פלט הפענוח ומספר העמודים המקורי נשמרים.
+// לא שומרים את aiScanEvaluation: הוא מכיל Maps ותלוי בספירה ובקטלוג הנוכחיים.
+function aiScanDocumentPageCount(doc) {
+  return doc.pages.length || Number(doc.savedPageCount) || 0;
+}
+function receiptScanSnapshot() {
+  if (!receiptDraftId || !aiScanResponse || !aiScanCanResume()) return null;
+  return cloneSafe({ schemaVersion: 1, draftId: receiptDraftId, notes: aiScanBasis.notes,
+    documents: aiScanDocuments.map((doc, i) => ({ noteIndex: i, amount: doc.amount, units: doc.units,
+      lines: doc.lines, kind: doc.kind === 'credit' ? 'credit' : 'charge', pageCount: aiScanDocumentPageCount(doc) })),
+    response: aiScanResponse, attempts: aiScanAttemptCount, autoRotation: aiScanAutoRotationNote });
+}
+function restoreReceiptScanSnapshot(saved) {
+  if (!saved || saved.schemaVersion !== 1 || saved.draftId !== receiptDraftId || saved.notes !== aiScanNoteSignature()) return false;
+  const inputs = saved.documents, response = saved.response;
+  const docs = response && response.ok === true && response.scan && response.scan.documents;
+  if (!Array.isArray(inputs) || !inputs.length || inputs.length > 4 || !Array.isArray(docs) || !docs.length || docs.length > inputs.length) return false;
+  if (inputs.some((doc, i) => !doc || doc.noteIndex !== i || !Number.isInteger(doc.pageCount) || doc.pageCount < 1 || doc.pageCount > 8)) return false;
+  if (inputs.reduce((n, doc) => n + doc.pageCount, 0) > 8) return false;
+  const seen = new Set();
+  for (const doc of docs) {
+    if (!doc || !Number.isInteger(doc.noteIndex) || doc.noteIndex < 0 || doc.noteIndex >= inputs.length || seen.has(doc.noteIndex)
+        || !Array.isArray(doc.rows) || doc.rows.some(row => !row || typeof row !== 'object' || Array.isArray(row))) return false;
+    seen.add(doc.noteIndex);
+  }
+  // גם נתוני הקלט חייבים להתאים לעוגנים, כדי לא להחיל פענוח של תעודה אחרת.
+  const inputSignature = JSON.stringify(inputs.map(doc => [r2(Number(doc.amount) || 0), doc.units == null ? null : Number(doc.units),
+    doc.lines == null ? null : Number(doc.lines), doc.kind === 'credit' ? 'credit' : 'charge']));
+  if (receiptNotes.length ? inputSignature !== saved.notes
+    : inputs.some(doc => doc.amount != null || doc.units != null || doc.lines != null || doc.kind !== 'charge')) return false;
+  aiScanDocuments = inputs.map(doc => ({ noteIndex: doc.noteIndex, amount: doc.amount, units: doc.units,
+    lines: doc.lines, kind: doc.kind, savedPageCount: doc.pageCount, pages: [] }));
+  aiScanResponse = cloneSafe(response);
+  aiScanEvaluation = null;
+  aiScanBasis = { notes: saved.notes, lines: null };
+  aiScanAttemptCount = Number(saved.attempts) || 1;
+  aiScanAutoRotationNote = typeof saved.autoRotation === 'string' ? saved.autoRotation : '';
+  return true;
+}
+function invalidateAiInvoiceResult() {
+  aiScanSession++;
+  aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0;
+  aiScanDocuments.forEach(doc => { delete doc.savedPageCount; });
+  saveReceiptDraft();
 }
 function resetAiInvoiceScan() {
   aiCloseOrientationReview();
@@ -7353,6 +7417,8 @@ function resetAiInvoiceScan() {
   aiScanBusy = false; aiScanProgressText = ''; aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; reconcileAiAudit = null; aiUnknownProductCreateContext = null;
   aiAnalyzeBusy = false; aiAnalyzeError = ''; aiAnalyzeResult = null; // v187
   aiScanBasis = { notes: aiScanNoteSignature(), lines: null };
+  aiScanSession++;
+  saveReceiptDraft();
 }
 // v25: יש בזיכרון עבודה של ממש (צילומים או קריאת AI) ששייכת בדיוק לאותן
 // תעודות ספק? אז יציאה מהמסך אינה מוחקת אותה.
@@ -7389,24 +7455,31 @@ function bermanSeedPhotoFirstScan(docCount) {
   aiAnalyzeBusy = false; aiAnalyzeError = ''; aiAnalyzeResult = null;
   aiScanBasis = { notes: aiScanNoteSignature(), lines: null };
   receiptPaperScanState = ''; receiptPaperScanProblems = [];
+  aiScanSession++;
+  saveReceiptDraft();
 }
 function bermanPhotoFirstAddDoc() {
   if (aiScanDocuments.length >= 4) { showToast('ניתן לצלם עד 4 תעודות במשלוח אחד', null, null, 3000); return; }
   aiScanDocuments.push({ noteIndex: aiScanDocuments.length, amount: null, units: null, lines: null, kind: 'charge', pages: [] });
+  invalidateAiInvoiceResult();
   refreshScanHost();
 }
 function bermanPhotoFirstRemoveDoc(docIndex) {
   if (aiScanDocuments.length <= 1) return;
   aiScanDocuments.splice(docIndex, 1);
   aiScanDocuments.forEach((d, i) => { d.noteIndex = i; });
+  invalidateAiInvoiceResult();
   refreshScanHost();
 }
 // הקריאה שרצה ברקע בזמן הסריקה הפיזית. היא לעולם אינה חוסמת את המסך:
 // כישלון כאן פירושו שיבקשו להקליד את המספרים, לא שהקליטה נעצרת.
 async function bermanRunPaperScanInBackground() {
   receiptPaperScanState = 'running'; receiptPaperScanProblems = [];
-  try { await aiRunInvoiceScan(); }
+  const pending = aiRunInvoiceScan();
+  const scanSession = aiScanSession;
+  try { await pending; }
   catch (error) { /* aiRunInvoiceScan תופסת בעצמה ומדווחת ב-aiScanError */ }
+  if (scanSession !== aiScanSession) return;
   if (!aiScanResponse) {
     receiptPaperScanState = 'failed';
     receiptPaperScanProblems = [aiScanError || 'הקריאה מהנייר לא הצליחה'];
@@ -7427,6 +7500,15 @@ function bermanAdoptPaperAnchors() {
     if (currentView === 'receiving') renderReceiving();
     return false;
   }
+  bermanSetPaperAnchors(paper);
+  try { aiRefreshScanEvaluation(); } catch (error) { aiScanBasis = { notes: aiScanNoteSignature(), lines: null }; }
+  const persisted = saveReceiptDraft();
+  if (currentView === 'receiving') renderReceiving();
+  if (persisted) showToast('✓ נקרא מהתעודה: ₪' + fmtMoney(receiptNoteTotal) + ' · ' + receiptNoteUnits + ' יח׳ · ' + (receiptNoteLines != null ? receiptNoteLines + ' שורות' : '—'), null, null, 4000);
+  return true;
+}
+// עדכון נתונים בלבד — משמש גם לשחזור לפני שהקטלוג ומסכי האפליקציה נטענו.
+function bermanSetPaperAnchors(paper) {
   receiptNotes = paper.notes.map(normNote);
   recomputeNoteTotal();
   receiptAnchorSource = 'paper';
@@ -7436,15 +7518,14 @@ function bermanAdoptPaperAnchors() {
   aiScanDocuments = aiScanDocuments.map((doc, i) => Object.assign({}, doc, {
     amount: paper.notes[i].amount, units: paper.notes[i].units, lines: paper.notes[i].lines, kind: paper.notes[i].kind
   }));
-  try { aiRefreshScanEvaluation(); } catch (error) { aiScanBasis = { notes: aiScanNoteSignature(), lines: null }; }
-  saveReceiptDraft();
-  if (currentView === 'receiving') renderReceiving();
-  showToast('✓ נקרא מהתעודה: ₪' + fmtMoney(receiptNoteTotal) + ' · ' + receiptNoteUnits + ' יח׳ · ' + (receiptNoteLines != null ? receiptNoteLines + ' שורות' : '—'), null, null, 4000);
-  return true;
+  aiScanBasis = { notes: aiScanNoteSignature(), lines: null };
 }
 // שורת המצב של הקריאה במסך הקליטה. הכמויות שנקראו לא מופיעות כאן בכוונה.
 function paperScanStatusHtml() {
   if (receiptEntryMode !== 'photo') return '';
+  if (receiptPaperScanState === 'summary-only') {
+    return '<div class="rounded-xl bg-amber-50 border border-amber-300 p-3 mb-3 text-xs font-bold text-amber-900">סיכום התעודה שמור, אך פירוט הפענוח אינו זמין בטיוטה הזאת. לבדיקת פערים יידרש צילום מחדש.</div>';
+  }
   if (aiScanBusy || receiptPaperScanState === 'running') {
     return '<div class="rounded-xl bg-violet-50 border border-violet-200 p-2.5 mb-3 text-[11px] font-black text-violet-800 flex items-center gap-2">' +
       '<i class="fa-solid fa-circle-notch fa-spin"></i><span>' + htmlEscape(aiScanProgressText || 'קורא את התעודה ברקע…') + ' סרוק את הסחורה כרגיל.</span></div>';
@@ -8327,7 +8408,7 @@ async function aiConfirmOrientationReview() {
   }
   location.page.orientationConfirmed = true;
   aiCloseOrientationReview();
-  aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0;
+  invalidateAiInvoiceResult();
   refreshScanHost();
   setTimeout(aiOpenNextUnconfirmedOrientation, 0);
 }
@@ -8337,7 +8418,7 @@ function aiCancelOrientationReview() {
   if (aiOrientationSession.reviewOnly) { aiCloseOrientationReview(); return; }
   location.doc.pages.splice(location.pageIndex, 1);
   aiCloseOrientationReview();
-  aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0;
+  invalidateAiInvoiceResult();
   refreshScanHost();
   setTimeout(aiOpenNextUnconfirmedOrientation, 0);
 }
@@ -8352,8 +8433,10 @@ async function aiAddInvoiceFiles(docIndex, files) {
   aiScanBusy = true; aiScanProgressText = 'מכין את התמונות באיכות גבוהה…'; aiScanError = ''; refreshScanHost();
   try {
     const picked = Array.from(files).slice(0, slots);
-    for (const file of picked) doc.pages.push(await aiCompressInvoiceImage(file));
-    aiScanResponse = null; aiScanEvaluation = null; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0;
+    for (const file of picked) {
+      doc.pages.push(await aiCompressInvoiceImage(file));
+      invalidateAiInvoiceResult();
+    }
   } catch (error) {
     aiScanError = error && error.message === 'image_too_large' ? 'התמונה גדולה מדי. צלם שוב מקרוב ובחדות.' : 'לא הצלחתי להכין את התמונה. נסה לצלם שוב.';
   } finally {
@@ -8618,7 +8701,7 @@ async function aiLiveCamTakePhoto() {
 })();
 function aiRemoveInvoicePage(docIndex, pageIndex) {
   const doc = aiScanDocuments[docIndex]; if (!doc || aiScanBusy) return;
-  doc.pages.splice(pageIndex, 1); aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; refreshScanHost();
+  doc.pages.splice(pageIndex, 1); invalidateAiInvoiceResult(); refreshScanHost();
 }
 async function aiRotateInvoicePage(docIndex, pageIndex) {
   const doc = aiScanDocuments[docIndex], page = doc && doc.pages[pageIndex];
@@ -8634,7 +8717,7 @@ async function aiRotateInvoicePage(docIndex, pageIndex) {
     page.rotation = targetTurns * 90;
     page.bytes = rendered.bytes;
     page.orientationConfirmed = false;
-    aiScanResponse = null; aiScanEvaluation = null; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0;
+    invalidateAiInvoiceResult();
   } catch (error) {
     aiScanError = error && error.message === 'image_too_large' ? 'לא ניתן לסובב בלי לחרוג ממגבלת הגודל.' : 'סיבוב התמונה נכשל. התמונה המקורית נשארה ללא שינוי.';
   } finally {
@@ -9636,7 +9719,7 @@ function aiEvaluateInvoiceScan(payload) {
     if (doc.docType === 'credit' && !docIsCredit) errors.push('תעודה ' + (index + 1) + ': ה-AI קרא בכותרת תעודת זיכוי/החזרה, אך היא הוקלדה כחיוב. אם היא מבטלת חיוב מאותו משלוח — סמן אותה "זיכוי (מינוס)" בנתוני התעודה; אם הסחורה הוחזרה לנהג — מקומה במסך החזרות.');
     else if (doc.docType === 'invoice' && docIsCredit) errors.push('תעודה ' + (index + 1) + ': סומנה כזיכוי (מינוס), אך ה-AI קרא בכותרת תעודת משלוח/חשבונית רגילה. בדוק את הסימון.');
     else if (docIsCredit && doc.docType !== 'credit') warnings.push('תעודה ' + (index + 1) + ': סומנה כזיכוי אך כותרת המסמך לא נקראה בוודאות — הסימון שהוקלד הוא הקובע.');
-    if (Number(doc.pageCount) !== inputDoc.pages.length) errors.push('תעודה ' + (index + 1) + ': מספר העמודים שפוענחו אינו זהה למספר התמונות שצולמו');
+    if (Number(doc.pageCount) !== aiScanDocumentPageCount(inputDoc)) errors.push('תעודה ' + (index + 1) + ': מספר העמודים שפוענחו אינו זהה למספר התמונות שצולמו');
     const subtotalCents = aiMoneyCents(doc.subtotalExVat);
     const expectedCents = aiMoneyCents(inputDoc.amount);
     if (subtotalCents == null) errors.push('הסכום ללא מע״מ לא נקרא בתעודה ' + (index + 1));
@@ -10577,10 +10660,13 @@ async function aiRunInvoiceScan() {
   if (!aiScanDocuments.length || aiScanDocuments.some(d => !d.pages.length)) { showToast('צלם לפחות עמוד אחד מכל תעודה', null, null, 3000); return; }
   if (!aiAllPagesOrientationConfirmed()) { showToast('אשר שכל התמונות ישרות לפני הפענוח', null, null, 3200); aiOpenNextUnconfirmedOrientation(); return; }
   if (!auth || !auth.currentUser) { showToast('עדיין אין חיבור מאובטח — המתן רגע ונסה שוב', null, null, 3000); return; }
+  invalidateAiInvoiceResult();
+  const scanSession = aiScanSession;
   aiDetailsOpen = false; // v43: כל סריקה מתחילה במסך הפשוט
   aiScanBusy = true; aiScanProgressText = aiScanDocuments.length > 1 ? 'ה-AI קורא ' + aiScanDocuments.length + ' תעודות, אחת אחרי השנייה…' : 'ה-AI קורא את דפי התעודה…'; aiScanError = ''; aiScanResponse = null; aiScanEvaluation = null; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; refreshScanHost();
   try {
     const token = await auth.currentUser.getIdToken();
+    if (scanSession !== aiScanSession) return;
     // v132: כל תעודה נסרקת בבקשה משלה, במקביל. כשל בתעודה אחת אינו מפיל
     // את השאר: התעודות שהצליחו נכנסות לפענוח, והכשל מדווח כשגיאה בדף.
     // v179: התעודות נשארות סוכנים נפרדים — בקשה ומודל משלהם לכל תעודה —
@@ -10599,6 +10685,7 @@ async function aiRunInvoiceScan() {
         if (error && error.fatal) throw error;
         results.push({ ok: false, docIndex, errorMessage: (error && error.message) || 'הסריקה נכשלה לתעודה זו' });
       }
+      if (scanSession !== aiScanSession) return;
     }
     const okResults = results.filter(result => result.ok);
     if (!okResults.length) {
@@ -10626,8 +10713,9 @@ async function aiRunInvoiceScan() {
         : { docIndex: result.docIndex, ok: false, error: result.errorMessage || '' })
     };
     aiRefreshScanEvaluation();
-  } catch (error) { aiScanError = error && error.message ? error.message : 'הסריקה החכמה נכשלה'; }
+  } catch (error) { if (scanSession === aiScanSession) aiScanError = error && error.message ? error.message : 'הסריקה החכמה נכשלה'; }
   finally {
+    if (scanSession !== aiScanSession) return;
     aiScanBusy = false; aiScanProgressText = '';
     // v41: רשת ביטחון אחרונה. גם אם רינדור נופל בכל זאת, אסור שהמסך יישאר
     // על הספינר — המשתמש נשאר אז בלי שום דרך להתקדם, וזה בדיוק מה שקרה.
@@ -13771,11 +13859,12 @@ async function confirmReceipt() {
   const creditClaim = supplierCreditClaim ? { ...cloneSafe(supplierCreditClaim), createdAt: supplierCreditClaim.createdAt || Date.now() } : null;
   const docDate = receiptDocDate || todayStr();
   const receiptVatRate = vatRateForNewDocument(docDate);
-  const data = { timestamp: (attach && Number(attach.timestamp)) || Date.now(), date: (attach && attach.date) || todayStr(), docDate, noDoc: !!(noDoc || attach), vatPct: r2(receiptVatRate * 100), items: lines, count: lines.length, totalExVat: ex, totalIncVat: r2(ex * (1 + receiptVatRate)), receivedExVat: (calculatedEx != null ? calculatedEx : ex), calculatedExVat: (calculatedEx != null ? calculatedEx : ex), roundingAdjustment: r2(Number(roundingAdjustment) || 0), grossExVat: (grossEx != null ? grossEx : (calculatedEx != null ? calculatedEx : ex)), supplierDiscount: r2(Number(supplierDiscount) || 0), supplierPromoItems: (Array.isArray(supplierPromoItems) ? supplierPromoItems : []), supplierPromoMismatchItems: (Array.isArray(supplierPromoMismatchItems) ? supplierPromoMismatchItems : []), supplierCreditClaim: creditClaim, aiAudit: aiAudit ? cloneSafe(aiAudit) : null, noteTotalInc: (noteTotal != null ? noteTotal : null), noteParts: (Array.isArray(noteParts) ? noteParts : []), monthEndRebates: monthEndSnapshotForLines(lines, docDate), monthEndPending: (monthEndPending || null), promoOnPaper: (Array.isArray(promoOnPaper) ? promoOnPaper : []), unresolvedAmountGap: r2(Number(unresolvedAmountGap) || 0), unresolvedUnitsGap: Number(unresolvedUnitsGap) || 0, status: status || 'ok', operationId: opId };
+  const data = { timestamp: (attach && Number(attach.timestamp)) || Date.now(), date: (attach && attach.date) || todayStr(), docDate, noDoc: !!(noDoc || attach), vatPct: r2(receiptVatRate * 100), items: lines, count: lines.length, totalExVat: ex, totalIncVat: r2(ex * (1 + receiptVatRate)), receivedExVat: (calculatedEx != null ? calculatedEx : ex), calculatedExVat: (calculatedEx != null ? calculatedEx : ex), roundingAdjustment: r2(Number(roundingAdjustment) || 0), grossExVat: (grossEx != null ? grossEx : (calculatedEx != null ? calculatedEx : ex)), supplierDiscount: r2(Number(supplierDiscount) || 0), supplierPromoItems: (Array.isArray(supplierPromoItems) ? supplierPromoItems : []), supplierPromoMismatchItems: (Array.isArray(supplierPromoMismatchItems) ? supplierPromoMismatchItems : []), supplierCreditClaim: creditClaim, aiAudit: aiAudit ? cloneSafe(aiAudit) : null, paperScan: receiptScanSnapshot(), noteTotalInc: (noteTotal != null ? noteTotal : null), noteParts: (Array.isArray(noteParts) ? noteParts : []), monthEndRebates: monthEndSnapshotForLines(lines, docDate), monthEndPending: (monthEndPending || null), promoOnPaper: (Array.isArray(promoOnPaper) ? promoOnPaper : []), unresolvedAmountGap: r2(Number(unresolvedAmountGap) || 0), unresolvedUnitsGap: Number(unresolvedUnitsGap) || 0, status: status || 'ok', operationId: opId };
   const saved = await runCloudTask('save receipt before clearing draft', { op: 'set', path: dataPath('receipts', opId), data, operationId: opId });
   if (!saved) return;
   hideReceiptSummary();
   aiCloseOrientationReview();
+  aiScanSession++;
   receiptList = []; pendingReceipt = null; receiptNotes = []; receiptDocDate = null; receiptDraftId = null; receiptPromoOnPaper = []; receiptEntryMode = 'photo'; receiptAnchorSource = null; receiptPaperScanState = ''; receiptPaperScanProblems = []; recomputeNoteTotal(); receiptOpened = false; editingNotes = false; reconcileData = null; reconcileSupplierDiscount = 0; reconcileSupplierPromoItems = []; reconcilePromoMismatchItems = []; reconcileSupplierCreditClaim = null; reconcileAiAudit = null; aiScanDocuments = []; aiScanBusy = false; aiScanProgressText = ''; aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; aiScanBasis = null; receiptDupConfirmed = false; receiptLinesConfirmed = false; receiptNoDoc = false; receiptAttachTarget = null; saveReceiptDraft(); // v25: תעודה שנסגרה משחררת גם את בסיס הסריקה
   setView('receiptsHistory');
   const newOpen = receipts.filter(r => receiptDiscrepancyInfo(r).open).find(r => findOffsetMatch(r));
@@ -19010,7 +19099,7 @@ app.addEventListener('click', (e) => {
   if (role === 'ai-review-page') { aiOpenOrientationReview(parseInt(t.dataset.doc, 10) || 0, parseInt(t.dataset.page, 10) || 0, true); refreshScanHost(); return; }
   if (role === 'ai-remove-page') { aiRemoveInvoicePage(parseInt(t.dataset.doc, 10) || 0, parseInt(t.dataset.page, 10) || 0); return; }
   if (role === 'ai-run') { aiRunInvoiceScan(); return; }
-  if (role === 'ai-edit-images') { aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; aiAnalyzeResult = null; aiAnalyzeError = ''; renderReconcile(); return; }
+  if (role === 'ai-edit-images') { invalidateAiInvoiceResult(); aiAnalyzeResult = null; aiAnalyzeError = ''; renderReconcile(); return; }
   if (role === 'ai-analyze') { aiRunAnalyzer(); return; }
   if (role === 'ai-analyze-copy') { const text = aiAnalyzeClaimsPlainText(); if (!text) return; if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => showToast('הטענות הועתקו', null, null, 2200)).catch(() => showToast('ההעתקה נכשלה', null, null, 2200)); else showToast('ההעתקה אינה נתמכת בדפדפן הזה', null, null, 2600); return; }
   if (role === 'ai-rescan') { if (!AI_SCAN_ENABLED) { showToast('סריקת התעודות תודלק בהמשך — אין עדיין שרת סריקה לברמן', null, null, 3200); return; } prepareAiInvoiceScan(); rcStep = 'ai'; renderReconcile(); return; } // v25: ממשיך סריקה קיימת במקום למחוק אותה
