@@ -10247,7 +10247,10 @@ function aiEvaluateInvoiceScan(payload) {
   // מהיעדר שורה בנייר — ותעודה שלא נקראה היא היעדר שורות שאינו ראיה לכלום.
   const basketComplete = allRowsMapped && unusableRows === 0 && missingDocuments === 0 && returned.size === aiScanDocuments.length;
   if (aggregates.size > 0) {
-    const day = todayStr();
+    // תוקף המבצע נקבע לפי תאריך התעודה, כמו בבדיקת המחירים ובמסך ההשוואה.
+    // עד כאן נבדק לפי היום, ולכן תעודה מתאריך קודם נשפטה מול מבצעי היום
+    // ודרישת הזיכוי מהספק נבנתה על מחיר צפוי שגוי.
+    const day = activeReceiptDate();
     const paperBasketQty = pr => {
       if (!pr || !Array.isArray(pr.productIds)) return 0;
       let total = 0;
