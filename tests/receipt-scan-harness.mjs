@@ -84,7 +84,7 @@ export function runtime({ storage = new Map(), data = fixture() } = {}) {
   run(`products = testData.products; promos = testData.promos;
     showToast = text => testToasts.push(text);
     runCloudTask = async (label, task) => { testWrites.push(structuredClone(task)); return true; };
-    aiRunAnalyzer = async () => {};`);
+    const auditOriginalAnalyzer = aiRunAnalyzer; aiRunAnalyzer = async () => {};`);
   async function scan() {
     run(`receiptOpened = true; receiptDocDate = '2026-09-09'; receiptList = [];
       bermanSeedPhotoFirstScan(1);

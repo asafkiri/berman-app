@@ -8,7 +8,7 @@ const fixture = JSON.parse(fs.readFileSync(new URL('./fixture.json', import.meta
 const products = Object.entries(fixture.products).map(([id, p]) => ({ id, ...p }));
 const promos = Object.entries(fixture.promos).map(([id, p]) => ({ id, ...p }));
 let receiptDocDate = '2026-09-07', receiptList = [], receiptPromoOnPaper = [];
-const FNS = ['r2', 'fmtMoney', 'normalizeBarcode', 'productCode', 'productListPrice',
+const FNS = ['priceAuditCapture','makeOperationId','r2', 'fmtMoney', 'normalizeBarcode', 'productCode', 'productListPrice',
   'productDiscountPct', 'finalUnitPrice', 'promoFixedPrice', 'promoActive', 'promoForProduct',
   'promoTriggered', 'promoUnitPriceOf', 'effectivePrice', 'lineTotalFromUnit', 'todayStr',
   'activeReceiptDate', 'aiMoneyCents', 'aiDocRowUnits', 'bermanBuildCodeIndex',
