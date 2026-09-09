@@ -43,7 +43,10 @@ const FNS = ['r2', 'moneyDiffCents', 'lineTotalFromUnit', 'todayStr', 'storedRec
   'shortCreditToleranceCents', 'shortCreditFullyCovers', 'ymdDayDiff', 'receiptOpenShortEx',
   'shortageCreditCandidates', 'returnsCreditSourcesForShortage', 'creditAllocationList',
   'creditAllocatedEx', 'returnsCreditForReturns', 'returnsCreditSurplus', 'returnsBalance',
-  'buildCreditSplitRecords', 'creditSplitPairId', 'vatRateForDoc', 'amountIncForDoc', 'returnTotals'];
+  'buildCreditSplitRecords', 'creditSplitPairId', 'vatRateForDoc', 'amountIncForDoc', 'returnTotals',
+  // v78 — החזרת פריטים מתעודת חזרות לרשימת החזרות הפתוחה
+  'returnCarriedNotes', 'retCarryKey', 'consumeReturnCarriedNotes', 'returnsDiscrepancyInfo',
+  'returnCarriedVal'];
 const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;'];
 // eslint-disable-next-line no-eval
 const api = eval(extractSource(FNS, CONSTS) + '\n({ ' + FNS.join(', ') + ' })');
