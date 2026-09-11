@@ -796,9 +796,23 @@ let rvOrigin = 'returnsHistory';  // מאיזה מסך נפתח אימות הז�
 let signMaker = null;             // הכנת שלטי מבצע (בחירה + עריכה + תצוגה)
 let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכפילות
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
+// פערי אגורות מצטברים נוצרים כשהספק מדפיס מחיר יחידה מעוגל אך מחשב את
+// השורות בדיוק פנימי. מתירים עד 30 אגורות רק כשסך היחידות ידוע ותואם בדיוק.
+// v52: הועלה מ-20. הגבול העליון של הסיבולת נשאר אותו גבול מאז ומתמיד —
+// היא חייבת להישאר רחוקה בסדר גודל מהמוצר הזול ביותר (132 אג'), כדי שלא
+// תוכל לבלוע שורה או יחידה אמיתית. 30 עדיין רחוקה פי 4.4 משם.
+// אזהרה למי שיתפתה להעלות עוד: פער שחורג מכאן הוא כמעט תמיד אחוז הנחה
+// שהתיישן, לא עיגול. נתפס בדיוק כזה בתעודה של 4.9.26 — בענן ישב 30%
+// על "חלומית ארוזה" (קוד 458) במקום 30.3% שבמחירון, וזה לבדו ייצר 22
+// אג' על תעודה אחת. הסיבולת אינה תחליף לתיקון המחיר בכרטיס המוצר.
+// v79: הקבוע יושב כאן, ולא ליד שאר חשבון הכסף, מפני ששער הצילום נשען
+// עליו כבר בשחזור הטיוטה — וזה רץ בטעינת המודול, לפני שהשורות שבהמשך
+// הקובץ הספיקו לרוץ. const בתחום מת אינו שגיאה גלויה כאן אלא חריגה
+// שנבלעת ב-catch של השחזור, והטיוטה פשוט חוזרת בלי מצב קריאה.
+const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '78'; // החזרת פריטים מתעודת חזרות לרשימת החזרות הפתוחה
+const APP_VERSION = '79'; // סיבולת העיגול בשער הצילום — אותה סיבולת שבכל שאר האפליקציה
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -4810,16 +4824,7 @@ function fmtUnitPrice(n, precise) {
   const v = Number(n) || 0;
   return precise ? v.toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 5 }) : fmtMoney(v);
 }
-// פערי אגורות מצטברים נוצרים כשהספק מדפיס מחיר יחידה מעוגל אך מחשב את
-// השורות בדיוק פנימי. מתירים עד 30 אגורות רק כשסך היחידות ידוע ותואם בדיוק.
-// v52: הועלה מ-20. הגבול העליון של הסיבולת נשאר אותו גבול מאז ומתמיד —
-// היא חייבת להישאר רחוקה בסדר גודל מהמוצר הזול ביותר (132 אג'), כדי שלא
-// תוכל לבלוע שורה או יחידה אמיתית. 30 עדיין רחוקה פי 4.4 משם.
-// אזהרה למי שיתפתה להעלות עוד: פער שחורג מכאן הוא כמעט תמיד אחוז הנחה
-// שהתיישן, לא עיגול. נתפס בדיוק כזה בתעודה של 4.9.26 — בענן ישב 30%
-// על "חלומית ארוזה" (קוד 458) במקום 30.3% שבמחירון, וזה לבדו ייצר 22
-// אג' על תעודה אחת. הסיבולת אינה תחליף לתיקון המחיר בכרטיס המוצר.
-const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
+// RECEIPT_ROUNDING_TOLERANCE_CENTS מוגדר למעלה, עם שאר קבועי הקליטה.
 function moneyDiffCents(a, b) { return Math.abs(Math.round((Number(a) || 0) * 100) - Math.round((Number(b) || 0) * 100)); }
 function receiptMoneyMatches(calculated, paperTotal, unitsMatch) {
   const diff = moneyDiffCents(calculated, paperTotal);
@@ -7873,11 +7878,16 @@ function paperScanStatusHtml() {
       '<i class="fa-solid fa-circle-notch fa-spin"></i><span>' + htmlEscape(aiScanProgressText || 'קורא את התעודה ברקע…') + ' סרוק את הסחורה כרגיל.</span></div>';
   }
   if (receiptPaperScanState === 'ok' && receiptNoteTotal != null) {
-    const fullListRows = aiScanResponse && aiScanResponse.scan && Array.isArray(aiScanResponse.scan.documents)
-      ? aiScanResponse.scan.documents.reduce((n, d) => n + (d.__bermanFullListRowIndexes || []).length, 0) : 0;
+    const scanDocs = aiScanResponse && aiScanResponse.scan && Array.isArray(aiScanResponse.scan.documents) ? aiScanResponse.scan.documents : [];
+    const fullListRows = scanDocs.reduce((n, d) => n + (d.__bermanFullListRowIndexes || []).length, 0);
+    // v79: הפרש עיגול שנבלע בסיבולת אינו נעלם — הוא נאמר. עיגול של הספק זז
+    // אגורות בודדות ומתחלף מתעודה לתעודה; פער שחוזר על עצמו באותו גודל הוא
+    // אחוז הנחה שהתיישן, וזה ההבדל שהשורה הזאת מאפשרת לראות בלי לחסום קליטה.
+    const roundingGapCents = scanDocs.reduce((n, d) => n + Math.abs(Number(d.__bermanRoundingGapCents) || 0), 0);
     return '<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-2.5 mb-3 text-[11px] font-black text-emerald-800">' +
       '<i class="fa-solid fa-file-circle-check"></i> העוגנים נקראו מהתעודה ואומתו מול בלוק הסיכום שלה — ₪' + fmtMoney(receiptNoteTotal) +
       ' · ' + receiptNoteUnits + ' יח׳' + (receiptNoteLines != null ? ' · ' + receiptNoteLines + ' שורות' : '') +
+      (roundingGapCents ? '<div class="mt-1">הפרש עיגול של ' + roundingGapCents + ' אג׳ מול הנייר — בתוך הסיבולת. אם הוא חוזר על עצמו באותו גודל, בדוק את אחוז ההנחה בכרטיס המוצר.</div>' : '') +
       (fullListRows ? '<div class="mt-1">הסכום תואם לחיוב מוצרי מבצע במחיר מלא. ההפרש ייבדק בסיום הקליטה ויישמר למעקב מול המרכזת.</div>' : '') + '</div>';
   }
   if (receiptPaperScanState === 'failed') {
@@ -10456,7 +10466,16 @@ function aiEvaluateInvoiceScan(payload) {
     // בדרכה, ואגורה אחת לשורה הייתה צמודה מדי — תעודה של תשע שורות נחסמה על
     // תשע אגורות. גם 25 נשארת רחוקה בסדר גודל מהמוצר הזול (132 אג'), ולכן
     // אינה יכולה להסתיר שורה שלמה. הפער עצמו ממשיך להיאמר באזהרה למטה.
-    const docRoundingTolCents = Math.min(25, Math.max(3, 2 * (Array.isArray(doc.rows) ? doc.rows.length : 0)));
+    // v79: כששני העוגנים המודפסים סגורים בדיוק — היחידות והשורות — הסיבולת
+    // היא זו של README 6ב: 30 אג' לתעודה. בלי זה שער הצילום היה מקבל תעודה
+    // שהבדיקה הזאת פוסלת שורה אחת אחריו ("סכום השורות נמוך מסכום התעודה"),
+    // כלומר החסימה על 21 אג' הייתה חוזרת במסך הבא במקום להיפתר.
+    const docRowCount = Array.isArray(doc.rows) ? doc.rows.length : 0;
+    const docUnitsAnchorExact = printedUnits != null && isFinite(printedUnits) && Math.round(printedUnits) === docUnits;
+    const docLinesAnchorExact = printedLines != null && isFinite(printedLines) && Math.round(printedLines) === docRowCount;
+    const docBaseRoundingTolCents = Math.min(25, Math.max(3, 2 * docRowCount));
+    const docRoundingTolCents = docUnitsAnchorExact && docLinesAnchorExact
+      ? Math.max(docBaseRoundingTolCents, RECEIPT_ROUNDING_TOLERANCE_CENTS) : docBaseRoundingTolCents;
     roundingSlackCents += docRoundingTolCents;
     const impliedRawCents = subtotalCents == null ? null : docRowsCents - subtotalCents;
     const impliedDiscountCents = impliedRawCents != null && impliedRawCents !== 0 && Math.abs(impliedRawCents) <= docRoundingTolCents ? 0 : impliedRawCents;
@@ -11127,17 +11146,30 @@ function bermanPaperAnchorCheck(doc) {
   const pricesKnown = rowTotals.every(value => value != null && Number.isFinite(value));
   const rowsCents = Math.round(rowTotals.reduce((sum, value) => sum + (Number(value) || 0), 0) * 100);
   const readUnits = aiDocRowUnits(doc);
-  // אותה סיבולת שבה נמדד הפער מול עוגן מוקלד — 2 אג׳ לשורה, 3 עד 25.
-  const tolCents = Math.min(25, Math.max(3, 2 * rows.length));
-  let money = printedNet == null || !pricesKnown ? null : Math.abs(rowsCents - printedNet) <= tolCents;
   const units = printedUnits == null ? null : Math.round(readUnits) === printedUnits;
   const lines = printedLines == null ? null : rows.length === printedLines;
-  if (doc) doc.__bermanFullListRowIndexes = [];
+  // אותה סיבולת שבה נמדד הפער מול עוגן מוקלד — 2 אג׳ לשורה, 3 עד 25.
+  // v79: זו סיבולת הבסיס, של תעודה שאין לה עד שני. כששני העוגנים המדויקים
+  // סגורים — היחידות והשורות גם יחד — הסיבולת היא זו שכבר חיה בכל שאר
+  // האפליקציה: RECEIPT_ROUNDING_TOLERANCE_CENTS, 30 אג׳ לתעודה, "רק כשסך
+  // היחידות ידוע ותואם בדיוק" (README 6ב). עד כאן שער הצילום היה היחיד
+  // שלא יישם את הסייג הזה, ולכן חסם תעודות שהקליטה הידנית קיבלה: תעודה
+  // של 10 שורות קיבלה 20 אג׳ בלבד, ופער עיגול של 21 אג׳ (₪516.60 מחושב
+  // מול ₪516.81 מודפס) עצר קליטה שלמה על אגורה אחת מעבר לסף. 30 אג׳
+  // נשארות רחוקות בסדר גודל מהמוצר הזול (132 אג׳) ולכן אינן יכולות לבלוע
+  // יחידה, ושני העוגנים המדויקים כבר שוללים כמות או שורה שנקראו שגוי.
+  // הפער עצמו אינו נבלע בשקט — הוא נאמר במפורש בשורת המצב.
+  const baseTolCents = Math.min(25, Math.max(3, 2 * rows.length));
+  const tolCents = units === true && lines === true ? Math.max(baseTolCents, RECEIPT_ROUNDING_TOLERANCE_CENTS) : baseTolCents;
+  const gapCents = printedNet == null || !pricesKnown ? null : printedNet - rowsCents;
+  let money = gapCents == null ? null : Math.abs(gapCents) <= tolCents;
+  if (doc) { doc.__bermanFullListRowIndexes = []; doc.__bermanRoundingGapCents = money === true ? gapCents : 0; }
   const fullListMatch = money === false && units === true && lines === true
-    ? bermanFullListMatch(rows, rowTotals, printedNet - rowsCents, tolCents) : null;
+    ? bermanFullListMatch(rows, rowTotals, gapCents, tolCents) : null;
   if (fullListMatch) {
     money = true;
     doc.__bermanFullListRowIndexes = fullListMatch.indexes;
+    doc.__bermanRoundingGapCents = gapCents - fullListMatch.deltaCents;
   }
   const missing = [];
   if (printedNet == null) missing.push('"נטו לחיוב"');
@@ -11145,12 +11177,17 @@ function bermanPaperAnchorCheck(doc) {
   if (printedLines == null) missing.push('"סה״כ שורות"');
   if (!pricesKnown) missing.push('מחיר או זיהוי מוצר לחישוב אחת השורות');
   const failed = [];
-  if (money === false) failed.push('החישוב לפי המחירון והמבצעים (₪' + fmtMoney(rowsCents / 100) + ') אינו תואם ל"נטו לחיוב" המודפס (₪' + fmtMoney(printedNet / 100) + ') — יש לבדוק מחירים, הנחות או את קריאת השורות');
+  // הפער נאמר באגורות לצד הסיבולת שנחרגה, ולא רק כשני סכומים להשוואה. פער
+  // שחורג מסיבולת העיגול הוא כמעט תמיד אחוז הנחה שהתיישן בכרטיס מוצר, ולכן
+  // זו ההנחיה — ולא "צלם שוב", שלא יעזור כשהקריאה נכונה והמחיר הוא שאינו.
+  if (money === false) failed.push('החישוב לפי המחירון והמבצעים (₪' + fmtMoney(rowsCents / 100) + ') אינו תואם ל"נטו לחיוב" המודפס (₪' + fmtMoney(printedNet / 100) + ') — פער של ' + Math.abs(gapCents) + ' אג׳, מעל סיבולת העיגול (' + tolCents + ' אג׳). כמעט תמיד זה אחוז הנחה שהתיישן בכרטיס מוצר, לא עיגול');
   if (units === false) failed.push('סכום הכמויות שנקראו (' + Math.round(readUnits) + ') אינו תואם ל"סה״כ כללי" המודפס (' + printedUnits + ')');
   if (lines === false) failed.push('מספר השורות שנקראו (' + rows.length + ') אינו תואם ל"סה״כ שורות" המודפס (' + printedLines + ')');
   return {
     ok: money === true && units === true && lines === true,
     money, units, lines, missing, failed,
+    gapCents, tolCents,
+    roundingGapCents: doc ? doc.__bermanRoundingGapCents : 0,
     amount: printedNet == null ? null : r2(printedNet / 100),
     printedUnits, printedLines,
     kind: doc && doc.docType === 'credit' ? 'credit' : 'charge'
