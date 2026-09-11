@@ -812,7 +812,7 @@ const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '79'; // סיבולת העיגול בשער הצילום — אותה סיבולת שבכל שאר האפליקציה
+const APP_VERSION = '80'; // אישור מהיר לתעודת זיכוי, והחזרת תעודה שלא אומתה לרשימת החזרות
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -3076,11 +3076,7 @@ function renderReturnsHistory() {
         '</div>' : '')) : '';
       const actionArea = !credited
         ? creditAllocationsHtml(r) +
-          '<div class="text-[11px] text-slate-400 font-bold mb-1.5"><i class="fa-solid fa-circle-info"></i> הקלד את סכום תעודת הזיכוי <b class="text-slate-600">ללא מע״מ</b> כדי לאמת</div>' +
-          '<div class="flex gap-2 items-stretch mb-2">' +
-            '<div class="flex-1 flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500"><span class="text-slate-400 font-black">₪</span><input id="rvNote_' + r.id + '" type="text" inputmode="decimal" placeholder="סכום זיכוי ללא מע״מ" class="w-full h-11 text-center text-base font-black outline-none bg-transparent"></div>' +
-            '<button data-role="rv-verify-inline" data-id="' + r.id + '" class="btn-tap px-4 rounded-xl font-black bg-green-600 text-white flex items-center gap-1"><i class="fa-solid fa-check-double"></i> בדוק</button>' +
-          '</div>' + '<button data-role="ret-edit-items" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + (pending >= 2 ? retMergeBtnHtml(r.id) : '') + '<button data-role="ret-delete" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>' + '<button data-role="del-return" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-rose-200 text-rose-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>'
+          retVerifyRowHtml(r) + '<button data-role="ret-edit-items" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + retUnsendBtnHtml(r) + (pending >= 2 ? retMergeBtnHtml(r.id) : '') + '<button data-role="ret-delete" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>' + '<button data-role="del-return" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-rose-200 text-rose-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>'
         : breakdown +
           retCarryBoxHtml(r) +
           creditAllocationsHtml(r) +
@@ -3294,6 +3290,154 @@ function retCarryBoxHtml(r) {
       '<button data-role="ret-carry-undo" data-id="' + htmlEscape(r.id) + '" class="btn-tap mt-1 text-[11px] font-black text-slate-500 underline decoration-slate-300"><i class="fa-solid fa-rotate-left"></i> בטל החזרה</button>' +
     '</div>' +
   '</div>';
+}
+// ===== v80: שורת אימות אחת לשני המסכים =====
+// הכרטיס הזה נבנה בשני מקומות (היסטוריית החזרות, ותעודות הקליטה), ושתי
+// העתקות של אותו HTML כבר נפרדו זו מזו בעבר. כאן הן אותה פונקציה.
+// שני מסלולי אימות, שורה אחת: הקלדת סכום הנייר כשהוא שונה ממה שהוחזר,
+// ו"אישור" כשהספק זיכה בדיוק את מה שהוחזר — המצב הרגיל, שעד כה חייב
+// הקלדה של מספר שהאפליקציה כבר יודעת. שניהם מגיעים לאותו markReturnVerified.
+function retVerifyAmount(r) {
+  // הסכום שיירשם כ"נייר" באישור מהיר. כשחלק מהנייר כבר שויך לחוסר בקליטה
+  // (v66), הוא חייב להיכלל — אחרת returnsCreditForReturns היה יוצא נמוך
+  // בדיוק בגובה השיוך, והאישור היה יוצר פער מדומה במקום לסגור תעודה.
+  return r2(returnTotals(r).ex + creditAllocatedEx(r));
+}
+function retVerifyRowHtml(r) {
+  const amount = retVerifyAmount(r);
+  return '<div class="text-[11px] text-slate-400 font-bold mb-1.5"><i class="fa-solid fa-circle-info"></i> הקלד את סכום תעודת הזיכוי <b class="text-slate-600">ללא מע״מ</b>, או אשר שהוא בדיוק ₪' + fmtMoney(amount) + ' — כל מה שהוחזר</div>' +
+    '<div class="flex gap-1.5 items-stretch mb-2">' +
+      '<div class="flex-1 min-w-0 flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500"><span class="text-slate-400 font-black text-sm">₪</span><input id="rvNote_' + r.id + '" type="text" inputmode="decimal" placeholder="סכום הזיכוי" class="w-full min-w-0 h-11 text-center text-sm font-black outline-none bg-transparent"></div>' +
+      '<button data-role="rv-verify-inline" data-id="' + r.id + '" class="btn-tap shrink-0 px-3 rounded-xl font-black text-sm bg-green-600 text-white flex items-center gap-1"><i class="fa-solid fa-check-double"></i> בדוק</button>' +
+      '<button data-role="rv-approve" data-id="' + r.id + '" class="btn-tap shrink-0 px-3 rounded-xl font-black text-sm bg-emerald-700 text-white flex items-center gap-1"><i class="fa-solid fa-stamp"></i> אישור</button>' +
+    '</div>';
+}
+function openReturnApproveConfirm(id) {
+  const r = returns.find(x => x.id === id); if (!r) return;
+  if (r.credited) return;
+  const amount = retVerifyAmount(r);
+  const alloc = creditAllocatedEx(r);
+  showConfirm('אישור תעודת זיכוי',
+    'לאשר שהספק זיכה בדיוק ₪' + fmtMoney(returnTotals(r).ex) + ' (ללא מע״מ) — כל מה שהוחזר' +
+    (alloc > 0 ? ', ובנוסף ₪' + fmtMoney(alloc) + ' ששויכו לחוסר בקליטה' : '') +
+    '? התעודה תיסגר בלי פער, בלי להקליד את הסכום.',
+    'אשר תעודה', () => markReturnVerified(id, amount));
+}
+// ===== v80: ביטול שליחה — החזרת תעודה שלא אומתה לרשימת החזרות הפתוחה =====
+// זה לא אחיו של v78 אלא ההפך ממנו. שם הסחורה כן יצאה והספק זיכה חלקית, ולכן
+// התעודה נשארת בהיסטוריה והפריטים חוזרים כתביעת כסף בלבד. כאן התעודה עדיין
+// לא אומתה ומה שקרה הוא שהיא נשלחה מוקדם מדי — הנהג לא לקח, או שנשלחה
+// בטעות. הסחורה לא יצאה מהחנות, ולכן התעודה נמחקת לגמרי (עם גיבוי לסל
+// המחזור): אילו הייתה נשארת, המרכזת החודשית הייתה סופרת את אותן יחידות
+// פעמיים — פעם בתעודה הזאת ופעם בתעודה הבאה שתישלח עם אותם פריטים.
+// הפריטים חוזרים לרשימה כשורות רגילות לכל דבר: הן ייספרו בניתוח וייתמחרו
+// לפי המחיר שיהיה בתוקף ביום שבו באמת תישלח התעודה.
+function retUnsendLineKind(line) {
+  const pid = String((line && line.productId) || '');
+  if (anIsCarriedLine(line)) return 'carried';
+  if (pid.indexOf('manual_') === 0) return 'manual';
+  // מוצר שנמחק מהקטלוג מאז — השורה חוזרת כידנית עם המחיר ששמור בה, כדי
+  // שהכמות והכסף לא ייעלמו רק מפני שהכרטיס כבר לא קיים.
+  return products.some(p => p && p.id === pid) ? 'catalog' : 'manual';
+}
+function retUnsendPlan(r) {
+  if (!r || r.credited) return null;
+  const items = [];
+  ((r && r.items) || []).forEach(line => {
+    // שורת פיקדון אינה סחורה שחוזרת לרשימה — היא נגזרת לבד מהגדרת המוצר
+    // בכל שליחה, ולכן החזרתה הייתה מכפילה אותה בתעודה הבאה.
+    if (!line || anIsDepositLine(line)) return;
+    const qty = Number(line.qty) || 0;
+    if (!(qty > 0)) return;
+    const kind = retUnsendLineKind(line);
+    items.push({
+      kind,
+      productId: String(line.productId || ''),
+      name: String(line.name || ''),
+      barcode: String(line.barcode || ''),
+      qty,
+      unitPrice: r2(Number(line.unitPrice) || 0),
+      carriedFrom: line.carriedFrom || null
+    });
+  });
+  if (!items.length) return null;
+  return { items, units: items.reduce((a, x) => a + x.qty, 0), val: r2(items.reduce((a, x) => a + lineTotalFromUnit(x.unitPrice, x.qty), 0)) };
+}
+// האם שורה שכבר ברשימה היא אותו פריט. הכרעת המשתמש: מאחדים לשורה אחת.
+// שורת קטלוג מזוהה לפי המוצר; ידנית וגם "הוחזר מפער זיכוי" לפי השם והמחיר,
+// כי אין להן מוצר משותף ומחיר שונה הוא בפירוש תביעה אחרת.
+function retUnsendSameLine(existing, item) {
+  if (!existing) return false;
+  if (item.kind === 'catalog') return !existing.manual && String(existing.productId || '') === item.productId;
+  if (item.kind === 'carried') return !!existing.carried && String(existing.carriedFrom || '') === String(item.carriedFrom || '') && existing.name === item.name && r2(Number(existing.unitPrice) || 0) === item.unitPrice;
+  return !!existing.manual && !existing.carried && existing.name === item.name && r2(Number(existing.unitPrice) || 0) === item.unitPrice;
+}
+function retUnsendNewId(item) {
+  if (item.kind === 'catalog') return item.productId;
+  const prefix = item.kind === 'carried' ? 'carry_' : 'manual_';
+  return prefix + Date.now() + '_' + Math.floor(Math.random() * 100000);
+}
+// מוסיף לרשימה ומחזיר בדיוק מה נוסף לכל שורה, כדי ש"בטל" יוכל להוריד את
+// אותה כמות בלי לגעת במה שכבר היה שם קודם.
+function applyReturnUnsend(plan) {
+  const applied = [];
+  (plan && plan.items || []).forEach(item => {
+    const existing = returnsList.find(x => retUnsendSameLine(x, item));
+    if (existing) {
+      existing.qty = r2((Number(existing.qty) || 0) + item.qty);
+      applied.push({ productId: String(existing.productId || ''), qty: item.qty, created: false });
+      return;
+    }
+    const row = { productId: retUnsendNewId(item), name: item.name, barcode: item.barcode, qty: item.qty };
+    if (item.kind !== 'catalog') { row.unitPrice = item.unitPrice; row.manual = true; }
+    if (item.kind === 'carried') { row.carried = true; if (item.carriedFrom) row.carriedFrom = item.carriedFrom; }
+    returnsList.push(row);
+    applied.push({ productId: row.productId, qty: item.qty, created: true });
+  });
+  return applied;
+}
+function openReturnUnsendConfirm(id) {
+  const r = returns.find(x => x.id === id); if (!r) return;
+  if (r.credited) { showToast('תעודה מאומתת — בטל קודם את האימות', null, null, 3000); return; }
+  const plan = retUnsendPlan(r);
+  if (!plan) { showToast('אין פריטים להחזרה בתעודה הזאת', null, null, 2600); return; }
+  showConfirm('החזרה לרשימת החזרות',
+    plan.units + ' יח׳ (₪' + fmtMoney(plan.val) + ') יחזרו לרשימת החזרות הפתוחה, והתעודה הזאת תימחק — כאילו לא נשלחה. גיבוי יישמר בסל המחזור ואפשר לבטל מיד. להחזיר?',
+    'החזר לרשימה', () => saveReturnUnsend(id));
+}
+async function saveReturnUnsend(id) {
+  const r = returns.find(x => x.id === id); if (!r || r.credited) return;
+  if (returnHasCreditAllocations(id)) return;
+  const plan = retUnsendPlan(r); if (!plan) return;
+  const backup = cloneSafe({ ...r });
+  // סדר הפעולות אינו שרירותי: קודם המחיקה. אם היא נכשלה (אין רשת, שגיאת
+  // ענן) הפריטים עדיין לא נכנסו לרשימה, ואי אפשר להגיע למצב שבו אותה
+  // סחורה יושבת גם בתעודה פתוחה וגם ברשימה הפתוחה.
+  const deleted = await hardDeleteDocWithBackup('returns', id, backup, 'unsend-return');
+  if (!deleted) { showToast('המחיקה נכשלה — הפריטים לא הוחזרו לרשימה', null, null, 3500); return; }
+  const applied = applyReturnUnsend(plan);
+  saveReturnsDraft();
+  buzz(18);
+  refreshAfterReturnCarry();
+  showToast('הפריטים חזרו לרשימת החזרות ✓ · התעודה נמחקה', 'בטל', () => undoReturnUnsend(backup, applied));
+}
+function undoReturnUnsend(backup, applied) {
+  (applied || []).forEach(x => {
+    const i = returnsList.findIndex(it => it && String(it.productId || '') === String(x.productId || ''));
+    if (i < 0) return;
+    const left = r2((Number(returnsList[i].qty) || 0) - (Number(x.qty) || 0));
+    // מחיקה במקום, בלי להחליף את המערך — returnsList הוא אותו מערך שב-returnsSlots
+    if (x.created || left <= 0) returnsList.splice(i, 1);
+    else returnsList[i].qty = left;
+  });
+  saveReturnsDraft();
+  refreshAfterReturnCarry();
+  restoreDoc('returns', backup);
+}
+function retUnsendBtnHtml(r) {
+  const plan = retUnsendPlan(r);
+  if (!plan) return '';
+  return '<button data-role="ret-unsend" data-id="' + htmlEscape(r.id) + '" class="btn-tap w-full mt-2 bg-white border border-amber-300 text-amber-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-rotate-left"></i> החזר את הפריטים לרשימת החזרות (' + plan.units + ' יח׳)</button>';
 }
 function retCarryBtnHtml(r) {
   if (!retCarryPlan(r)) return '';
@@ -14718,11 +14862,7 @@ function returnCardInReceipts(r) {
   ).join('');
   const actionArea = !credited
     ? '<div class="mt-2">' + creditAllocationsHtml(r) + '</div>' +
-      '<div class="text-[11px] text-slate-400 font-bold mb-1.5"><i class="fa-solid fa-circle-info"></i> הקלד את סכום תעודת הזיכוי <b class="text-slate-600">ללא מע״מ</b> כדי לאמת</div>' +
-      '<div class="flex gap-2 items-stretch">' +
-        '<div class="flex-1 flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500"><span class="text-slate-400 font-black">₪</span><input id="rvNote_' + r.id + '" type="text" inputmode="decimal" placeholder="סכום זיכוי ללא מע״מ" class="w-full h-11 text-center text-base font-black outline-none bg-transparent"></div>' +
-        '<button data-role="rv-verify-inline" data-id="' + r.id + '" class="btn-tap px-4 rounded-xl font-black bg-green-600 text-white flex items-center gap-1"><i class="fa-solid fa-check-double"></i> בדוק</button>' +
-      '</div>' + '<button data-role="ret-edit-items" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + (returns.filter(x => !x.credited).length >= 2 ? retMergeBtnHtml(r.id) : '') + '<button data-role="ret-delete" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>'
+      retVerifyRowHtml(r) + '<button data-role="ret-edit-items" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + retUnsendBtnHtml(r) + (returns.filter(x => !x.credited).length >= 2 ? retMergeBtnHtml(r.id) : '') + '<button data-role="ret-delete" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>'
     : '<div class="mt-2">' + retCarryBoxHtml(r) + creditAllocationsHtml(r) + creditPartsInfoHtml(r) + (openGap ? creditAddNoteHtml(r) : '') +
       (openGap ? retCarryBtnHtml(r) : '') +
       '<button data-role="uncredit" data-id="' + r.id + '" class="btn-tap w-full bg-white border border-slate-300 text-slate-500 rounded-xl py-2 font-black text-[11px] mt-2"><i class="fa-solid fa-rotate-left"></i> בטל אימות — פתח מחדש לתיקון</button></div>' +
@@ -19869,6 +20009,10 @@ app.addEventListener('click', (e) => {
   else if (role === 'rc-short-goods') openShortGoodsPrompt(id);
   else if (role === 'ret-edit-items') openReturnItemsEdit(id);
   // v78: פער זיכוי שהספק הבטיח להשלים — הפריטים חוזרים לרשימת החזרות הפתוחה
+  // v80: אישור מהיר — הספק זיכה בדיוק את מה שהוחזר, אין מה להקליד
+  else if (role === 'rv-approve') openReturnApproveConfirm(id);
+  // v80: התעודה נשלחה מוקדם מדי — הפריטים חוזרים לרשימה והיא נמחקת
+  else if (role === 'ret-unsend') openReturnUnsendConfirm(id);
   else if (role === 'ret-carry') openReturnCarryConfirm(id);
   else if (role === 'ret-carry-undo') showConfirm('ביטול החזרה', 'להחזיר את הפער לתעודה המקורית? השורות שהוחזרו יוסרו מרשימת החזרות הפתוחה.', 'בטל החזרה', () => undoReturnCarry(id));
   // v229: מחיקת תעודת חזרות שטרם אומתה — למקרה שהחזרות לא יצאו בפועל והפריטים נכנסו לרשימה חדשה
