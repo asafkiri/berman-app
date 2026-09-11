@@ -15,7 +15,8 @@ const FNS = ['priceAuditCapture','makeOperationId','r2', 'fmtMoney', 'normalizeB
   'aiActiveFixedPromoFor', 'bermanAdaptScanPayload', 'bermanFullListMatch', 'bermanPaperAnchorCheck',
   'bermanPaperAnchorsFromScan', 'monthEndPromoForProduct', 'monthEndUnitRebate',
   'receiptPromoOnPaperHas', 'receivingUnitPrice', 'bermanScanDocumentDate'];
-const api = eval(extractSource(FNS, []) + '\n({ ' + FNS.join(', ') + ' })');
+const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;'];
+const api = eval(extractSource(FNS, CONSTS) + '\n({ ' + FNS.join(', ') + ' })');
 const byCode = code => products.find(p => p.code === String(code));
 function document(rows, amount, date = '07/09/2026') {
   return { noteIndex: 0, docNumber: null, docType: 'invoice', docDate: date, pageCount: 1,
@@ -74,6 +75,36 @@ check('a missing row remains a failed gate', () => {
 });
 check('real money differences remain blocked', () => {
   assert.equal(gate(document([[1231, 4, 8.5]], 34.4)).ok, false);
+});
+// v79: התלונה מהשטח — עשר שורות, היחידות והשורות סגורות בדיוק, ופער עיגול של
+// 21 אג׳ מול "נטו לחיוב". סיבולת הבסיס (2 אג׳ לשורה) נתנה 20 בלבד, ולכן שער
+// הצילום חסם תעודה שהקליטה הידנית — ואותה דוקטרינה שב-README 6ב — מקבלת.
+const TEN_ROWS = [[101, 30, 8.24], [1231, 13, 14.93], [339, 7, 17.21], [233, 15, 3.11],
+  [2381, 6, 13.86], [238, 12, 7.05], [458, 8, 14.94], [401, 5, 15.74], [344, 9, 17.67], [649, 11, 15.01]];
+const tenRowsTotal = api.r2(TEN_ROWS.reduce((sum, [code, qty]) => sum + rounded(code, qty), 0));
+check('a rounding gap of 21 agorot over ten rows no longer blocks receiving', () => {
+  const result = gate(document(TEN_ROWS, api.r2(tenRowsTotal + 0.21)));
+  assert.equal(result.checks[0].units, true);
+  assert.equal(result.checks[0].lines, true);
+  assert.equal(result.checks[0].gapCents, 21);
+  assert.equal(result.ok, true);
+});
+check('the absorbed gap is kept for display instead of vanishing', () => {
+  assert.equal(gate(document(TEN_ROWS, api.r2(tenRowsTotal + 0.21))).checks[0].roundingGapCents, 21);
+});
+check('the tolerance still stops one agora past it', () => {
+  assert.equal(gate(document(TEN_ROWS, api.r2(tenRowsTotal + 0.31))).ok, false);
+});
+check('without an exact unit anchor the base tolerance still applies', () => {
+  const d = document(TEN_ROWS, api.r2(tenRowsTotal + 0.21));
+  d.totalUnits++;
+  const result = gate(d);
+  assert.equal(result.checks[0].tolCents, 20);
+  assert.equal(result.ok, false);
+});
+check('a whole cheap unit is still far outside the widened tolerance', () => {
+  const cheapest = Math.min(...products.map(p => Math.round(p.price * 100)));
+  assert.ok(cheapest > 4 * 30, 'cheapest unit ' + cheapest + ' agorot must dwarf the 30-agora tolerance');
 });
 check('active today does not make a promotion valid on an older document', () => {
   assert.equal(gate(document([[1231, 4, 8.5]], 34, '31/08/2026')).ok, false);

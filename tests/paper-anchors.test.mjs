@@ -8,8 +8,9 @@
 import { extractSource } from './extract.mjs';
 
 const FNS = ['r2', 'fmtMoney', 'aiMoneyCents', 'aiDocRowUnits', 'bermanFullListMatch', 'bermanPaperAnchorCheck', 'bermanPaperAnchorsFromScan'];
+const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;'];
 // eslint-disable-next-line no-eval
-const api = eval(extractSource(FNS, []) + '\n({ ' + FNS.join(', ') + ' })');
+const api = eval(extractSource(FNS, CONSTS) + '\n({ ' + FNS.join(', ') + ' })');
 const { bermanPaperAnchorCheck, bermanPaperAnchorsFromScan } = api;
 
 let pass = 0, fail = 0;
@@ -62,12 +63,50 @@ check('בדיקת השורות נכשלת', c3.lines === false);
 check('השער סגור', !c3.ok);
 
 section('[4] סיבולת העיגול של הספק');
-const rounded = doc(CLEAN);
-rounded.subtotalExVat = Math.round((rounded.subtotalExVat + 0.09) * 100) / 100; // 9 אג׳ — בתוך הסיבולת
-check('9 אגורות עוברות (5 שורות → סיבולת 10 אג׳)', bermanPaperAnchorCheck(rounded).money === true);
-const wayOff = doc(CLEAN);
-wayOff.subtotalExVat = Math.round((wayOff.subtotalExVat + 0.6) * 100) / 100;
-check('60 אגורות נדחות', bermanPaperAnchorCheck(wayOff).money === false);
+// v79: כששני העוגנים המדויקים סגורים, הסיבולת היא זו של README 6ב — 30 אג׳
+// לתעודה. סיבולת הבסיס (2 אג׳ לשורה, 3 עד 25) נשארת בתוקף בלעדיהם.
+function withGap(rows, agorot) {
+  const d = doc(rows);
+  d.subtotalExVat = Math.round((d.subtotalExVat + agorot / 100) * 100) / 100;
+  return d;
+}
+check('9 אגורות עוברות', bermanPaperAnchorCheck(withGap(CLEAN, 9)).money === true);
+check('30 אגורות עוברות — שני העוגנים המדויקים סגורים', bermanPaperAnchorCheck(withGap(CLEAN, 30)).money === true);
+check('31 אגורות נדחות — הסיבולת אינה נמתחת', bermanPaperAnchorCheck(withGap(CLEAN, 31)).money === false);
+check('60 אגורות נדחות', bermanPaperAnchorCheck(withGap(CLEAN, 60)).money === false);
+check('פער בכיוון ההפוך נמדד באותה סיבולת', bermanPaperAnchorCheck(withGap(CLEAN, -30)).money === true && bermanPaperAnchorCheck(withGap(CLEAN, -31)).money === false);
+
+// התלונה שהולידה את v79: 10 שורות, היחידות והשורות סגורות, 21 אג׳ עיגול.
+// סיבולת הבסיס נתנה 20 אג׳ בלבד, וקליטה שלמה נחסמה על אגורה אחת.
+const TEN = CLEAN.concat([row('שמיניה שומשום', 12, 3.11), row('חלומית ארוזה', 8, 2.9),
+  row('בריוש 10', 5, 20.4), row('פיתות כוסמין', 9, 4.2), row('לחמניה רכה', 11, 3.05)]);
+const twentyOne = bermanPaperAnchorCheck(withGap(TEN, 21));
+check('21 אג׳ על 10 שורות אינן חוסמות עוד', twentyOne.money === true && twentyOne.ok, JSON.stringify({ gap: twentyOne.gapCents, tol: twentyOne.tolCents }));
+check('הפער נשמר לתצוגה ואינו נבלע בשקט', twentyOne.roundingGapCents === 21, String(twentyOne.roundingGapCents));
+
+// בלי עוגן יחידות סגור אין עד שני, והסיבולת חוזרת לבסיס — 2 אג׳ לשורה.
+const noUnitAnchor = withGap(CLEAN, 21);
+noUnitAnchor.printedUnits = 70; // נקרא 71
+const c4 = bermanPaperAnchorCheck(noUnitAnchor);
+check('עוגן יחידות פתוח מחזיר את סיבולת הבסיס', c4.money === false && c4.tolCents === 10, JSON.stringify({ tol: c4.tolCents }));
+const noLineAnchor = withGap(CLEAN, 21);
+noLineAnchor.printedLines = 6; // נקראו 5
+check('עוגן שורות פתוח מחזיר את סיבולת הבסיס', bermanPaperAnchorCheck(noLineAnchor).money === false);
+const noAnchorsAtAll = withGap(CLEAN, 21);
+noAnchorsAtAll.printedUnits = null; noAnchorsAtAll.printedLines = null;
+check('עוגן שלא נקרא אינו מרחיב את הסיבולת', bermanPaperAnchorCheck(noAnchorsAtAll).money === false);
+
+// הפער אומר את עצמו ומפנה לסיבה האמיתית, ולא ל"צלם שוב".
+const overTol = bermanPaperAnchorsFromScan(scan([withGap(CLEAN, 60)]));
+check('ההודעה נוקבת בפער באגורות', overTol.problems.some(p => p.includes('60 אג׳')), JSON.stringify(overTol.problems));
+check('ההודעה מפנה לאחוז ההנחה', overTol.problems.some(p => p.includes('אחוז הנחה')), JSON.stringify(overTol.problems));
+check('ההודעה נוקבת בסיבולת שנחרגה', overTol.problems.some(p => p.includes('30 אג׳')), JSON.stringify(overTol.problems));
+
+// 25 אג׳ (25 שורות ומעלה) נשארות התקרה של סיבולת הבסיס, ולא יותר.
+const MANY = Array.from({ length: 25 }, (unused, i) => row('פריט ' + i, 2, 3 + i / 100));
+const manyOpen = withGap(MANY, 26);
+manyOpen.printedUnits = 49; // עוגן היחידות פתוח
+check('תקרת סיבולת הבסיס נשארת 25 אג׳', bermanPaperAnchorCheck(manyOpen).tolCents === 25 && bermanPaperAnchorCheck(manyOpen).money === false);
 
 section('[5] בלוק סיכום שלא נקרא במלואו');
 const noUnits = doc(CLEAN, { printedUnits: null });

@@ -20,7 +20,8 @@ const FNS = ['priceAuditCapture','makeOperationId','r2', 'fmtMoney', 'normalizeB
   'aiActiveFixedPromoFor', 'bermanAdaptScanPayload', 'bermanFullListMatch', 'bermanPaperAnchorCheck',
   'bermanPaperAnchorsFromScan', 'bermanScanDocumentDate', 'aiPriceBreakdownRows', 'aiPriceGapContext',
   'aiMonthEndPendingRecord', 'aiGapExplainedLine'];
-const api = eval(extractSource(FNS, []) + '\n({ ' + FNS.join(', ') + ' })');
+const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;'];
+const api = eval(extractSource(FNS, CONSTS) + '\n({ ' + FNS.join(', ') + ' })');
 function doc(rows, total, date = '01/09/2026') {
   return { docType: 'invoice', docDate: date, noteIndex: 0, netToChargeExVat: total,
     totalUnits: rows.reduce((s, r) => s + r[1], 0), printedLines: rows.length,

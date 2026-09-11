@@ -289,3 +289,37 @@ test(supplier+': cancelling the manual receipt resets the next receipt to the no
  const r=create({data:plainData()});enterPhotoScreen(r);r.click(photoRole(true));await settleScan();
  r.run('showConfirm=(a,b,c,fn)=>fn()');r.click('rc-cancel');assert.equal(r.run('receiptCountingMode'),'scan');assert.deepEqual(json(r,'receiptList'),[]);
 });
+
+// v79: הפער שהוליד את השינוי. תעודה שהיחידות והשורות שלה סגורות בדיוק, ובין
+// הכסף המחושב ל"נטו לחיוב" המודפס יושבות 21 אגורות של עיגול, נעצרה כאן —
+// במסך בדיקת הכמויות הידנית — על אגורה אחת מעבר לסיבולת הבסיס. שני השערים
+// נבדקים כאן יחד: שער הצילום שפותח את המסך, ובדיקת הפענוח שסוגרת את התעודה.
+function gapData(agorot) {
+ const data=plainData(),doc=data.paper.scan.documents[0],total=Math.round(9200+agorot)/100;
+ doc.subtotalExVat=total;doc.netToChargeExVat=total;doc.itemsSectionTotalExVat=total;
+ return data;
+}
+test(supplier+': a 21-agora rounding gap no longer blocks the manual quantity screen',async()=>{
+ const r=await scanned(gapData(21));
+ assert.equal(r.run('receiptPaperScanState'),'ok',JSON.stringify(json(r,'receiptPaperScanProblems')));
+ assert.equal(r.run('receiptNoteTotal'),92.21);
+ r.run(`currentView='receiving';mainMode='receiving';receiptCountingMode='manual';renderReceiving()`);
+ assert.doesNotMatch(r.node('app').innerHTML,/צריך להשלים את פענוח התעודה/);
+ assert.match(r.run('paperScanStatusHtml()'),/הפרש עיגול של 21 אג׳/);
+ r.run('finishReceipt()');closeNormal(r);
+ assert.equal(r.run('pendingReceipt.status'),'ok');
+});
+test(supplier+': the widened tolerance stops where the doctrine says it does',async()=>{
+ const ok=await scanned(gapData(30));
+ assert.equal(ok.run('receiptPaperScanState'),'ok',JSON.stringify(json(ok,'receiptPaperScanProblems')));
+ const blocked=await scanned(gapData(31));
+ assert.equal(blocked.run('receiptPaperScanState'),'failed');
+ const problems=json(blocked,'receiptPaperScanProblems').join(' ');
+ assert.match(problems,/31 אג׳/);
+ assert.match(problems,/אחוז הנחה/);
+});
+test(supplier+': a rounding gap that closes exactly says nothing about rounding',async()=>{
+ const r=await scanned();
+ assert.equal(r.run('receiptPaperScanState'),'ok');
+ assert.doesNotMatch(r.run('paperScanStatusHtml()'),/הפרש עיגול/);
+});
