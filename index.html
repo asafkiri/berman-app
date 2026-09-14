@@ -812,7 +812,7 @@ const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '83'; // בדיקת כמויות ושמירת תעודה פתוחה עד להשלמת הנחה מהספק
+const APP_VERSION = '84'; // מחירי מבצע מוכחים מהתעודה נקלטים בלי שאלת חיוב נוספת
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -5256,6 +5256,28 @@ function solveReceiptPromoOnPaper(exRaw, dateStr) {
   const rows = cands.filter((c, i) => best.mask & (1 << i));
   return { rows, ids: rows.map(r => r.productId), ex: best.ex, diff: best.diff, saving: r2(rows.reduce((a, r) => a + r.saving, 0)) };
 }
+// Use the saved paper and its per-document money proof before the fast finish
+// path. All three active promotion prices are handled by the same builder used
+// after a supplier discount is completed. A matching total alone is insufficient.
+function bermanVerifiedPaperPricing(day) {
+  if (!aiScanResponse || aiScanBusy || receiptPriceSaveFailed || !aiScanCanResume()) return null;
+  const paper = bermanQuantityPaperState();
+  if (!paper || receiptNotes.length !== paper.notes.length
+    || receiptNotes.some((n, i) => JSON.stringify(normNote(n)) !== JSON.stringify(normNote(paper.notes[i])))) return null;
+  const audit = receiptPriceAudit();
+  if (!audit.complete || audit.rows.some(r => r.result !== 'match' || r.date !== day)
+    || !audit.rows.some(r => aiActiveFixedPromoFor(r.productId, r.date))) return null;
+  const built = bermanBuildDeferredReceipt({ missing: [], rates: {}, catalog: products, promos,
+    documents: aiScanResponse.scan.documents, notes: paper.notes }, receiptList);
+  if (built.discountReview.status !== 'resolved' || built.lines.some(l => l.qty !== l.noteQty)) return null;
+  return built.lines.map(l => {
+    const pr = aiActiveFixedPromoFor(l.productId, day), fixed = promoFixedPrice(pr);
+    if (fixed > 0 && fixed < l.basePrice && Math.abs(l.unitPrice - fixed) < .000001) {
+      l.promoOnPaper = promoOnPaperStamp(l.basePrice, fixed, promoTitle(pr));
+    }
+    return l;
+  });
+}
 // תיעוד "המבצע ירד בתעודה" על שורה שנשמרת — אותה צורה משני המקורות
 // (הכרעה מקומית כאן, וסריקת AI ב-aiRecordPromoOnPaperPrices).
 function promoOnPaperStamp(expectedNet, promoUnit, promoName) {
@@ -6289,16 +6311,19 @@ function finishReceipt() {
     return;
   }
   const day = activeReceiptDate();
+  const paperPricing = bermanVerifiedPaperPricing(day);
   const lines = receiptList.map(it => {
     const p = products.find(x => x.id === it.productId);
-    const unit = receivingUnitPrice(p, it.qty, day);
+    const read = paperPricing && paperPricing.find(l => l.productId === it.productId);
+    const unit = read ? read.unitPrice : receivingUnitPrice(p, it.qty, day);
     const pr = promoForProduct(it.productId, day);
     const applied = promoTriggered(pr, day);
     const line = { productId: it.productId, name: it.name || (p ? p.name : ''), barcode: it.barcode || (p ? p.barcode : '') || '', code: productCode(p), qty: it.qty, unitPrice: unit, basePrice: r2(Number(p && p.price) || 0), listPrice: r2(productListPrice(p) || (p && p.price) || 0), lineTotal: lineTotalFromUnit(unit, it.qty), promoPct: (applied ? promoPctOf(pr, Number(p && p.price) || 0) : 0), promoPrice: (applied ? promoFixedPrice(pr) : 0) };
     // v61: המבצע ירד כבר בתעודה — מתועד על השורה עצמה, כדי שמי שפותח אותה
     // בעוד חודש יראה למה המחיר נמוך מהמאגר, וכדי שהמרכזת לא תצפה לקיזוז נוסף.
     const mePromo = receiptPromoOnPaperHas(it.productId, day) ? monthEndPromoForProduct(String(it.productId), day) : null;
-    if (mePromo) line.promoOnPaper = promoOnPaperStamp(effectivePrice(p, it.qty, day), unit, promoTitle(mePromo));
+    if (read && read.promoOnPaper) line.promoOnPaper = read.promoOnPaper;
+    else if (!paperPricing && mePromo) line.promoOnPaper = promoOnPaperStamp(effectivePrice(p, it.qty, day), unit, promoTitle(mePromo));
     return line;
   });
   // v173: שורות הפיקדון הנגזרות נכנסות לתעודה — מסומנות isDeposit כדי
@@ -6332,26 +6357,8 @@ function finishReceipt() {
         function () { convertNoteTotalsToNet(vatOnly.rate); finishReceipt(); });
       return;
     }
-    // v61: הפער נסגר בדיוק אם מוצר במבצע מחיר-קבוע הגיע בתעודה כבר במחיר
-    // המבצע. זה מחיר לגיטימי בדיוק כמו המחיר המלא — ברמן לא עקביים בזה —
-    // ולכן זו אינה סחורה חסרה אלא בחירה בין שני מחירים. נדרש שכל היחידות
-    // יתאימו: בלי עוגן היחידות אי אפשר להבדיל בין מבצע שירד לחוסר אמיתי.
-    if (moneyMismatch && !unitsMismatch && receiptNoteUnits != null) {
-      const promoFix = solveReceiptPromoOnPaper(exRaw, day);
-      if (promoFix) {
-        const what = promoFix.rows.map(r => r.name + ' — ' + r.qty + ' יח׳ ב-₪' + fmt3(r.promoUnit) + ' במקום ₪' + fmt3(r.full)).join(' · ');
-        showConfirm('המבצע ירד כבר בתעודה',
-          'כל ' + receiptNoteUnits + ' היחידות תואמות, והפער של ₪' + fmtMoney(promoFix.saving) + ' נסגר בדיוק אם ' + what +
-          '. אצל ברמן זה לא עקבי — לפעמים מחיר המבצע יורד כבר בתעודה ולפעמים רק בקיזוז של סוף החודש. לקלוט לפי מחיר המבצע?',
-          'כן, המבצע ירד בתעודה',
-          function () {
-            promoFix.ids.forEach(id => { if (receiptPromoOnPaper.indexOf(id) === -1) receiptPromoOnPaper.push(id); });
-            saveReceiptDraft();
-            finishReceipt();
-          });
-        return;
-      }
-    }
+    // The paper prices were already checked above. Any remaining gap goes to
+    // the existing findings screen; the worker is never asked to guess billing.
     const big = Math.max(ex, receiptNoteTotal), small = Math.min(ex, receiptNoteTotal);
     if (moneyMismatch && big >= 50 && big >= small * 2) { showConfirm('הפרש חריג', 'סכום התעודה מהספק ₪' + fmtMoney(receiptNoteTotal) + ', אבל מהסריקה שוחזר ₪' + fmtMoney(ex) + '. הפרש גדול במיוחד — ייתכן שסכום התעודה הוקלד לא נכון (או שבאמת חסר הרבה). להמשיך לבדיקת ההפרשים?', 'המשך לבדיקה', openReconcile); return; }
     openReconcile(); return;
@@ -6366,7 +6373,8 @@ function finishReceipt() {
       '<div class="font-black text-slate-700 text-sm shrink-0">₪' + fmtMoney(l.lineTotal) + '</div>' +
     '</div>'
   ).join('');
-  const meBlock = monthEndForecastHtml(receiptMonthEndStatuses(), payableEx, 'קיזוז צפוי במרכזת בגין מבצעים — לא נחשב פער:');
+  const monthly = paperPricing ? monthEndSnapshotForLines(lines, day).filter(s => s.rebate > 0) : receiptMonthEndStatuses();
+  const meBlock = monthEndForecastHtml(monthly, payableEx, 'קיזוז צפוי במרכזת בגין מבצעים — לא נחשב פער:');
   $('rsBody').innerHTML = '<div id="rsPriceAudit">' + receiptPriceAuditHtml() + '</div>' +
     (savingNoDoc ? '<div class="rounded-xl bg-amber-50 border-2 border-amber-300 p-3 mb-3 text-xs font-bold text-amber-900 leading-relaxed"><span class="font-black"><i class="fa-solid fa-file-circle-xmark"></i> אין תעודה — נשמר לפי ספירה.</span> הסכום מחושב מהמחירון ולא אומת מול נייר. התעודה תישמר <b>פתוחה</b>, וכשהנייר יגיע תצלם אותו מכרטיס התעודה בהיסטוריה והבדיקה תרוץ מול הספירה הזאת.</div>' : '') +
     '<div class="bg-slate-50 rounded-xl p-3 max-h-56 overflow-y-auto border border-slate-100 mb-3">' + listHtml + '</div>' +
