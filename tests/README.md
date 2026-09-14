@@ -166,3 +166,14 @@ verification, manual correction preserving raw OCR, and persistence without
 repeating paid requests. Backend comparison and parallelism tests live in
 `asafkiri/berman-ai-scan`. These are regression tests, not live OCR accuracy or
 cost measurements.
+
+## v86: Explicit missing return credits
+
+`node --test tests/return-credit-review.test.mjs` runs the complete app module
+with browser and persistence boundaries mocked. It replays the reported
+217.96 / 205.69 totals with synthetic return rows: an explicit **לא זוכה**
+action preserves the returned quantity, records zero credited units, marks the
+row reviewed, and leaves an identified product shortage plus a separate 0.04
+residual. It checks saving/reopening, both history views, partial and surplus
+credits, correcting a mistaken selection, genuine remaining money gaps,
+allocated credit, row metadata and failed saves. No production data is changed.
