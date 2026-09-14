@@ -812,7 +812,7 @@ const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '81'; // חישוב הנחה חסרה מהתעודה, בירור מבצעים ואישור מפורש לשמירה
+const APP_VERSION = '82'; // השלמת הנחה חסרה בלי החזרה מיותרת לצילום התעודה
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -5853,16 +5853,28 @@ function receiptUsesManualQuantities() {
 function receiptManualReceivingHtml() {
   const running = aiScanBusy || receiptPaperScanState === 'running';
   const ready = !running && receiptPaperScanState === 'ok' && !!aiScanResponse;
+  const priceAudit = receiptPriceAudit();
+  // A complete paper awaiting a catalog discount already has its next action
+  // in the price review. Photo recovery would discard that usable scan.
+  const discountPending = priceAudit.documents.some(d => d.discountInference)
+    && priceAudit.documents.every(info => {
+      if (!info.complete) return false;
+      if (info.discountInference) return ['ready', 'ambiguous'].includes(info.discountInference.status);
+      const doc = aiScanResponse.scan.documents.find(d => d.noteIndex === info.index);
+      // Other documents must still pass their own anchors; check a copy so
+      // rendering does not alter the saved promotion/rounding decisions.
+      return !!doc && bermanPaperAnchorCheck({ ...doc }).ok;
+    });
   const problems = receiptPaperScanProblems.length ? receiptPaperScanProblems : [aiScanError || 'הפענוח לא הושלם. בדוק את צילומי התעודה כדי להמשיך.'];
   const status = running
     ? '<div role="status" class="rounded-xl bg-blue-50 border border-blue-200 p-4 mb-3 text-base font-bold text-blue-800"><i class="fa-solid fa-circle-notch fa-spin"></i> ' + htmlEscape(aiScanProgressText || 'מפענח את התעודה…') + '<div class="mt-2 text-sm">בסיום הפענוח אפשר לאשר את הכמויות או לדווח על חוסרים ועודפים.</div></div>'
-    : ready ? ''
+    : ready || discountPending ? ''
     : '<div role="status" class="rounded-xl bg-amber-50 border border-amber-300 p-4 mb-3 text-base font-bold text-amber-900">צריך להשלים את פענוח התעודה<div class="mt-2 text-sm">' + problems.map(htmlEscape).join('<br>') + '</div><button data-role="rc-paper-rescan" class="btn-tap w-full bg-white border border-amber-300 rounded-xl py-3 mt-3">בדוק את צילומי התעודה</button></div>';
   return '<section data-manual-receiving dir="rtl" class="mb-4">' +
     '<h2 class="font-black text-xl text-slate-800 mb-3">בדיקת כמויות ידנית</h2>' +
     '<div id="rcPaperStatus">' + status + '</div>' +
     '<div id="rcQuantityOptions">' + receiptQuantityButtonsHtml() + '</div>' +
-    (!running ? '<div id="rcPriceAudit">' + receiptPriceAuditHtml() + '</div>' : '') +
+    (!running ? '<div id="rcPriceAudit">' + receiptPriceAuditHtml(priceAudit) + '</div>' : '') +
     '<button data-role="rc-count-by-scan" class="btn-tap w-full py-3 text-sm font-bold text-slate-600 underline">מעבר לקליטה בסריקת מוצרים</button></section>';
 }
 function receiptQuantityButtonsHtml() {
