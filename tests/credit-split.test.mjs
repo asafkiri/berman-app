@@ -46,7 +46,7 @@ const FNS = ['r2', 'moneyDiffCents', 'lineTotalFromUnit', 'todayStr', 'storedRec
   'buildCreditSplitRecords', 'creditSplitPairId', 'vatRateForDoc', 'amountIncForDoc', 'returnTotals',
   // v78 — החזרת פריטים מתעודת חזרות לרשימת החזרות הפתוחה
   'returnCarriedNotes', 'retCarryKey', 'consumeReturnCarriedNotes', 'returnsDiscrepancyInfo',
-  'returnCarriedVal'];
+  'returnCarriedVal', 'returnCreditNotes', 'returnLinkedCreditEx', 'consumeReturnLinkedCredit'];
 const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;'];
 // eslint-disable-next-line no-eval
 const api = eval(extractSource(FNS, CONSTS) + '\n({ ' + FNS.join(', ') + ' })');

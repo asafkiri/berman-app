@@ -42,7 +42,7 @@ export function fixture() {
   return { products, promos, paper, items };
 }
 
-export function runtime({ storage = new Map(), data = fixture() } = {}) {
+export function runtime({ storage = new Map(), data = fixture(), realCloudTasks = false } = {}) {
   const nodes = new Map(), callbacks = [], events = new Map(), requests = [], writes = [], toasts = [];
   function node(id) {
     if (nodes.has(id)) return nodes.get(id);
@@ -83,8 +83,8 @@ export function runtime({ storage = new Map(), data = fixture() } = {}) {
   const run = script => vm.runInContext(script, context, { timeout: 5000 });
   run(`products = testData.products; promos = testData.promos;
     showToast = text => testToasts.push(text);
-    runCloudTask = async (label, task) => { testWrites.push(structuredClone(task)); return true; };
     const auditOriginalAnalyzer = aiRunAnalyzer; aiRunAnalyzer = async () => {};`);
+  if (!realCloudTasks) run('runCloudTask = async (label, task) => { testWrites.push(structuredClone(task)); return true; };');
   async function scan() {
     run(`receiptOpened = true; receiptDocDate = '2026-09-09'; receiptList = [];
       bermanSeedPhotoFirstScan(1);

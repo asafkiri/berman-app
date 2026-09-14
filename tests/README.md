@@ -167,6 +167,20 @@ repeating paid requests. Backend comparison and parallelism tests live in
 `asafkiri/berman-ai-scan`. These are regression tests, not live OCR accuracy or
 cost measurements.
 
+## v87: Link a later return credit to a previous unpaid return
+
+`node --test tests/return-credit-link.test.mjs` exercises the complete app,
+including the real cloud task runner with an atomic Firestore boundary fake.
+It covers amount entry and confirmation, both history views, original quantities
+and paper totals, balance conservation, reload, partial and multi-product credits,
+ambiguous equal-value claims, old debts beyond 14 days, carried/closed/future
+exclusions, cancellation, stale multi-device choices, retries and failure recovery.
+It also checks that the existing intake-shortage allocation remains available.
+Incoming `returnCreditNotes` pair with source `creditAllocations` entries whose
+`targetType` is `return`. Linked quantities resolve the old claim without changing
+its original `items` or counting another physical return. Editing/deleting linked
+records requires undoing the link; open or linked returns are retained by pruning.
+
 ## v86: Explicit missing return credits
 
 `node --test tests/return-credit-review.test.mjs` runs the complete app module
