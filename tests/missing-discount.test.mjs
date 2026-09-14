@@ -43,6 +43,70 @@ function clickSave(c, value, host = 'app') {
   return c.events.get(host + ':click')({ target: button });
 }
 
+function manualScreen(c) {
+  c.run("receiptCountingMode='manual';currentView='receiving';mainMode='receiving';saveReceiptDraft();renderReceiving()");
+  const html = c.node('app').innerHTML;
+  assert.match(html, /data-manual-receiving/);
+  return html;
+}
+
+for (const monthly of [false, true]) test('manual quantities resolves ' + (monthly ? 'ambiguous' : 'one') + ' missing discount without photo recovery or another scan', async () => {
+  const data = fixture({ monthly }), c = await scan(data);
+  const source = readDoc(c).__pricePaper, counted = c.run('JSON.stringify(receiptList)');
+  const html = manualScreen(c);
+  assert.match(html, /data-discount-inference/);
+  assert.doesNotMatch(html, /צריך להשלים את פענוח התעודה|בדוק את צילומי התעודה|data-role="rc-paper-rescan"|data-role="rc-quantity-all"/);
+  assert.equal(c.run('receiptPaperScanState'), 'failed'); // no false monetary verification
+  assert.equal(c.requests.length, 1);
+
+  const restored = runtime({ data, storage: c.storage }); restored.run('restoreReceiptDraft()');
+  assert.equal(restored.run('receiptCountingMode'), 'manual');
+  assert.doesNotMatch(manualScreen(restored), /צריך להשלים את פענוח התעודה|data-role="rc-paper-rescan"/);
+  if (monthly) {
+    const choice = inference(restored).choices[0];
+    restored.events.get('app:change')({ target: { dataset: { role: 'berman-discount-basis', doc: '0', row: choice.rowId }, value: '8' } });
+  }
+  assert.equal(await clickSave(restored, '8'), true);
+  assert.equal(restored.run('receiptPaperScanState'), 'ok');
+  assert.match(restored.node('app').innerHTML, /data-role="rc-quantity-all"/);
+  assert.doesNotMatch(restored.node('app').innerHTML, /data-role="rc-paper-rescan"/);
+  assert.deepEqual(readDoc(restored).__pricePaper, source);
+  assert.equal(restored.run('JSON.stringify(receiptList)'), counted);
+  restored.click('rc-quantity-differences');
+  assert.equal(restored.run('receiptQuantityReview.rows[0].paperQty'), 30);
+  assert.equal(restored.run('receiptQuantityReview.rows[0].difference'), '29');
+  assert.equal(restored.requests.length, 0);
+});
+
+for (const [name, change] of [
+  ['missing page', d => { d.pageCount = 2; }],
+  ['unbalanced quantities', d => { d.totalUnits = 34; }],
+  ['contradictory summary', d => { d.vatAmountPrinted = 20; d.totalToChargeInclVat = 300; }]
+]) test('manual quantities keeps photo recovery for ' + name + ' alongside a missing discount', async () => {
+  const data = fixture(); change(data.paper.scan.documents[0]);
+  const c = await scan(data);
+  assert.equal(inference(c).status, 'blocked');
+  const html = manualScreen(c);
+  assert.match(html, /צריך להשלים את פענוח התעודה/);
+  assert.match(html, /data-role="rc-paper-rescan"/);
+  assert.doesNotMatch(html, /data-role="rc-quantity-all"/);
+});
+
+for (const secondNet of [40, 41]) test('manual missing-discount review preserves the other document anchor check: ' + secondNet, async () => {
+  const c = await scan();
+  c.run(`const second=structuredClone(aiScanResponse.scan.documents[0]);
+    second.noteIndex=1;second.__priceSourceId='known-paper';second.rows=[second.rows[1]];
+    second.printedUnits=5;second.printedLines=1;second.subtotalExVat=${secondNet};
+    second.__pricePaper.rows=[second.__pricePaper.rows[1]];second.__pricePaper.totalUnits=5;
+    second.__pricePaper.printedLines=1;second.__pricePaper.netToChargeExVat=${secondNet};
+    aiScanResponse.scan.documents.push(second);aiScanDocuments.push({...aiScanDocuments[0],noteIndex:1});`);
+  assert.equal(inference(c).status, 'ready');
+  const before = c.run('JSON.stringify(aiScanResponse)');
+  const html = manualScreen(c);
+  assert.equal(html.includes('data-role="rc-paper-rescan"'), secondNet === 41);
+  assert.equal(c.run('JSON.stringify(aiScanResponse)'), before);
+});
+
 test('one unknown discount uses paper quantities, rounded line totals and preserved evidence', async () => {
   const c = await scan(), a = inference(c), before = readDoc(c);
   assert.equal(a.status, 'ready');
@@ -301,6 +365,7 @@ test('private uploaded backup replay', { skip: !process.env.BERMAN_DISCOUNT_BACK
   assert.equal(a.productId, 'code_111');
   assert.equal(a.status, 'ambiguous');
   assert.ok(a.candidates.some(x => x.discountPct === 8));
+  assert.doesNotMatch(manualScreen(c), /צריך להשלים את פענוח התעודה|בדוק את צילומי התעודה|data-role="rc-paper-rescan"/);
   const ch = a.choices[0];
   c.run(`bermanSelectDiscountBasis(0,${JSON.stringify(ch.rowId)},${JSON.stringify(ch.options[0].key)})`);
   assert.equal(inference(c).candidates[0].discountPct, 8);
@@ -309,5 +374,6 @@ test('private uploaded backup replay', { skip: !process.env.BERMAN_DISCOUNT_BACK
   assert.equal(c.run('receiptPaperScanState'), 'ok');
   assert.deepEqual(readDoc(c).__pricePaper, source);
   assert.equal(c.run('JSON.stringify(receiptList)'), counted);
+  assert.match(c.node('app').innerHTML, /data-role="rc-quantity-all"/);
   assert.equal(c.requests.length, 0);
 });
