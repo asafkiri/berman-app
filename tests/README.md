@@ -157,3 +157,12 @@ The same two private-fixture environment variables can be used locally.
 Browser verification remains pending in the authoring environment: its remote
 browser rejected the localhost preview with `ERR_BLOCKED_BY_CLIENT`. Rendered
 HTML/event-handler assertions passed, but they are not an iPhone/Safari test.
+# v85: Dual scan and bounded price verification
+
+`node --test tests/dual-scan.test.mjs` exercises the full app with mocked network
+boundaries: 14.84/14.94, agreement with a catalog mismatch, all nine combinations
+of two promotion products, missing discounts, unexplained totals, failed
+verification, manual correction preserving raw OCR, and persistence without
+repeating paid requests. Backend comparison and parallelism tests live in
+`asafkiri/berman-ai-scan`. These are regression tests, not live OCR accuracy or
+cost measurements.
