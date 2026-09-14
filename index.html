@@ -8015,36 +8015,56 @@ function bermanSetPaperAnchors(paper) {
 function bermanPctText(v) { return String(Math.round((Number(v) || 0) * 100) / 100); }
 // v81: הכרטיס של הנעלם היחיד. אותו כרטיס בדיוק מוצג גם בשער הצילום שנחסם
 // וגם בפירוט בדיקת המחירים, כדי שהמספר שנגזר יהיה אחד ויחיד בכל מקום.
+// שם השורות שהאפשרות מניחה עליהן חיוב במחיר מלא, או ההנחה שלא הונח כלום.
+function bermanUnknownOptionAssumption(option) {
+  if (!option.flips.length) return 'כל השורות חויבו כרגיל';
+  return 'בהנחה ש' + option.flips.map(f => '"' + htmlEscape(f.name) + '"').join(' ו-') +
+    ' חויב' + (option.flips.length > 1 ? 'ו' : '') + ' במחיר מלא — כלומר המבצע החודשי החליף שם את ההנחה הקבועה';
+}
+function bermanUnknownOptionHtml(solved, option, index, single) {
+  const badge = !single && index === 0 && solved.bestClear
+    ? ' <span class="text-[10px] text-white bg-indigo-600 px-1.5 py-0.5 rounded">הכי סבירה</span>' : '';
+  const header = single ? '' : '<div class="font-black text-indigo-900 text-xs mt-2">אפשרות ' + (index + 1) + badge + '</div>';
+  const corroboration = option.corroboration.length
+    ? '<div class="text-[11px] font-black text-emerald-800 mt-1"><i class="fa-solid fa-circle-check"></i> לאותו מחירון (₪' + fmt3(solved.listPrice) + ') כבר קבועה הנחה של ' +
+      option.corroboration.map(o => bermanPctText(o.pct) + '% ב"' + htmlEscape(o.name) + '"').join(' ו-') + '.</div>'
+    : '';
+  return header + '<div class="rounded-lg bg-white/70 border border-indigo-100 p-2 mt-1">' +
+    '<div class="text-[11px] font-black text-indigo-800">' + bermanUnknownOptionAssumption(option) + '</div>' +
+    '<div class="text-[11px] font-bold text-indigo-900 mt-1 leading-relaxed">נשאר ל-' + solved.quantity + ' היח׳ שלו ₪' +
+      fmtMoney(option.impliedLineCents / 100) + ' — כלומר <b>₪' + fmt3(option.impliedUnitPrice) + ' ליחידה</b>, ' +
+      'שהם מחירון ₪' + fmt3(solved.listPrice) + ' פחות <b>' + bermanPctText(option.suggestedPct) + '%</b>' +
+      ' · רצועת הדיוק ' + bermanPctText(option.pctMin) + '%–' + bermanPctText(option.pctMax) + '%' +
+      ' (סיבולת ' + solved.tolCents + ' אג׳ על ' + solved.quantity + ' יח׳)</div>' + corroboration +
+    '<button data-role="price-derive-apply" data-product="' + htmlEscape(solved.productId) + '" data-pct="' + bermanPctText(option.suggestedPct) + '" class="btn-tap w-full mt-2 bg-indigo-600 text-white rounded-xl py-2.5 font-black text-sm">' +
+      '<i class="fa-solid fa-percent"></i> קבע ' + bermanPctText(option.suggestedPct) + '% ל"' + htmlEscape(solved.name) + '"</button>' +
+    '<div class="text-[10px] font-bold text-indigo-700 mt-1">אחרי הקביעה הבדיקה תרוץ שוב · צפי לפער של ' + Math.abs(option.residualCents) + ' אג׳</div></div>';
+}
 function bermanSingleUnknownHtml(solved) {
   if (!solved) return '';
-  const name = htmlEscape(solved.name);
-  const head = '<div class="text-xs font-black text-indigo-900"><i class="fa-solid fa-calculator"></i> נעלם אחד — והתעודה גוזרת אותו</div>';
-  const body = '<div class="text-[11px] font-bold text-indigo-900 mt-1 leading-relaxed">' +
-    'ל"' + name + '" אין אחוז הנחה במאגר, ולכן הוא מחויב מחירון מלא ואי אפשר לבדוק את שורתו. ' +
-    solved.knownRows + ' השורות האחרות ידועות ומסתכמות ל-₪' + fmtMoney(solved.knownLineCents / 100) + '; ' +
-    'מה שנשאר ל-' + solved.quantity + ' היח׳ שלו הוא ₪' + fmtMoney(solved.impliedLineCents / 100) +
-    ' — כלומר <b>₪' + fmt3(solved.impliedUnitPrice) + ' ליחידה</b>.</div>';
-  if (solved.status !== 'solved' || solved.suggestedPct == null) {
-    return '<div class="rounded-xl bg-indigo-50 border-2 border-indigo-200 p-2.5 mt-2">' + head + body +
-      '<div class="text-[11px] font-black text-rose-700 mt-1.5">המחיר שנגזר אינו נמצא בין 0 למחירון (₪' + fmt3(solved.listPrice) + '), ולכן הפער אינו אחוז ההנחה החסר. בדוק את הכמויות ואת "נטו לחיוב" שנקראו מהנייר.</div></div>';
+  const shell = '<div class="rounded-xl bg-indigo-50 border-2 border-indigo-200 p-2.5 mt-2">' +
+    '<div class="text-xs font-black text-indigo-900"><i class="fa-solid fa-calculator"></i> נעלם אחד — והתעודה גוזרת אותו</div>' +
+    '<div class="text-[11px] font-bold text-indigo-900 mt-1 leading-relaxed">ל"' + htmlEscape(solved.name) +
+      '" אין אחוז הנחה במאגר, ולכן הוא מחויב מחירון מלא ואי אפשר לבדוק את שורתו. ' + solved.knownRows +
+      ' השורות האחרות ידועות ומסתכמות ל-₪' + fmtMoney(solved.baseKnownLineCents / 100) + '.</div>';
+  if (solved.status === 'out_of_range') {
+    return shell + '<div class="text-[11px] font-black text-rose-700 mt-1.5">מה שנשאר לשורה שלו (₪' +
+      fmtMoney(solved.best.impliedLineCents / 100) + ' = ₪' + fmt3(solved.best.impliedUnitPrice) +
+      ' ליחידה) אינו בין 0 למחירון (₪' + fmt3(solved.listPrice) + '), ולכן הפער אינו אחוז ההנחה החסר. בדוק את הכמויות ואת "נטו לחיוב" שנקראו מהנייר.</div></div>';
   }
-  const corroboration = solved.corroboration.length
-    ? '<div class="text-[11px] font-black text-emerald-800 mt-1.5"><i class="fa-solid fa-circle-check"></i> לאותו מחירון (₪' + fmt3(solved.listPrice) + ') כבר קבועה הנחה של ' +
-      solved.corroboration.map(o => bermanPctText(o.pct) + '% ב"' + htmlEscape(o.name) + '"').join(' ו-') + '.</div>'
-    : '';
-  const promoNote = solved.promoCandidates.length
-    ? '<div class="text-[11px] font-bold text-amber-800 mt-1.5"><i class="fa-solid fa-triangle-exclamation"></i> בתעודה יש גם ' +
-      solved.promoCandidates.map(n => '"' + htmlEscape(n) + '"').join(' ו-') + ' עם מבצע מחיר-קבוע שמודפס במחירון. החישוב מניח חיוב רגיל בשורות כאלה. אילו דווקא שם ירד המחיר המלא, האחוז כאן היה יוצא אחר.</div>'
-    : '';
-  return '<div class="rounded-xl bg-indigo-50 border-2 border-indigo-200 p-2.5 mt-2">' + head + body +
-    '<div class="text-[11px] font-black text-indigo-900 mt-1.5">מחירון ₪' + fmt3(solved.listPrice) + ' פחות <b>' + bermanPctText(solved.suggestedPct) + '%</b>' +
-      ' · רצועת הדיוק ' + bermanPctText(solved.pctMin) + '%–' + bermanPctText(solved.pctMax) + '%' +
-      ' (סיבולת ' + solved.tolCents + ' אג׳ על ' + solved.quantity + ' יח׳)</div>' +
-    corroboration + promoNote +
-    '<button data-role="price-derive-apply" data-product="' + htmlEscape(solved.productId) + '" data-pct="' + bermanPctText(solved.suggestedPct) + '" class="btn-tap w-full mt-2 bg-indigo-600 text-white rounded-xl py-2.5 font-black text-sm">' +
-      '<i class="fa-solid fa-percent"></i> קבע ' + bermanPctText(solved.suggestedPct) + '% ל"' + name + '"</button>' +
+  if (solved.status === 'ambiguous') {
+    return shell + '<div class="text-[11px] font-black text-amber-800 mt-1.5"><i class="fa-solid fa-triangle-exclamation"></i> ' +
+      'יותר מדי שורות מבצע בתעודה יכולות היו להיות מחויבות במחיר מלא, וכל צירוף שלהן נותן אחוז אחר שסוגר את אותו סכום. אין כאן תשובה יחידה, ולכן אין הצעה — קבע את האחוז בכרטיס המוצר לפי חשבונית או מכתב מבצעים.</div></div>';
+  }
+  const single = solved.options.length === 1;
+  // יותר מאפשרות אחת פירושו ששורת מבצע שמודפסת במחירון יכולה להסביר חלק
+  // מהפער בעצמה (9ז/v61). לא מנחשים בשביל המשתמש — שתי הדרכים מוצגות.
+  const intro = single ? '' :
+    '<div class="text-[11px] font-bold text-amber-800 mt-1.5"><i class="fa-solid fa-code-branch"></i> בתעודה יש שורת מבצע שמודפסת במחירון, ולכן היא עצמה יכולה להיות מחויבת בשתי דרכים — וההפרש נופל על הנעלם. אלה ' +
+      solved.options.length + ' האפשרויות, ולפי הנייר אפשר לדעת מי מהן.</div>';
+  return shell + intro + solved.options.map((o, i) => bermanUnknownOptionHtml(solved, o, i, single)).join('') +
     '<div class="text-[10px] font-bold text-indigo-700 mt-1.5 leading-relaxed">המספר נגזר מ"נטו לחיוב" ולכן אינו מאמת אותו — שורה שנקראה שגוי הייתה נבלעת בתוכו. ' +
-      'אחרי הקביעה השורות יתומחרו מחדש מהמאגר ובדיקת הכסף תרוץ שוב, הפעם כבדיקה אמיתית (צפי: פער של ' + Math.abs(solved.residualCents) + ' אג׳).</div></div>';
+      'האחוז נקבע בכרטיס המוצר, השורות מתומחרות מחדש מהמאגר, ובדיקת הכסף רצה שוב — הפעם כבדיקה אמיתית.</div></div>';
 }
 // שורת המצב של הקריאה במסך הקליטה. הכמויות שנקראו לא מופיעות כאן בכוונה.
 function paperScanStatusHtml() {
@@ -9431,8 +9451,12 @@ function receiptPriceAudit() {
       if (solved && solved.status === 'solved') entries.forEach(({ row }) => {
         if (row.productId !== solved.productId || row.capability === 'checkable') return;
         row.derived = solved;
-        row.reason = 'ההנחה הקבועה במאגר טרם הוגדרה — אבל התעודה גוזרת אותה: ₪' + fmt3(solved.impliedUnitPrice) +
-          ' ליח׳, שהם מחירון ₪' + fmt3(solved.listPrice) + ' פחות ' + bermanPctText(solved.suggestedPct) + '%';
+        row.reason = solved.options.length === 1
+          ? 'ההנחה הקבועה במאגר טרם הוגדרה — אבל התעודה גוזרת אותה: ₪' + fmt3(solved.best.impliedUnitPrice) +
+            ' ליח׳, שהם מחירון ₪' + fmt3(solved.listPrice) + ' פחות ' + bermanPctText(solved.best.suggestedPct) + '%'
+          : 'ההנחה הקבועה במאגר טרם הוגדרה — והתעודה גוזרת ' + solved.options.length +
+            ' אפשרויות, לפי איך חויבה שורת המבצע שמודפסת במחירון: ' +
+            solved.options.map(o => bermanPctText(o.suggestedPct) + '%').join(' או ');
       });
     }
     if (PRICE_AUDIT_SUPPLIER !== 'berman' && source) {
@@ -9494,8 +9518,10 @@ function receiptPriceAuditHtml(report) {
     '<div class="font-bold mt-2">' + htmlEscape(r.reason) + '</div>' +
     (r.monthlyStatus ? '<div class="text-xs bg-blue-50 p-2 mt-2">' + htmlEscape(r.monthlyStatus) + '</div>' : '') + '</article>').join('');
   // v81: כרטיס הנעלם היחיד יושב בגוף הפאנל ולא בתוך הפירוט המקופל — הוא
-  // הדבר היחיד שאפשר לעשות כאן, ואין טעם להסתיר אותו מאחורי לחיצה.
-  const derivedCards = a.rows.filter(r => r.derived && r.derived.status === 'solved')
+  // הדבר היחיד שאפשר לעשות כאן, ואין טעם להסתיר אותו מאחורי לחיצה. כששער
+  // הצילום נחסם הוא כבר מציג אותו בראש המסך, ואז הוא לא נכפל לכאן.
+  const derivedCards = (typeof receiptPaperScanState !== 'undefined' && receiptPaperScanState === 'failed' ? []
+    : a.rows.filter(r => r.derived && r.derived.status === 'solved'))
     .filter((r, i, all) => all.findIndex(x => x.derived.productId === r.derived.productId && x.documentIndex === r.documentIndex) === i)
     .map(r => bermanSingleUnknownHtml(r.derived)).join('');
   // A review with nothing to act on folds into a single line. Open, it filled the
@@ -11446,11 +11472,69 @@ function bermanPaperAnchorCheck(doc) {
 // כל מה שיכול להוסיף נעלם שני מחזיר null: שורה שלא זוהתה, שני מוצרים בלי
 // אחוז, מוצר במבצע מחיר-קבוע (9ז/v61 — שני מחירים לגיטימיים לאותה שורה),
 // או שורה שחסר לה כסף.
-// שורת מבצע של *מוצר אחר* שמודפסת במחירון היא החריג: היא יכולה להיות
-// "חויבה במחיר מלא" (`__bermanFullListTotalExVat`), וזה מעלה את המחושב.
-// לכן היא מתחרה בנעלם רק בכיוון שבו המודפס גבוה מהמחושב — בדיוק התנאי
-// שבו `bermanFullListMatch` בכלל מחפש. שם הפותר נסוג; בכיוון ההפוך היא רק
-// מרחיקה מהמודפס ואינה הסבר, והיא נאמרת כהסתייגות ליד התוצאה.
+//
+// שורת מבצע של *מוצר אחר* שמודפסת במחירון היא הסיפור המעניין, והיא באמת
+// יכולה לשבש: על הנייר של ברמן המחירון הוא מה שמודפס תמיד, אבל שורה של
+// מוצר שיש לו מבצע מחיר-קבוע יכולה להיות מחויבת בשני אופנים — כרגיל
+// (מחירון פחות ההנחה הקבועה, והמבצע מקוזז במרכזת), או במחיר מלא כשהמבצע
+// החליף את ההנחה (`__bermanFullListTotalExVat`). ההפרש בין השניים נופל
+// היישר על הנעלם ומזיז את האחוז שנגזר. **לכן לא בוחרים בשבילו**: הפותר
+// מונה את כל תת-הקבוצות של שורות כאלה, גוזר אחוז לכל אחת, וזורק רק את
+// אלה שהמחיר שיוצא מהן אינו בין 0 למחירון. מה שנשאר מוצג כאפשרויות —
+// כמו הבלש, "הכי סבירה" ראשונה ורק כשיש פער ניקוד אמיתי — והמשתמש מכריע.
+// שורה שמודפס עליה מחיר המבצע עצמו אינה מועמדת כזאת: הנייר כבר אמר את
+// שלו, ואין בה שאלה.
+function bermanUnknownPriceOption(ctx, flips) {
+  const knownCents = ctx.baseKnownLineCents + flips.reduce((sum, f) => sum + f.deltaCents, 0);
+  const impliedLineCents = ctx.printedNetCents - knownCents;
+  const impliedUnitPrice = impliedLineCents / 100 / ctx.quantity;
+  const unitBand = ctx.tolCents / 100 / ctx.quantity;
+  const impliedPct = (1 - impliedUnitPrice / ctx.listPrice) * 100;
+  const option = {
+    flips: flips.map(f => ({ line: f.line, name: f.name, deltaCents: f.deltaCents })),
+    knownLineCents: knownCents, impliedLineCents, impliedUnitPrice, unitBand,
+    impliedPct: Math.round(impliedPct * 100) / 100,
+    pctMin: null, pctMax: null, suggestedPct: null, suggestedUnitPrice: null,
+    residualCents: null, corroboration: [], score: 0
+  };
+  const rawMin = (1 - (impliedUnitPrice + unitBand) / ctx.listPrice) * 100;
+  const rawMax = (1 - (impliedUnitPrice - unitBand) / ctx.listPrice) * 100;
+  // מחיר שנגזר גבוה מהמחירון, או שמאפס את המוצר, אינו הנחה — האפשרות נופלת.
+  if (!(impliedUnitPrice > 0) || rawMax < 0 || rawMin >= 100) return option;
+  const lo = Math.max(0, rawMin), hi = Math.min(99.99, rawMax);
+  option.pctMin = Math.round(lo * 100) / 100;
+  option.pctMax = Math.round(hi * 100) / 100;
+  // האחוז הפשוט ביותר שנמצא ברצועה: שלם, אחר כך חצי, עשירית ולבסוף מאית —
+  // שתי ספרות אחרי הנקודה הן הדיוק שהמאגר שומר (saveDiscountPct).
+  [1, 0.5, 0.1, 0.01].some(step => {
+    let best = null;
+    for (let v = Math.ceil((lo - 1e-9) / step) * step; v <= hi + 1e-9; v += step) {
+      const cand = (Math.round(v * 100) / 100) || 0; // גם מנרמל 0- ל-0
+      if (cand < 0 || cand >= 100) continue;
+      if (best == null || Math.abs(cand - impliedPct) < Math.abs(best - impliedPct)) best = cand;
+    }
+    if (best == null) return false;
+    option.suggestedPct = best;
+    return true;
+  });
+  if (option.suggestedPct == null) return option;
+  option.suggestedUnitPrice = finalUnitPrice(ctx.listPrice, option.suggestedPct);
+  option.residualCents = ctx.printedNetCents - (knownCents + ctx.unknownQuantities.reduce((sum, n) =>
+    sum + aiMoneyCents(lineTotalFromUnit(option.suggestedUnitPrice, n)), 0));
+  // עדות תומכת מהקטלוג: מוצר אחר באותו מחירון בדיוק שכבר נקבע לו אחוז והוא
+  // נופל באותה רצועה. אינה נכנסת לחישוב — רק מאפשרת לזהות את התשובה.
+  option.corroboration = ctx.catalog.filter(p => p && p.id !== ctx.productId && productDiscountSet(p)
+      && aiMoneyCents(productListPrice(p)) === aiMoneyCents(ctx.listPrice)
+      && productDiscountPct(p) >= lo - 1e-9 && productDiscountPct(p) <= hi + 1e-9)
+    .slice(0, 2).map(p => ({ name: String(p.name || ''), pct: productDiscountPct(p) }));
+  // הניקוד אינו מכריע — הוא רק מסדר, ומרשה תג "הכי סבירה" כשיש פער אמיתי:
+  // אחוז שכבר קיים במאגר לאותו מחירון, אחוז עגול, וההנחה שלא הונח כלום.
+  const pct = option.suggestedPct;
+  option.score = (option.corroboration.length ? 4 : 0)
+    + (Math.abs(pct - Math.round(pct)) < 1e-9 ? 2 : Math.abs(pct * 2 - Math.round(pct * 2)) < 1e-9 ? 1 : 0)
+    + (flips.length ? 0 : 1);
+  return option;
+}
 function bermanSingleUnknownPrice(doc, check, catalog) {
   const rows = doc && Array.isArray(doc.rows) ? doc.rows : [];
   if (!rows.length) return null;
@@ -11465,22 +11549,21 @@ function bermanSingleUnknownPrice(doc, check, catalog) {
   const printedNet = aiMoneyCents(doc && doc.subtotalExVat);
   if (printedNet == null || c.units !== true || c.lines !== true) return null;
   let unknown = null;
-  const unknownRows = [], promoCandidates = [];
+  const unknownRows = [], flipRows = [];
   let knownCents = 0, qty = 0;
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const product = row && row.__tnuvaProductId ? (list.find(p => p && p.id === row.__tnuvaProductId) || null) : null;
     if (!product) return null;
-    if (row.__bermanFullListTotalExVat != null) {
-      if (c.gapCents == null || c.gapCents > c.tolCents) return null;
-      promoCandidates.push(String(product.name || ''));
-    }
     if (productDiscountSet(product)) {
       const total = Object.prototype.hasOwnProperty.call(row, '__bermanPaperLineTotalExVat')
         ? row.__bermanPaperLineTotalExVat : row.lineTotalExVat;
       const cents = aiMoneyCents(total);
       if (cents == null) return null;
       knownCents += cents;
+      const full = aiMoneyCents(row.__bermanFullListTotalExVat);
+      if (full != null && full > cents) flipRows.push({ line: row.lineNumber == null ? null : Number(row.lineNumber),
+        name: String(product.name || ''), deltaCents: full - cents });
       continue;
     }
     if (unknown && unknown.id !== product.id) return null;
@@ -11492,53 +11575,36 @@ function bermanSingleUnknownPrice(doc, check, catalog) {
   if (!unknown || !(qty > 0)) return null;
   const listPrice = productListPrice(unknown);
   if (!(listPrice > 0)) return null;
-  const impliedLineCents = printedNet - knownCents;
-  const impliedUnitPrice = impliedLineCents / 100 / qty;
-  const unitBand = c.tolCents / 100 / qty;
-  const impliedPct = (1 - impliedUnitPrice / listPrice) * 100;
-  const rawMin = (1 - (impliedUnitPrice + unitBand) / listPrice) * 100;
-  const rawMax = (1 - (impliedUnitPrice - unitBand) / listPrice) * 100;
-  const out = {
-    status: 'out_of_range',
+  // ארבע שורות מבצע ומעלה זה 16 סיפורים ומעלה על תעודה אחת — כבר לא הכרעה
+  // אלא ניחוש, ולכן אין תשובה.
+  if (flipRows.length > 3) return null;
+  const ctx = {
+    productId: unknown.id, catalog: list, listPrice, quantity: qty, tolCents: c.tolCents,
+    printedNetCents: printedNet, baseKnownLineCents: knownCents,
+    unknownQuantities: unknownRows.map(r => Number(r.quantity))
+  };
+  const options = [];
+  let fallback = null;
+  for (let mask = 0; mask < (1 << flipRows.length); mask++) {
+    const option = bermanUnknownPriceOption(ctx, flipRows.filter((f, i) => mask & (1 << i)));
+    if (mask === 0) fallback = option;
+    if (option.suggestedPct != null) options.push(option);
+  }
+  options.sort((a, b) => b.score - a.score || a.flips.length - b.flips.length || a.impliedPct - b.impliedPct);
+  return {
+    // out_of_range — אף מחיר שנגזר אינו בין 0 למחירון, כלומר הפער אינו האחוז
+    // החסר. ambiguous — יותר מדי סיפורים סוגרים את אותו סכום, ואין מה להציע.
+    status: options.length === 0 ? 'out_of_range' : options.length > 4 ? 'ambiguous' : 'solved',
     productId: unknown.id, name: String(unknown.name || ''), code: productCode(unknown),
     listPrice, quantity: qty, knownRows: rows.length - unknownRows.length,
     lines: unknownRows.map(r => (r.lineNumber == null ? null : Number(r.lineNumber))),
-    printedNetCents: printedNet, knownLineCents: knownCents, impliedLineCents,
-    impliedUnitPrice, impliedPct: Math.round(impliedPct * 100) / 100, unitBand, tolCents: c.tolCents,
-    promoCandidates,
-    pctMin: null, pctMax: null, suggestedPct: null, suggestedUnitPrice: null, residualCents: null, corroboration: []
+    printedNetCents: printedNet, baseKnownLineCents: knownCents, tolCents: c.tolCents,
+    promoRows: flipRows.map(f => ({ line: f.line, name: f.name, deltaCents: f.deltaCents })),
+    options, best: options[0] || fallback,
+    // תג "הכי סבירה" רק כשהפער בניקוד אמיתי — אחרת שתי האפשרויות שוות
+    // בעיני האפליקציה, והנייר (או הזיכרון של מי שקיבל אותו) מכריע.
+    bestClear: options.length < 2 || (options[0].score - options[1].score) >= 3
   };
-  // מחיר שנגזר גבוה מהמחירון, או שמאפס את המוצר, אינו הנחה — הוא עדות שמשהו
-  // אחר בתעודה אינו נכון. נאמר כמו שהוא, בלי להציע אחוז.
-  if (!(impliedUnitPrice > 0) || rawMax < 0 || rawMin >= 100) return out;
-  const lo = Math.max(0, rawMin), hi = Math.min(99.99, rawMax);
-  out.pctMin = Math.round(lo * 100) / 100;
-  out.pctMax = Math.round(hi * 100) / 100;
-  // האחוז הפשוט ביותר שנמצא ברצועה: שלם, אחר כך חצי, עשירית ולבסוף מאית —
-  // שתי ספרות אחרי הנקודה הן הדיוק שהמאגר שומר (saveDiscountPct).
-  [1, 0.5, 0.1, 0.01].some(step => {
-    let best = null;
-    for (let v = Math.ceil((lo - 1e-9) / step) * step; v <= hi + 1e-9; v += step) {
-      const cand = Math.round(v * 100) / 100;
-      if (cand < 0 || cand >= 100) continue;
-      if (best == null || Math.abs(cand - impliedPct) < Math.abs(best - impliedPct)) best = cand;
-    }
-    if (best == null) return false;
-    out.suggestedPct = best;
-    return true;
-  });
-  if (out.suggestedPct == null) return out;
-  out.suggestedUnitPrice = finalUnitPrice(listPrice, out.suggestedPct);
-  out.residualCents = printedNet - (knownCents + unknownRows.reduce((sum, r) =>
-    sum + aiMoneyCents(lineTotalFromUnit(out.suggestedUnitPrice, Number(r.quantity))), 0));
-  // עדות תומכת מהקטלוג: מוצר אחר באותו מחירון בדיוק שכבר נקבע לו אחוז והוא
-  // נופל באותה רצועה. אינה נכנסת לחישוב — רק מאפשרת לזהות את התשובה.
-  out.corroboration = list.filter(p => p && p.id !== unknown.id && productDiscountSet(p)
-      && aiMoneyCents(productListPrice(p)) === aiMoneyCents(listPrice)
-      && productDiscountPct(p) >= lo - 1e-9 && productDiscountPct(p) <= hi + 1e-9)
-    .slice(0, 2).map(p => ({ name: String(p.name || ''), pct: productDiscountPct(p) }));
-  out.status = 'solved';
-  return out;
 }
 // כל התעודות שבסריקה, וההצעה של כל אחת. תעודה שאין בה נעלם יחיד פשוט אינה
 // מופיעה ברשימה.

@@ -22,14 +22,18 @@ const products = Object.entries(collections.products).map(([id, p]) => ({ id, ..
   .filter(p => String(p.code) !== '111').concat([{ ...UNKNOWN }]);
 const promos = Object.entries(collections.promos).map(([id, p]) => ({ id, ...p }));
 let receiptDocDate = '2026-09-14', receiptList = [], receiptPromoOnPaper = [];
+// extract.mjs אינו יודע לחתוך את htmlEscape (יש בו ליטרל רגולרי עם גרשיים),
+// ולכן כאן יושב שקול־מבחינת־הבדיקות. הפלט נבדק על מחרוזות, לא על בריחה.
+function htmlEscape(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';'); }
 
 const FNS = ['priceAuditCapture', 'makeOperationId', 'r2', 'fmtMoney', 'fmt3', 'normalizeBarcode', 'productCode',
   'productListPrice', 'productDiscountPct', 'productDiscountSet', 'finalUnitPrice', 'recomputeProductFinal',
   'promoFixedPrice', 'promoActive', 'promoForProduct', 'promoTriggered', 'promoUnitPriceOf', 'effectivePrice',
   'lineTotalFromUnit', 'todayStr', 'activeReceiptDate', 'aiMoneyCents', 'aiDocRowUnits', 'bermanBuildCodeIndex',
   'aiActiveFixedPromoFor', 'bermanPriceScanRow', 'bermanRepriceScanRows', 'bermanAdaptScanPayload',
-  'bermanFullListMatch', 'bermanPaperAnchorCheck', 'bermanSingleUnknownPrice', 'bermanSingleUnknownPrices',
-  'bermanPaperAnchorsFromScan', 'bermanScanDocumentDate'];
+  'bermanFullListMatch', 'bermanPaperAnchorCheck', 'bermanUnknownPriceOption', 'bermanSingleUnknownPrice', 'bermanSingleUnknownPrices',
+  'bermanPaperAnchorsFromScan', 'bermanScanDocumentDate',
+  'bermanPctText', 'bermanUnknownOptionAssumption', 'bermanUnknownOptionHtml', 'bermanSingleUnknownHtml'];
 const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;'];
 // eslint-disable-next-line no-eval
 const api = eval(extractSource(FNS, CONSTS) + '\n({ ' + FNS.join(', ') + ' })');
@@ -93,13 +97,14 @@ check('הפתרון הוחזר ומזוהה עם המוצר הנכון', () => {
 check('הכמות נספרה מכל שורות המוצר', () => assert.equal(solved.quantity, 30));
 check('שאר השורות נספרו כידועות', () => assert.equal(solved.knownRows, KNOWN.length));
 check('מחיר היחידה שנגזר הוא המחיר האמיתי עד אגורה', () =>
-  assert.ok(Math.abs(solved.impliedUnitPrice - api.finalUnitPrice(6.24, 8)) <= 0.01, String(solved.impliedUnitPrice)));
-check('האחוז שהוצע — 8%', () => assert.equal(solved.suggestedPct, 8));
+  assert.ok(Math.abs(solved.best.impliedUnitPrice - api.finalUnitPrice(6.24, 8)) <= 0.01, String(solved.best.impliedUnitPrice)));
+check('האחוז שהוצע — 8%', () => assert.equal(solved.best.suggestedPct, 8));
+check('והאפשרות הראשונה היא זו שלא הניחה כלום', () => assert.deepEqual(solved.best.flips, []));
 check('הפער שנשאר אחרי ההצעה נכנס בסיבולת', () =>
-  assert.ok(Math.abs(solved.residualCents) <= solved.tolCents, String(solved.residualCents)));
-check('סכום השורות הידועות מדווח כמו שהוא', () => assert.equal(solved.knownLineCents, api.aiMoneyCents(knownMoney)));
+  assert.ok(Math.abs(solved.best.residualCents) <= solved.tolCents, String(solved.best.residualCents)));
+check('סכום השורות הידועות מדווח כמו שהוא', () => assert.equal(solved.baseKnownLineCents, api.aiMoneyCents(knownMoney)));
 check('העדות התומכת — "אחיד פרוס ברמן" באותו מחירון', () =>
-  assert.deepEqual(solved.corroboration.map(o => o.pct), [8]));
+  assert.deepEqual(solved.best.corroboration.map(o => o.pct), [8]));
 
 section('[2] הפתרון אינו פותח את השער');
 check('בדיקת הכסף נשארת נכשלת', () => assert.equal(baseCheck.money, false));
@@ -107,30 +112,26 @@ check('והשער סגור', () => assert.equal(api.bermanPaperAnchorsFromScan({
 check('הקטלוג לא נגע', () => assert.equal(JSON.stringify({ products, promos }), catalogBefore));
 
 section('[3] רצועת הדיוק נגזרת מהכמות');
-check('30 יח׳ מול סיבולת 30 אג׳ — אגורה ליחידה', () => assert.ok(Math.abs(solved.unitBand - 0.01) < 1e-9, String(solved.unitBand)));
+check('30 יח׳ מול סיבולת 30 אג׳ — אגורה ליחידה', () => assert.ok(Math.abs(solved.best.unitBand - 0.01) < 1e-9, String(solved.best.unitBand)));
 check('הרצועה סימטרית סביב האחוז שנגזר', () =>
-  assert.ok(solved.pctMin < solved.impliedPct && solved.impliedPct < solved.pctMax,
-    JSON.stringify([solved.pctMin, solved.impliedPct, solved.pctMax])));
-const one = api.bermanSingleUnknownPrice(withTrueDiscount(8, 1));
+  assert.ok(solved.best.pctMin < solved.best.impliedPct && solved.best.impliedPct < solved.best.pctMax,
+    JSON.stringify([solved.best.pctMin, solved.best.impliedPct, solved.best.pctMax])));
+const one = api.bermanSingleUnknownPrice(withTrueDiscount(8, 1)).best;
 check('יחידה אחת — אותה סיבולת נופלת כולה על היחידה', () => assert.ok(Math.abs(one.unitBand - 0.30) < 1e-9, String(one.unitBand)));
 check('ולכן הרצועה רחבה בהרבה, והיא נאמרת', () =>
-  assert.ok((one.pctMax - one.pctMin) > (solved.pctMax - solved.pctMin) * 20,
+  assert.ok((one.pctMax - one.pctMin) > (solved.best.pctMax - solved.best.pctMin) * 20,
     JSON.stringify([one.pctMin, one.pctMax])));
 
 section('[4] סולם הפשטות — שלם קודם, ומאית כשרק היא נכנסת');
-check('אחוז לא עגול נגזר במדויק כשהכמות גדולה', () => {
-  const s = api.bermanSingleUnknownPrice(withTrueDiscount(46.65, 500));
-  assert.equal(s.suggestedPct, 46.65);
-});
+check('אחוז לא עגול נגזר במדויק כשהכמות גדולה', () =>
+  assert.equal(api.bermanSingleUnknownPrice(withTrueDiscount(46.65, 500)).best.suggestedPct, 46.65));
 check('כשהרצועה מכילה שלם — הוא זה שנבחר', () => {
-  const s = api.bermanSingleUnknownPrice(withTrueDiscount(30.02, 150));
+  const s = api.bermanSingleUnknownPrice(withTrueDiscount(30.02, 150)).best;
   assert.ok(s.pctMin < 30 && 30 < s.pctMax, JSON.stringify([s.pctMin, s.impliedPct, s.pctMax]));
   assert.equal(s.suggestedPct, 30);
 });
-check('גם חצי אחוז הוא תשובה לגיטימית', () => {
-  const s = api.bermanSingleUnknownPrice(withTrueDiscount(12.5, 500));
-  assert.equal(s.suggestedPct, 12.5);
-});
+check('גם חצי אחוז הוא תשובה לגיטימית', () =>
+  assert.equal(api.bermanSingleUnknownPrice(withTrueDiscount(12.5, 500)).best.suggestedPct, 12.5));
 
 section('[5] קביעת האחוז הופכת את הבדיקה לבדיקה אמיתית');
 check('אחרי תמחור מחדש השער נפתח, והנעלם נעלם', () => {
@@ -188,30 +189,73 @@ check('לנעלם עצמו יש מבצע מחיר-קבוע — שני מחירי
   finally { promos.pop(); }
 });
 
-section('[7] שורת מבצע שמודפסת במחירון');
-check('היא מדווחת כהסתייגות כשהמודפס נמוך מהמחושב', () =>
-  assert.deepEqual(solved.promoCandidates, [byCode(339).name]));
-check('ובכיוון שבו היא יכולה לסגור את הפער — הפותר נסוג', () => {
-  const doc = withTrueDiscount(8, 30, 2000);
-  assert.ok(api.bermanPaperAnchorCheck(doc).gapCents > 30, String(api.bermanPaperAnchorCheck(doc).gapCents));
+section('[7] שורת מבצע שמודפסת במחירון — שני סיפורים, ולא מנחשים');
+// "ברמן אקטיב" (339) יושב בתעודה במבצע מחיר-קבוע ומודפס במחירון, ולכן
+// הוא עצמו יכול להיות מחויב בשתי דרכים. ההפרש (₪41.30 על 8 יח׳) נופל
+// היישר על הנעלם, ומזיז את האחוז שנגזר מ-8% ל-~30%. שתי הדרכים מוצגות.
+const flipDelta = api.aiMoneyCents(api.lineTotalFromUnit(byCode(339).listPrice, 8))
+  - api.aiMoneyCents(api.lineTotalFromUnit(byCode(339).price, 8));
+check('השורה זוהתה כמועמדת, עם ההפרש שלה', () =>
+  assert.deepEqual(solved.promoRows.map(r => [r.name, r.deltaCents]), [[byCode(339).name, flipDelta]]));
+check('נגזרות שתי אפשרויות — אחת לכל דרך חיוב', () => {
+  assert.equal(solved.options.length, 2);
+  assert.deepEqual(solved.options.map(o => o.flips.length), [0, 1]);
+});
+check('האפשרות השנייה היא בדיוק אותו סכום פחות ההפרש', () =>
+  assert.equal(solved.options[1].impliedLineCents, solved.options[0].impliedLineCents - flipDelta));
+check('"הכי סבירה" נטענת רק בגלל פער ניקוד אמיתי', () => {
+  assert.equal(solved.bestClear, true);
+  assert.ok(solved.options[0].score - solved.options[1].score >= 3,
+    JSON.stringify(solved.options.map(o => o.score)));
+});
+check('שתיהן מוצגות למשתמש, כל אחת עם הכפתור שלה', () => {
+  const html = api.bermanSingleUnknownHtml(solved);
+  assert.ok(html.includes('data-pct="' + solved.options[0].suggestedPct + '"'));
+  assert.ok(html.includes('data-pct="' + solved.options[1].suggestedPct + '"'));
+  assert.ok(/בהנחה ש/.test(html), 'אין תיאור להנחת החיוב המלא');
+});
+check('בלי שורת מבצע כזאת יש אפשרות אחת בלבד', () => {
+  const s = api.bermanSingleUnknownPrice(build(KNOWN_PLAIN, 30, 8));
+  assert.deepEqual(s.promoRows, []);
+  assert.equal(s.options.length, 1);
+  assert.equal(s.best.suggestedPct, 8);
+});
+check('כשהמבצע כן ירד בתעודה — אין שאלה, כי הנייר כבר ענה עליה', () => {
+  // 339 מודפס במחיר המבצע עצמו, ולכן אינו מועמד לחיוב מלא.
+  const rows = KNOWN.map(r => r[0] === 339 ? [339, 8, api.promoFixedPrice(api.aiActiveFixedPromoFor('code_339', '2026-09-14'))] : r);
+  const s = api.bermanSingleUnknownPrice(build(rows, 30, 8));
+  assert.deepEqual(s.promoRows, []);
+  assert.equal(s.options.length, 1);
+});
+check('הצד השני של אותו מטבע — כשרק ההנחה שהמבצע ירד מסבירה את הסכום', () => {
+  // הפער חיובי ומעל הסיבולת: בלי הנחת החיוב המלא המחיר שנגזר מעל המחירון,
+  // ולכן נשארת בדיוק אפשרות אחת — זו שמניחה אותה.
+  const s = api.bermanSingleUnknownPrice(withTrueDiscount(0, 30, flipDelta));
+  assert.equal(s.options.length, 1);
+  assert.equal(s.options[0].flips.length, 1);
+  assert.equal(s.options[0].suggestedPct, 0);
+});
+check('ארבע שורות מבצע ומעלה — 16 סיפורים, ולכן אין תשובה', () => {
+  const doc = withTrueDiscount(8, 30);
+  doc.rows.forEach(row => { if (row.__tnuvaProductId !== 'code_111') row.__bermanFullListTotalExVat = row.__bermanPaperLineTotalExVat + 1; });
   assert.equal(api.bermanSingleUnknownPrice(doc), null);
 });
-check('בלי שורת מבצע כזאת אין הסתייגות', () =>
-  assert.deepEqual(api.bermanSingleUnknownPrice(build(KNOWN_PLAIN, 30, 8)).promoCandidates, []));
 
 section('[8] מחיר שנגזר מחוץ לתחום אינו הצעה');
 check('מעל המחירון — נאמר, בלי אחוז מוצע', () => {
   const s = api.bermanSingleUnknownPrice(build(KNOWN_PLAIN, 30, 8, 6000));
   assert.equal(s.status, 'out_of_range');
-  assert.equal(s.suggestedPct, null);
-  assert.ok(s.impliedUnitPrice > UNKNOWN.listPrice, String(s.impliedUnitPrice));
+  assert.equal(s.options.length, 0);
+  assert.equal(s.best.suggestedPct, null);
+  assert.ok(s.best.impliedUnitPrice > UNKNOWN.listPrice, String(s.best.impliedUnitPrice));
+  assert.ok(/אינו בין 0 למחירון/.test(api.bermanSingleUnknownHtml(s)));
 });
 check('מחיר אפס או שלילי — אותו סירוב', () => {
-  const doc = withTrueDiscount(8, 30);
-  doc.subtotalExVat = api.r2(knownMoney);
+  const doc = build(KNOWN_PLAIN, 30, 8);
+  doc.subtotalExVat = api.r2(KNOWN_PLAIN.reduce((sum, r) => sum + paperLine(r), 0));
   const s = api.bermanSingleUnknownPrice(doc);
   assert.equal(s.status, 'out_of_range');
-  assert.equal(s.suggestedPct, null);
+  assert.equal(s.options.length, 0);
 });
 
 section('[9] כל התעודות שבסריקה');
@@ -260,6 +304,12 @@ section('[11] מקצה לקצה — על מודול האפליקציה המלא'
     assert.ok(/נעלם אחד — והתעודה גוזרת אותו/.test(blocked), 'אין כרטיס');
     assert.ok(blocked.includes('data-role="price-derive-apply" data-product="code_111" data-pct="8"'), 'אין כפתור');
     assert.ok(/רצועת הדיוק 7\.84%–8\.16%/.test(blocked), 'אין רצועה');
+  });
+  check('ושתי דרכי החיוב של שורת המבצע מוצגות, עם תג "הכי סבירה" על הראשונה', () => {
+    assert.equal(blocked.match(/data-role="price-derive-apply"/g).length, 2);
+    assert.ok(/כל השורות חויבו כרגיל/.test(blocked));
+    assert.ok(/בהנחה ש"ברמן אקטיב" חויב במחיר מלא/.test(blocked));
+    assert.ok(/הכי סבירה/.test(blocked));
   });
   check('לפני האישור לא נקבע דבר', () => {
     assert.equal(rt.run('products.find(p => p.id === "code_111").discountSet'), false);
