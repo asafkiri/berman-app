@@ -3,377 +3,264 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { runtime } from './receipt-scan-harness.mjs';
 
-// Synthetic documents only. A private backup can be replayed through the same
-// module using BERMAN_DISCOUNT_BACKUP, without copying it into the repository.
-function fixture({ monthly = false } = {}) {
+function fixture() {
   const products = [
-    { id: 'unknown', code: '8001', barcode: '7290000008001', name: 'לחם בדיקה', listPrice: 6.24, price: 6.24, discountPct: 0, discountSet: false },
+    { id: 'missing', code: '8001', barcode: '7290000008001', name: 'לחם בדיקה', listPrice: 6.24, price: 6.24, discountPct: 0, discountSet: false },
     { id: 'known', code: '8002', barcode: '7290000008002', name: 'לחמניות בדיקה', listPrice: 10, price: 8, discountPct: 20, discountSet: true }
   ];
-  const rows = products.map((p, i) => ({ itemCode: p.code, barcode: p.barcode, description: p.name,
-    quantity: i ? 5 : 30, unitPriceExVat: p.listPrice, sourcePage: 1, lineNumber: i + 1, confidence: .99 }));
-  return { products, promos: monthly ? [{ id: 'monthly', name: 'מבצע בדיקה', productIds: ['known'],
-    fixedPrice: 7, type: 'receipt', minQty: 1, minUnit: 'unit', start: '2026-09-01', end: '2026-09-30' }] : [],
-    items: [{ productId: 'unknown', name: products[0].name, barcode: products[0].barcode, qty: 1 }],
-    paper: { ok: true, serviceVersion: 4, model: 'fixture', requestId: 'discount-fixture', scan: { warnings: [], documents: [{
-      noteIndex: 0, docType: 'invoice', docNumber: 'TEST-DISCOUNT', docDate: '14/09/2026', pageCount: 1,
-      totalUnits: 35, printedLines: 2, netToChargeExVat: 212.22, rows, warnings: [], confidence: .99
-    }] } } };
+  return { products, promos: [], items: [], paper: { ok: true, scan: { warnings: [], documents: [{
+    noteIndex: 0, docType: 'invoice', docNumber: 'DEFER-TEST', docDate: '14/09/2026', pageCount: 1,
+    totalUnits: 35, printedLines: 2, netToChargeExVat: 212.22,
+    rows: products.map((p, i) => ({ itemCode: p.code, barcode: p.barcode, description: p.name,
+      quantity: i ? 5 : 30, unitPriceExVat: p.listPrice, sourcePage: 1, lineNumber: i + 1 })), warnings: []
+  }] } } };
 }
-const report = c => JSON.parse(c.run('JSON.stringify(receiptPriceAudit())'));
-const inference = (c, index = 0) => report(c).documents[index].discountInference;
-const fingerprint = (c, index = 0) => c.run(`bermanDiscountFingerprint(receiptPriceAudit().documents[${index}])`);
-const readDoc = c => JSON.parse(c.run('JSON.stringify(aiScanResponse.scan.documents[0])'));
-const save = (c, value, index = 0, token = fingerprint(c, index)) =>
-  c.run(`bermanSaveInferredDiscount(${index},${JSON.stringify(value)},${JSON.stringify(token)})`);
-async function scan(data = fixture()) {
-  const c = runtime({ data });
-  c.run("currentView='receiving';mainMode='receiving';");
-  await c.scan();
+const json = (c, code) => JSON.parse(c.run('JSON.stringify(' + code + ')'));
+async function scanned(data = fixture()) {
+  const c = runtime({ data }); c.run("currentView='receiving';mainMode='receiving';receiptCountingMode='manual'");
+  await c.scan(); c.run('renderReceiving()'); return c;
+}
+async function deferred(data = fixture()) {
+  const c = await scanned(data);
+  assert.equal(c.run('bermanDeferDiscount()'), true); return c;
+}
+async function savedReceipt({ shortage = 0, surplus = 0, data = fixture() } = {}) {
+  const c = await deferred(data);
+  c.click('rc-quantity-differences');
+  if (shortage) c.run("receiptQuantityReview.rows[0].kind='shortage';receiptQuantityReview.rows[0].difference=" + JSON.stringify(String(shortage)));
+  if (surplus) c.run("receiptQuantityReview.rows[1].kind='surplus';receiptQuantityReview.rows[1].difference=" + JSON.stringify(String(surplus)));
+  assert.equal(c.run('commitReceiptQuantityReview()'), true);
+  assert.equal(c.run('pendingReceipt.status'), 'open');
+  await c.run('confirmReceipt()');
+  const task = c.writes.find(t => t.op === 'set');
+  assert.ok(task);
+  c.context.savedTestReceipt = { id: task.operationId, ...structuredClone(task.data) };
+  c.run("receipts=[savedTestReceipt];currentView='receiptsHistory';renderReceiptsHistory()");
   return c;
 }
-function clickSave(c, value, host = 'app') {
-  const card = { querySelector: () => ({ value }) };
-  const button = { dataset: { role: 'berman-discount-save', doc: '0', fingerprint: fingerprint(c) },
-    closest(selector) {
-      if (selector === '[data-role="berman-discount-save"]' || selector === '[data-role]') return button;
-      if (selector === '[data-discount-inference]') return card;
-      return null;
-    } };
-  return c.events.get(host + ':click')({ target: button });
+function saveRate(c, rate, id = 'missing') {
+  const token = c.run('JSON.stringify([receipts[0].items,receipts[0].discountReview])');
+  return c.run('bermanSaveKnownDiscount(' + JSON.stringify(id) + ',' + JSON.stringify(rate) + ',receipts[0].id,' + JSON.stringify(token) + ')');
 }
 
-function manualScreen(c) {
-  c.run("receiptCountingMode='manual';currentView='receiving';mainMode='receiving';saveReceiptDraft();renderReceiving()");
-  const html = c.node('app').innerHTML;
-  assert.match(html, /data-manual-receiving/);
-  return html;
-}
-
-for (const monthly of [false, true]) test('manual quantities resolves ' + (monthly ? 'ambiguous' : 'one') + ' missing discount without photo recovery or another scan', async () => {
-  const data = fixture({ monthly }), c = await scan(data);
-  const source = readDoc(c).__pricePaper, counted = c.run('JSON.stringify(receiptList)');
-  const html = manualScreen(c);
-  assert.match(html, /data-discount-inference/);
-  assert.doesNotMatch(html, /צריך להשלים את פענוח התעודה|בדוק את צילומי התעודה|data-role="rc-paper-rescan"|data-role="rc-quantity-all"/);
-  assert.equal(c.run('receiptPaperScanState'), 'failed'); // no false monetary verification
-  assert.equal(c.requests.length, 1);
-
-  const restored = runtime({ data, storage: c.storage }); restored.run('restoreReceiptDraft()');
-  assert.equal(restored.run('receiptCountingMode'), 'manual');
-  assert.doesNotMatch(manualScreen(restored), /צריך להשלים את פענוח התעודה|data-role="rc-paper-rescan"/);
-  if (monthly) {
-    const choice = inference(restored).choices[0];
-    restored.events.get('app:change')({ target: { dataset: { role: 'berman-discount-basis', doc: '0', row: choice.rowId }, value: '8' } });
-  }
-  assert.equal(await clickSave(restored, '8'), true);
-  assert.equal(restored.run('receiptPaperScanState'), 'ok');
-  assert.match(restored.node('app').innerHTML, /data-role="rc-quantity-all"/);
-  assert.doesNotMatch(restored.node('app').innerHTML, /data-role="rc-paper-rescan"/);
-  assert.deepEqual(readDoc(restored).__pricePaper, source);
-  assert.equal(restored.run('JSON.stringify(receiptList)'), counted);
-  restored.click('rc-quantity-differences');
-  assert.equal(restored.run('receiptQuantityReview.rows[0].paperQty'), 30);
-  assert.equal(restored.run('receiptQuantityReview.rows[0].difference'), '29');
-  assert.equal(restored.requests.length, 0);
-});
-
-for (const [name, change] of [
-  ['missing page', d => { d.pageCount = 2; }],
-  ['unbalanced quantities', d => { d.totalUnits = 34; }],
-  ['contradictory summary', d => { d.vatAmountPrinted = 20; d.totalToChargeInclVat = 300; }]
-]) test('manual quantities keeps photo recovery for ' + name + ' alongside a missing discount', async () => {
-  const data = fixture(); change(data.paper.scan.documents[0]);
-  const c = await scan(data);
-  assert.equal(inference(c).status, 'blocked');
-  const html = manualScreen(c);
-  assert.match(html, /צריך להשלים את פענוח התעודה/);
-  assert.match(html, /data-role="rc-paper-rescan"/);
-  assert.doesNotMatch(html, /data-role="rc-quantity-all"/);
-});
-
-for (const secondNet of [40, 41]) test('manual missing-discount review preserves the other document anchor check: ' + secondNet, async () => {
-  const c = await scan();
-  c.run(`const second=structuredClone(aiScanResponse.scan.documents[0]);
-    second.noteIndex=1;second.__priceSourceId='known-paper';second.rows=[second.rows[1]];
-    second.printedUnits=5;second.printedLines=1;second.subtotalExVat=${secondNet};
-    second.__pricePaper.rows=[second.__pricePaper.rows[1]];second.__pricePaper.totalUnits=5;
-    second.__pricePaper.printedLines=1;second.__pricePaper.netToChargeExVat=${secondNet};
-    aiScanResponse.scan.documents.push(second);aiScanDocuments.push({...aiScanDocuments[0],noteIndex:1});`);
-  assert.equal(inference(c).status, 'ready');
-  const before = c.run('JSON.stringify(aiScanResponse)');
-  const html = manualScreen(c);
-  assert.equal(html.includes('data-role="rc-paper-rescan"'), secondNet === 41);
-  assert.equal(c.run('JSON.stringify(aiScanResponse)'), before);
-});
-
-test('one unknown discount uses paper quantities, rounded line totals and preserved evidence', async () => {
-  const c = await scan(), a = inference(c), before = readDoc(c);
-  assert.equal(a.status, 'ready');
-  assert.equal(a.quantity, 30);
-  assert.equal(a.candidates[0].knownCents, 4000);
-  assert.equal(a.candidates[0].remainingCents, 17222);
-  assert.equal(a.candidates[0].discountPct, 8);
-  assert.equal(report(c).rows[0].result, null);
-  assert.equal(report(c).complete, false);
-  assert.equal(c.run('receiptList[0].qty'), 1);
-  assert.equal(c.run('bermanPaperAnchorCheck(aiScanResponse.scan.documents[0]).ok'), false);
-  assert.equal(c.writes.length, 0);
-  assert.equal(c.requests.length, 1);
-  c.run('receiptList[0].qty=99;saveReceiptDraft();renderReceiving()');
-  assert.deepEqual(inference(c), a);
-  assert.deepEqual(readDoc(c).__pricePaper, before.__pricePaper);
-  assert.match(c.node('app').innerHTML, /הנחה מחושבת מהתעודה/);
-  assert.match(c.node('app').innerHTML, /כ־8% הנחה/);
-  assert.doesNotMatch(c.run('paperScanStatusHtml()'), /הנייר לא אישר את עצמו/);
-});
-
-test('the actual receiving save button writes only the approved product and recalculates locally', async () => {
-  const c = await scan(), before = readDoc(c), items = c.run('JSON.stringify(receiptList)');
-  assert.equal(await clickSave(c, '8'), true);
-  const data = c.writes[0].data;
-  assert.equal(c.writes.length, 1);
-  assert.equal(data.discountSet, true);
-  assert.equal(data.discountPct, 8);
-  assert.equal(data.price, 5.7408);
-  assert.equal(data.discountSource.method, 'document_remainder');
-  assert.equal(c.run('products[0].discountPct'), 8);
-  assert.equal(c.run('JSON.stringify(receiptList)'), items);
-  assert.deepEqual(readDoc(c).__pricePaper, before.__pricePaper);
-  assert.deepEqual(readDoc(c).rows[1], before.rows[1]);
-  assert.equal(readDoc(c).rows[0].unitPriceExVat, 5.7408);
-  assert.equal(c.run('receiptPaperScanState'), 'ok');
-  assert.equal(report(c).rows[0].result, 'confirmed_inference');
-  assert.equal(report(c).complete, false);
-  assert.match(c.run('paperScanStatusHtml()'), /המבוסס על אישורך/);
-  assert.doesNotMatch(c.run('paperScanStatusHtml()'), /אומתו מול בלוק/);
-  assert.equal(c.requests.length, 1);
-  assert.equal(await save(c, '8'), false);
-  assert.equal(c.writes.length, 1);
-});
-
-test('save also works through the detached final-summary event handler', async () => {
-  const c = await scan();
-  assert.equal(await clickSave(c, '7.5', 'rsBody'), true);
-  assert.equal(c.run('products[0].discountPct'), 7.5);
-  assert.equal(c.run('receiptPaperScanState'), 'failed');
-  assert.equal(c.run('receiptNoteTotal'), null);
-});
-
-test('a declared 0% is known; a missing discount is not proof of zero even when totals match', async () => {
-  const data = fixture(); data.products[0].discountSet = true;
-  data.paper.scan.documents[0].netToChargeExVat = 227.2;
-  const declared = await scan(data);
-  assert.equal(inference(declared), null);
-  assert.equal(report(declared).rows[0].result, 'match');
-  data.products[0].discountSet = false;
-  const missing = await scan(data);
-  assert.equal(inference(missing).candidates[0].discountPct, 0);
-  assert.equal(missing.run('bermanPaperAnchorCheck(aiScanResponse.scan.documents[0]).ok'), false);
-  assert.equal(await save(missing, '0'), true);
-  assert.equal(missing.writes[0].data.discountSet, true);
-});
-
-test('repeated rows of one product share one discount and aggregate the paper quantity', async () => {
-  const data = fixture(), d = data.paper.scan.documents[0];
-  d.rows[0].quantity = 15;
-  d.rows.push({ ...d.rows[0], lineNumber: 3 }); d.printedLines = 3;
-  const c = await scan(data);
-  assert.equal(inference(c).quantity, 30);
-  assert.equal(inference(c).candidates[0].discountPct, 8);
-  await save(c, '8');
-  assert.equal(readDoc(c).rows[0].unitPriceExVat, 5.7408);
-  assert.equal(readDoc(c).rows[2].unitPriceExVat, 5.7408);
-});
-
-test('monthly full-vs-regular billing yields alternatives and requires a basis choice', async () => {
-  const c = await scan(fixture({ monthly: true })), a = inference(c);
-  assert.equal(a.status, 'ambiguous');
-  assert.deepEqual(a.candidates.map(x => x.discountPct), [8, 13.34]);
-  assert.equal(await save(c, '8'), false);
-  assert.equal(c.writes.length, 0);
-  const choice = a.choices[0];
-  await c.events.get('app:change')({ target: { dataset: { role: 'berman-discount-basis', doc: '0', row: choice.rowId }, value: '8' } });
-  assert.equal(inference(c).status, 'ready');
-  assert.equal(inference(c).candidates[0].discountPct, 8);
-  assert.equal(c.writes.length, 0);
-  assert.equal(c.run('receiptPromoOnPaper.length'), 0);
-  assert.equal(await save(c, '8'), true);
-  assert.equal(c.run('receiptPaperScanState'), 'ok');
-  assert.equal(c.run('receiptPromoOnPaper.length'), 0);
-});
-
-test('choosing full price leads to a different inferred rate without double discounting', async () => {
-  const c = await scan(fixture({ monthly: true }));
-  const choice = inference(c).choices[0];
-  c.run(`bermanSelectDiscountBasis(0,${JSON.stringify(choice.rowId)},'10')`);
-  assert.equal(inference(c).candidates[0].discountPct, 13.34);
-  await save(c, '13.34');
-  assert.equal(c.run('receiptPaperScanState'), 'ok');
-  assert.deepEqual(readDoc(c).__bermanFullListRowIndexes, [1]);
-  assert.equal(c.run('receiptPromoOnPaper.length'), 0);
-});
-
-test('an already printed promotion uses its printed net price once', async () => {
-  const data = fixture({ monthly: true }), d = data.paper.scan.documents[0];
-  d.rows[1].unitPriceExVat = 7; d.netToChargeExVat = 207.22;
-  const c = await scan(data), a = inference(c);
-  assert.equal(a.status, 'ready');
-  assert.equal(a.choices.length, 0);
-  assert.equal(a.candidates[0].knownCents, 3500);
-  assert.equal(a.candidates[0].discountPct, 8);
-});
-
-test('ambiguity selections survive reload and expire when pricing inputs change', async () => {
-  const data = fixture({ monthly: true }), c = await scan(data), choice = inference(c).choices[0];
-  c.run(`bermanSelectDiscountBasis(0,${JSON.stringify(choice.rowId)},'8')`);
-  const restored = runtime({ storage: c.storage, data }); restored.run('restoreReceiptDraft()');
-  assert.equal(inference(restored).status, 'ready');
-  restored.run('products[1].discountPct=10;products[1].price=9;');
-  assert.equal(inference(restored).status, 'ambiguous');
-  assert.equal(inference(restored).choices[0].selected, '');
-  assert.equal(restored.requests.length, 0);
-});
-
-test('approved provenance, source prices and counts survive reload', async () => {
-  const data = fixture(), c = await scan(data); await save(c, '8');
-  data.products = JSON.parse(c.run('JSON.stringify(products)'));
-  const restored = runtime({ storage: c.storage, data }); restored.run('restoreReceiptDraft()');
-  assert.equal(restored.run('receiptList[0].qty'), 1);
-  assert.equal(report(restored).rows[0].result, 'confirmed_inference');
-  assert.equal(report(restored).rows[0].originalUnitPrice, 6.24);
-  assert.equal(restored.run('receiptPaperScanState'), 'ok');
-  assert.equal(restored.requests.length, 0);
-});
-
-for (const [name, change] of [
-  ['two missing products', d => { d.products[1].discountSet = false; }],
-  ['unidentified second product', d => { d.paper.scan.documents[0].rows[1].itemCode = '404'; d.paper.scan.documents[0].rows[1].barcode = ''; }],
-  ['another printed price mismatch', d => { d.paper.scan.documents[0].rows[1].unitPriceExVat = 11; }],
-  ['stored price inconsistent with its discount', d => { d.products[1].price = 7.5; }],
-  ['missing page', d => { d.paper.scan.documents[0].pageCount = 2; }],
-  ['incomplete units', d => { d.paper.scan.documents[0].totalUnits = 34; }],
-  ['missing printed row count', d => { d.paper.scan.documents[0].printedLines = null; }],
-  ['missing date', d => { d.paper.scan.documents[0].docDate = ''; }],
-  ['unknown product itself has a promotion', d => { d.promos = [{ id: 'p', productIds: ['unknown'], fixedPrice: 5, minQty: 1, start: '2026-09-01', end: '2026-09-30' }]; }],
-  ['overlapping promotions', d => { d.promos = [1, 2].map(n => ({ id: 'p' + n, productIds: ['known'], fixedPrice: 7, minQty: 1, start: '2026-09-01', end: '2026-09-30' })); }],
-  ['separate document discount', d => { d.paper.scan.documents[0].documentDiscountExVat = 1; }],
-  ['credit document', d => { d.paper.scan.documents[0].docType = 'credit'; }],
-  ['negative remainder', d => { d.paper.scan.documents[0].netToChargeExVat = 30; }],
-  ['remainder above list price', d => { d.paper.scan.documents[0].netToChargeExVat = 300; }],
-  ['contradictory VAT summary', d => { Object.assign(d.paper.scan.documents[0], { vatAmountPrinted: 20, totalToChargeInclVat: 300 }); }]
-]) test(name + ' cannot produce an actionable inferred discount', async () => {
-  const data = fixture(); change(data); const c = await scan(data);
-  if (name === 'missing date') c.run('receiptDocDate=null;'); // no manually entered fallback either
-  assert.equal(inference(c)?.status, 'blocked');
-  assert.equal(await save(c, '8'), false);
+test('missing discount asks for supplier information or deferral, without promotion questions or a guessed percentage', async () => {
+  const c = await scanned(), html = c.node('app').innerHTML;
+  assert.match(html, /כמה אחוז הנחה יש/);
+  assert.match(html, /data-role="berman-discount-later"/);
+  assert.doesNotMatch(html, /data-role="berman-discount-basis"|data-role="berman-discount-pct"|כ־8%/);
+  assert.doesNotMatch(html, /data-role="rc-paper-rescan"/);
   assert.equal(c.writes.length, 0);
 });
-
-test('stale displayed proposals are rejected before any write', async () => {
-  const c = await scan(), token = fingerprint(c);
-  c.run('products[1].discountPct=10;products[1].price=9;');
-  assert.equal(await save(c, '8', 0, token), false);
-  assert.equal(c.writes.length, 0);
-  assert.equal(c.run('products[0].discountSet'), false);
-});
-
-for (const update of ['aiScanDocuments[0].amount=200', 'aiScanDocuments[0].units=34', 'aiScanDocuments[0].lines=3', 'aiScanResponse.scan.documents[0].rows[0].quantity=29']) {
-  test('contradictory entered anchors or corrected quantities block inference: ' + update, async () => {
-    const c = await scan(); c.run(update);
-    assert.equal(inference(c).status, 'blocked');
-    assert.equal(await save(c, '8'), false);
-    assert.equal(c.writes.length, 0);
-  });
-}
-
-test('a local-storage failure after the cloud save keeps the persistence warning visible', async () => {
-  const c = await scan();
-  c.context.localStorage.setItem = () => { throw Error('storage full'); };
-  assert.equal(await save(c, '8'), true);
-  assert.equal(c.writes[0].data.discountPct, 8);
-  assert.equal(c.run('receiptPriceSaveFailed'), true);
-  assert.match(c.toasts.at(-1), /הפענוח לא נשמר במכשיר/);
-  assert.equal(report(c).state, 'unsaved');
-});
-
-test('failed writes and invalid input preserve the original catalog and document', async () => {
-  const c = await scan(), before = readDoc(c);
-  for (const value of ['', '-1', '100', '8abc', '8.123', 'NaN']) assert.equal(await save(c, value), false);
-  assert.equal(c.writes.length, 0);
-  c.run('runCloudTask=async()=>false');
-  assert.equal(await save(c, '8'), false);
-  assert.equal(c.run('products[0].discountSet'), false);
-  assert.deepEqual(readDoc(c), before);
-  assert.equal(c.run('bermanDiscountSaveBusy'), false);
-});
-
-test('a later successful cloud retry refreshes the saved scan from approved provenance', async () => {
-  const c = await scan();
-  c.run('runCloudTask=async(label,task)=>{testWrites.push(structuredClone(task));return false;}');
-  assert.equal(await save(c, '8'), false);
-  assert.equal(c.run('products[0].discountSet'), false);
-  c.context.retryData = c.writes[0].data;
-  c.run('Object.assign(products[0],retryData);rerender();');
-  assert.equal(readDoc(c).rows[0].unitPriceExVat, 5.7408);
-  assert.equal(report(c).rows[0].result, 'confirmed_inference');
-  assert.equal(c.run('receiptPaperScanState'), 'ok');
-  assert.equal(c.run('receiptList[0].qty'), 1);
-  assert.equal(c.requests.length, 1);
-  assert.equal(c.writes.length, 1);
-});
-
-test('a double click and switching receipts during a write do not apply stale receipt data', async () => {
-  const c = await scan(); let finish;
-  c.context.waitForSave = new Promise(resolve => { finish = resolve; });
-  c.run('runCloudTask=async(label,task)=>{testWrites.push(task);return await waitForSave;}');
-  const pending = save(c, '8');
-  assert.equal(await save(c, '8'), false);
-  c.run("receiptDraftId='new-receipt';aiScanResponse=null;receiptList=[];receiptNotes=[];");
-  finish(true); assert.equal(await pending, true);
-  assert.equal(c.writes.length, 1);
-  assert.equal(c.run('aiScanResponse'), null);
-  assert.equal(c.run('receiptList.length'), 0);
-  assert.equal(c.run('products[0].discountPct'), 8);
-});
-
-test('each document has its own remainder; totals are not pooled across invoices', async () => {
-  const c = await scan();
-  c.run(`const second=structuredClone(aiScanResponse.scan.documents[0]);second.noteIndex=1;second.__priceSourceId='second-paper';
-    second.__pricePaper.netToChargeExVat=200;second.subtotalExVat=200;aiScanResponse.scan.documents.push(second);
-    aiScanDocuments.push({...aiScanDocuments[0],noteIndex:1});saveReceiptDraft();`);
-  const docs = report(c).documents;
-  assert.equal(docs[0].discountInference.candidates[0].discountPct, 8);
-  assert.equal(docs[1].discountInference.candidates[0].discountPct, 14.53);
-});
-
-test('legacy stored scans also treat missing discounts as unknown', async () => {
-  const c = await scan();
-  c.run('delete aiScanResponse.scan.documents[0].rows[0].__bermanDiscountMissing;aiScanResponse.scan.documents[0].subtotalExVat=227.2;');
-  assert.equal(c.run('bermanPaperAnchorCheck(aiScanResponse.scan.documents[0]).ok'), false);
-  assert.equal(c.run('bermanPaperAnchorCheck(aiScanResponse.scan.documents[0]).money'), null);
-});
-
-test('private uploaded backup replay', { skip: !process.env.BERMAN_DISCOUNT_BACKUP }, async () => {
-  const backup = JSON.parse(fs.readFileSync(process.env.BERMAN_DISCOUNT_BACKUP, 'utf8'));
-  const data = { products: Object.entries(backup.collections.products).map(([id, p]) => ({ id, ...p })),
-    promos: Object.entries(backup.collections.promos).map(([id, p]) => ({ id, ...p })), items: [], paper: fixture().paper };
-  const c = runtime({ data });
-  c.storage.set(c.run('RECEIPT_DRAFT_KEY'), JSON.stringify(backup.localDrafts.receipt));
-  c.run('restoreReceiptDraft()');
-  const a = inference(c);
-  assert.equal(a.productId, 'code_111');
-  assert.equal(a.status, 'ambiguous');
-  assert.ok(a.candidates.some(x => x.discountPct === 8));
-  assert.doesNotMatch(manualScreen(c), /צריך להשלים את פענוח התעודה|בדוק את צילומי התעודה|data-role="rc-paper-rescan"/);
-  const ch = a.choices[0];
-  c.run(`bermanSelectDiscountBasis(0,${JSON.stringify(ch.rowId)},${JSON.stringify(ch.options[0].key)})`);
-  assert.equal(inference(c).candidates[0].discountPct, 8);
-  const source = readDoc(c).__pricePaper, counted = c.run('JSON.stringify(receiptList)');
-  assert.equal(await save(c, '8'), true);
-  assert.equal(c.run('receiptPaperScanState'), 'ok');
-  assert.deepEqual(readDoc(c).__pricePaper, source);
-  assert.equal(c.run('JSON.stringify(receiptList)'), counted);
+test('deferred receipt validates quantities without claiming a verified monetary total', async () => {
+  const c = await deferred();
+  assert.equal(c.run('receiptPaperScanState'), 'discount-pending');
+  assert.equal(c.run('receiptQuantityPaperRows().length'), 2);
   assert.match(c.node('app').innerHTML, /data-role="rc-quantity-all"/);
+  assert.doesNotMatch(c.node('app').innerHTML, /data-role="rc-paper-rescan"/);
+  assert.equal(c.run('bermanPaperAnchorCheck(aiScanResponse.scan.documents[0]).money'), null);
+  c.click('rc-quantity-all');
+  assert.equal(c.run('pendingReceipt.lines[0].qty'), 30);
+  assert.equal(c.run('pendingReceipt.lines[0].noteQty'), 30);
+  assert.match(c.node('rsBody').innerHTML, /הכמויות תואמות לתעודה/);
+  assert.equal(c.requests.length, 1);
+});
+test('matching quantities save as purple and open until the supplier confirms the discount', async () => {
+  const c = await savedReceipt();
+  assert.equal(c.run('receiptDiscrepancyInfo(receipts[0]).open'), true);
+  assert.equal(c.run('receipts[0].status'), 'open');
+  assert.match(c.node('app').innerHTML, /bg-purple-700|ממתינה להנחה/);
+  assert.match(c.node('app').innerHTML, /הכמויות תואמות לתעודה/);
+  assert.doesNotMatch(c.node('app').innerHTML, /הפרשים מול התעודה|מאזן הסחורה מול הספק מאוזן/);
+  const original = json(c, 'receipts[0].paperScan');
+  const counts = json(c, 'receipts[0].items.map(l=>[l.productId,l.qty,l.noteQty])');
+  assert.equal(await saveRate(c, '8'), true);
+  assert.equal(c.writes.at(-1).op, 'batch');
+  assert.equal(c.writes.at(-1).writes.length, 2);
+  assert.equal(c.run('receipts[0].status'), 'ok');
+  assert.equal(c.run('receiptDiscrepancyInfo(receipts[0]).open'), false);
+  assert.equal(c.run('receipts[0].discountReview.status'), 'resolved');
+  assert.ok(Math.abs(c.run('receipts[0].items[0].unitPrice') - 5.7408) < 1e-10);
+  assert.deepEqual(json(c, 'receipts[0].items.map(l=>[l.productId,l.qty,l.noteQty])'), counts);
+  assert.deepEqual(json(c, 'receipts[0].paperScan'), original);
+  assert.equal(c.requests.length, 1);
+});
+test('shortage and surplus remain quantities after the discount is supplied; neither is paid', async () => {
+  const c = await savedReceipt({ shortage: 2, surplus: 1 });
+  assert.match(c.node('app').innerHTML, /חוסר 2 יח׳/);
+  assert.match(c.node('app').innerHTML, /עודף 1 יח׳/);
+  assert.doesNotMatch(c.node('app').innerHTML, /data-role="rc-offset-choose"|data-role="rc-short-credit"/);
+  const counts = json(c, 'receipts[0].items.map(l=>[l.qty,l.noteQty])');
+  assert.equal(await saveRate(c, '8'), true);
+  assert.deepEqual(json(c, 'receipts[0].items.map(l=>[l.qty,l.noteQty])'), counts);
+  assert.equal(c.run('receipts[0].status'), 'open');
+  assert.equal(c.run('receiptDiscrepancyInfo(receipts[0]).shortItems[0].n'), 2);
+  assert.equal(c.run('receiptDiscrepancyInfo(receipts[0]).overItems[0].n'), 1);
+  assert.equal(c.run('receipts[0].totalExVat'), 200.74);
+});
+test('a late discount uses the historical catalog and document date', async () => {
+  const c = await savedReceipt();
+  c.run("products[1].listPrice=100;products[1].price=80;products[0].listPrice=7;receiptDocDate='2026-11-01'");
+  assert.equal(await saveRate(c, '8'), true);
+  assert.equal(c.run('receipts[0].status'), 'ok');
+  assert.equal(c.run('receipts[0].items[1].unitPrice'), 8);
+  assert.equal(c.run('products[0].price'), 6.44);
+  assert.equal(c.run('receipts[0].docDate'), '2026-09-14');
+});
+test('a discount that leaves a real money gap cannot close the receipt', async () => {
+  const c = await savedReceipt(); await saveRate(c, '5');
+  assert.equal(c.run('receipts[0].discountReview.status'), 'price_check');
+  assert.equal(c.run('receipts[0].status'), 'open');
+  assert.equal(c.run('receiptDiscrepancyInfo(receipts[0]).open'), true);
+  assert.match(c.node('app').innerHTML, /נדרשת בדיקת המחיר והסכום/);
+  assert.equal(await saveRate(c, '8'), true);
+  assert.equal(c.run('receipts[0].status'), 'ok');
+});
+test('failure and blank/invalid percentages preserve both receipt and catalog', async () => {
+  const c = await savedReceipt(), before = json(c, '[receipts,products]'), writes = c.writes.length;
+  for (const rate of ['', '-1', '100', '8.123', '8abc']) assert.equal(await saveRate(c, rate), false);
+  assert.equal(c.writes.length, writes);
+  c.run('runCloudTask=async()=>false');
+  assert.equal(await saveRate(c, '8'), false);
+  assert.deepEqual(json(c, '[receipts,products]'), before);
+});
+test('explicit zero is a valid known discount', async () => {
+  const data = fixture(); data.paper.scan.documents[0].netToChargeExVat = 227.2;
+  const c = await savedReceipt({ data }); assert.equal(await saveRate(c, '0'), true);
+  assert.equal(c.run('products[0].discountSet'), true);
+  assert.equal(c.run('receipts[0].status'), 'ok');
+});
+test('a pending draft and its manual count survive reload without OCR', async () => {
+  const data = fixture(), a = await deferred(data);
+  a.click('rc-quantity-differences');
+  a.run("receiptQuantityReview.rows[0].kind='shortage';receiptQuantityReview.rows[0].difference='2';saveReceiptDraft()");
+  const b = runtime({ data, storage: a.storage }); b.run("restoreReceiptDraft();currentView='receiving';renderReceiving()");
+  assert.equal(b.run('receiptPaperScanState'), 'discount-pending');
+  assert.equal(b.run('receiptQuantityReview.rows[0].difference'), '2');
+  assert.match(b.node('app').innerHTML, /data-role="rc-quantity-differences"/);
+  assert.equal(b.requests.length, 0);
+});
+test('a changed confirmed document date invalidates a pending discount form', async () => {
+  const c = await deferred(), token = c.run('bermanDeferredSourceKey()');
+  c.run("aiScanResponse.scan.documents[0].__priceConfirmedDate='2026-10-01'");
+  assert.equal(c.run('bermanDeferredReview()'), null);
+  assert.equal(await c.run("bermanSaveKnownDiscount('missing','8','',"+JSON.stringify(token)+")"), false);
+  assert.equal(c.writes.length, 0);
+});
+test('repeated document indexes cannot stand in for two photographed documents', async () => {
+  const c = await scanned();
+  c.run('aiScanDocuments.push(cloneSafe(aiScanDocuments[0]));aiScanResponse.scan.documents.push(cloneSafe(aiScanResponse.scan.documents[0]))');
+  assert.equal(c.run('bermanQuantityPaperState()'), null);
+  assert.equal(c.run('bermanDeferDiscount()'), false);
+});
+for (const [name, modify] of [
+  ['missing page', d => { d.pageCount = 2; }],
+  ['wrong unit total', d => { d.totalUnits = 34; }],
+  ['unknown product', d => { d.rows[1].itemCode = '404'; d.rows[1].barcode = ''; }],
+  ['contradictory VAT', d => { d.vatAmountPrinted = 20; d.totalToChargeInclVat = 300; }]
+]) test(name + ' cannot use a missing discount to bypass document validation', async () => {
+  const data = fixture(); modify(data.paper.scan.documents[0]); const c = await scanned(data);
+  assert.equal(c.run('bermanDeferDiscount()'), false);
+  assert.equal(c.run('receiptQuantityPaperRows()'), null);
+});
+test('known supplier discount can be entered immediately through the real button', async () => {
+  const c = await scanned();
+  const card = { querySelector: () => ({ value: '8' }) };
+  const button = { dataset: { product: 'missing', receipt: '', fingerprint: c.run('bermanDeferredSourceKey()') },
+    closest: s => s === '[data-known-discount]' ? card : s === '[data-role="berman-known-discount-save"]' ? button : null };
+  assert.equal(await c.events.get('app:click')({ target: button }), true);
+  assert.equal(c.run('products[0].discountPct'), 8);
+  assert.equal(c.run('receiptPaperScanState'), 'ok');
+  assert.match(c.node('app').innerHTML, /data-role="rc-quantity-all"/);
+  assert.equal(c.requests.length, 1);
+});
+test('an immediate rate that does not balance still allows quantities and open saving', async () => {
+  const c = await scanned();
+  assert.equal(await c.run("bermanSaveKnownDiscount('missing','5','',bermanDeferredSourceKey())"), true);
+  assert.equal(c.run('bermanDeferredReview().status'), 'price_check');
+  c.click('rc-quantity-all');
+  assert.equal(c.run('pendingReceipt.status'), 'open');
+  assert.match(c.node('rsBody').innerHTML, /נדרשת בדיקת מחיר/);
+});
+test('two missing discounts remain open until both are confirmed', async () => {
+  const data = fixture(); data.products[1].discountSet = false;
+  const c = await savedReceipt({ data });
+  assert.equal(await saveRate(c, '8'), true);
+  assert.equal(c.run('receipts[0].discountReview.status'), 'pending');
+  assert.equal(c.run('receipts[0].status'), 'open');
+  assert.doesNotMatch(c.node('app').innerHTML, /data-role="berman-known-discount-save"[^>]* disabled/);
+  assert.equal(await saveRate(c, '20', 'known'), true);
+  assert.equal(c.run('receipts[0].status'), 'ok');
+});
+for (const [mode, charged] of [['regular',8],['full',10],['promotion',7]]) test('confirmed discount recalculates ' + mode + ' promotion billing from the saved document', async () => {
+  const data = fixture(), d = data.paper.scan.documents[0];
+  data.promos = [{ id:'promo',productIds:['known'],fixedPrice:7,type:'receipt',minQty:1,minUnit:'unit',start:'2026-09-01',end:'2026-09-30' }];
+  d.rows[1].unitPriceExVat = mode === 'promotion' ? 7 : 10;
+  d.netToChargeExVat = 172.22 + charged * 5;
+  const c = await savedReceipt({ data });
+  c.run("promos=[];receiptDocDate='2027-01-01'");
+  assert.equal(await saveRate(c, '8'), true);
+  assert.equal(c.run('receipts[0].status'), 'ok');
+  assert.equal(c.run('receipts[0].items[1].unitPrice'), charged);
+  assert.equal(c.run('receipts[0].monthEndRebates[0].id'), 'promo');
+  assert.equal(c.run('receipts[0].monthEndRebates[0].rebate'), (charged - 7) * 5);
+});
+test('quantity corrections remain available while discount and monetary verification stay open', async () => {
+  const c = await savedReceipt({ shortage: 2 });
+  c.run('openReceiptFix(receipts[0].id)');
+  assert.equal(c.run('receiptFixEffectiveInfo().amountGapOpen'), false);
+  assert.match(c.node('app').innerHTML, /חוסר 2 יח׳/);
+  assert.doesNotMatch(c.node('app').innerHTML, /data-role="rc-fix-price"|הכל תואם — אפשר לסגור/);
+  c.run("receiptFix.items.find(l=>l.productId==='missing').qty=30");
+  await c.run('saveReceiptFix()');
+  const update = c.writes.at(-1).data;
+  assert.equal(update.status, 'open');
+  assert.equal(update.unresolvedAmountGap, 0);
+  c.context.quantityUpdate = update; c.run('Object.assign(receipts[0],quantityUpdate)');
+  assert.equal(await saveRate(c, '8'), true);
+  assert.equal(c.run('receipts[0].status'), 'ok');
+  assert.equal(c.run("receipts[0].items.find(l=>l.productId==='missing').qty"), 30);
+});
+test('scanner counting also saves known quantities as open without another OCR request', async () => {
+  const c = await deferred();
+  c.run("receiptCountingMode='scan';receiptList=[{productId:'missing',name:'לחם',qty:28},{productId:'known',name:'לחמניות',qty:5}];finishReceipt()");
+  assert.equal(c.run('pendingReceipt.lines[0].noteQty'), 30);
+  assert.equal(c.run('pendingReceipt.lines[0].qty'), 28);
+  assert.match(c.node('rsBody').innerHTML, /חוסר 2 יח׳/);
+  assert.equal(c.requests.length, 1);
+});
+test('stale forms and a double click cannot overwrite a newer quantity review', async () => {
+  const c = await savedReceipt(), token = c.run('JSON.stringify([receipts[0].items,receipts[0].discountReview])');
+  c.run('receipts[0].items[0].qty=29');
+  assert.equal(await c.run("bermanSaveKnownDiscount('missing','8',receipts[0].id,"+JSON.stringify(token)+")"), false);
+  c.run('runCloudTask=()=>new Promise(resolve=>{globalThis.releaseDiscount=resolve})');
+  const first = saveRate(c, '8');
+  assert.equal(await saveRate(c, '8'), false);
+  c.run('releaseDiscount(true)'); assert.equal(await first, true);
+  assert.equal(c.run('receipts[0].items[0].qty'), 29);
+  assert.equal(c.run('receipts[0].status'), 'open');
+});
+test('late successful retry updates the active deferred draft without OCR', async () => {
+  const c = await deferred(); c.run('runCloudTask=async()=>false');
+  assert.equal(await c.run("bermanSaveKnownDiscount('missing','8','',bermanDeferredSourceKey())"), false);
+  c.run("Object.assign(products[0],{discountSet:true,discountPct:8,price:5.7408,discountSource:{method:'supplier_confirmation',approvedPct:8,receiptId:receiptDraftId}});bermanSyncApprovedDiscounts()");
+  assert.equal(c.run('receiptPaperScanState'), 'ok');
+  assert.equal(c.requests.length, 1);
+});
+test('private backup can finish quantity review and later confirm the supplier discount without scanning', { skip: !process.env.BERMAN_DISCOUNT_BACKUP }, async () => {
+  const b = JSON.parse(fs.readFileSync(process.env.BERMAN_DISCOUNT_BACKUP, 'utf8'));
+  const data = { ...fixture(), products: Object.entries(b.collections.products).map(([id,p])=>({id,...p})),
+    promos: Object.entries(b.collections.promos).map(([id,p])=>({id,...p})) };
+  const c = runtime({ data });
+  c.storage.set(c.run('RECEIPT_DRAFT_KEY'), JSON.stringify(b.localDrafts.receipt));
+  c.run("restoreReceiptDraft();receiptCountingMode='manual';currentView='receiving'");
+  assert.equal(c.run('bermanDeferDiscount()'), true);
+  c.run('receiptList=[]'); c.click('rc-quantity-all');
+  assert.equal(c.run('pendingReceipt.lines.reduce((n,l)=>n+l.qty,0)'), 91);
+  await c.run('confirmReceipt()');
+  const task = c.writes.find(t=>t.op==='set'); c.context.savedTestReceipt = { id: task.operationId, ...task.data };
+  c.run("receipts=[savedTestReceipt];currentView='receiptsHistory'");
+  assert.equal(await saveRate(c, '8', 'code_111'), true);
+  assert.equal(c.run('receipts[0].status'), 'ok');
+  assert.equal(c.run('receipts[0].totalExVat'), 723.73);
   assert.equal(c.requests.length, 0);
 });
