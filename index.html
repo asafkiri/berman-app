@@ -812,7 +812,7 @@ const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '85'; // שתי קריאות עצמאיות ואימות ממוקד של מחיר חשוד
+const APP_VERSION = '86'; // סימון מפורש של מוצר שלא זוכה ופירוט חוסר הזיכוי
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -3041,6 +3041,7 @@ function renderReturnsHistory() {
     return;
   }
   const pending = returns.filter(r => !r.credited).length;
+  const openCredits = returns.filter(r => r.credited && returnsDiscrepancyInfo(r).open).length;
   const balInfo = returnsBalance();
   let balBanner = '';
   if (balInfo.n > 0) {
@@ -3050,7 +3051,9 @@ function renderReturnsHistory() {
   }
   app.innerHTML =
     '<div class="px-1 py-1"><h2 class="font-black text-2xl text-slate-800">היסטוריית חזרות</h2></div>' +
-    (pending ? '<div class="px-1 mb-3 text-sm font-bold text-amber-600"><i class="fa-solid fa-clock"></i> ' + pending + ' ממתינים לאימות זיכוי</div>' : '<div class="px-1 mb-3 text-sm font-bold text-green-600"><i class="fa-solid fa-circle-check"></i> כל הזיכויים אומתו</div>') +
+    (pending ? '<div class="px-1 mb-3 text-sm font-bold text-amber-600"><i class="fa-solid fa-clock"></i> ' + pending + ' ממתינים לאימות זיכוי</div>' : '') +
+    (openCredits ? '<div class="px-1 mb-3 text-sm font-bold text-rose-700"><i class="fa-solid fa-triangle-exclamation"></i> ' + openCredits + ' תעודות עם פער פתוח בזיכוי</div>' : '') +
+    (!pending && !openCredits ? '<div class="px-1 mb-3 text-sm font-bold text-green-600"><i class="fa-solid fa-circle-check"></i> כל הזיכויים אומתו</div>' : '') +
     '<details class="mb-3"><summary class="cursor-pointer text-xs font-bold text-slate-400 px-1">ניהול חזרות</summary><button data-role="clear-returns-history" class="btn-tap mt-2 text-xs font-bold text-red-500 bg-red-50 px-3 py-2 rounded-lg"><i class="fa-solid fa-trash-can"></i> מחק את כל היסטוריית החזרות</button></details>' +
     balBanner +
     returns.map(r => {
@@ -3064,7 +3067,7 @@ function renderReturnsHistory() {
       const statusBar = !credited
         ? '<div class="bg-amber-400 text-amber-900 px-4 py-2.5 flex items-center gap-2 font-black"><i class="fa-solid fa-hourglass-half"></i> ממתין לאימות זיכוי<button data-role="ret-resend" data-id="' + r.id + '" class="btn-tap mr-auto text-[11px] bg-white/80 text-amber-900 border border-amber-500/40 rounded-lg px-2.5 py-1 font-black"><i class="fa-brands fa-whatsapp"></i> שלח שוב</button></div>'
         : (openGap
-          ? '<div class="bg-rose-500 text-white px-4 py-2.5 flex items-center gap-2 font-black"><i class="fa-solid fa-triangle-exclamation"></i> אומת — נותר פער בזיכוי</div>'
+          ? '<div class="bg-rose-500 text-white px-4 py-2.5 flex items-center gap-2 font-black"><i class="fa-solid fa-triangle-exclamation"></i> ' + (di.shortItems.length ? 'פתוח — חסר זיכוי' : 'פתוח — פער בזיכוי') + '</div>'
           : '<div class="bg-green-500 text-white px-4 py-2.5 flex items-center gap-2 font-black"><i class="fa-solid fa-circle-check"></i> הזיכוי אומת' + (credDate ? ' · ' + credDate : '') + '</div>');
       const owedDiff = di.owed; // v66: בלי מה ששויך לחוסר · v78: בלי מה שכבר הוחזר לרשימת החזרות
       const breakdown = openGap ?
@@ -3074,7 +3077,7 @@ function renderReturnsHistory() {
         ((di.shortItems.length || di.overItems.length) ?
         '<div class="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs mb-2">' +
           '<div class="font-black text-rose-700 mb-1">פירוט הפער</div>' +
-          di.shortItems.map(s => '<div class="flex justify-between text-rose-600"><span>זוכה חסר: ' + htmlEscape(s.name) + '</span><span>' + s.n + ' יח׳</span></div>').join('') +
+          di.shortItems.map(s => '<div class="flex justify-between gap-2 text-rose-600"><span>חסר זיכוי: ' + htmlEscape(s.name) + '</span><span class="shrink-0">' + s.n + ' יח׳</span></div>').join('') +
           di.overItems.map(s => '<div class="flex justify-between text-amber-600"><span>זוכה יתר: ' + htmlEscape(s.name) + '</span><span>' + s.n + ' יח׳</span></div>').join('') +
         '</div>' : '')) : '';
       const actionArea = !credited
@@ -3517,81 +3520,140 @@ function openReturnVerify(id, presetNoteTotal) {
     id: r.id,
     allocatedEx: allocatedEx,
     noteTotal: (presetNoteTotal != null ? r2(Number(presetNoteTotal) - allocatedEx) : returnsCreditForReturns(r)),
-    items: (r.items || []).map(l => ({ name: l.name, barcode: l.barcode || '', qty: Number(l.qty) || 0, noteQty: (l.noteQty != null ? Number(l.noteQty) : (Number(l.qty) || 0)), unitPrice: r2(Number(l.unitPrice) || 0), checked: false }))
+    items: (r.items || []).map(l => ({ ...l, name: l.name, barcode: l.barcode || '', qty: Number(l.qty) || 0, noteQty: (l.noteQty != null ? Number(l.noteQty) : (Number(l.qty) || 0)), unitPrice: r2(Number(l.unitPrice) || 0), checked: false }))
   };
   rvOrigin = (currentView === 'receiptsHistory') ? 'receiptsHistory' : 'returnsHistory';
   setView('returnReconcile');
 }
 function rvNoteEx() { let ex = 0; (returnVerify.items || []).forEach(l => ex += (Number(l.unitPrice) || 0) * (Number(l.noteQty) || 0)); return r2(ex); }
 function rvGap() { return r2((Number(returnVerify.noteTotal) || 0) - rvNoteEx()); }
+function rvCreditSummary() {
+  const shortItems = [], overItems = [];
+  let sentEx = 0;
+  (returnVerify.items || []).forEach(l => {
+    const sent = Number(l.qty) || 0, credited = Number(l.noteQty) || 0, price = Number(l.unitPrice) || 0;
+    sentEx += sent * price;
+    const n = sent - credited;
+    if (n !== 0) (n > 0 ? shortItems : overItems).push({ name: l.name, qty: Math.abs(n), total: r2(Math.abs(n) * price) });
+  });
+  return { sentEx: r2(sentEx), creditedEx: rvNoteEx(), gap: returnVerify.noteTotal == null ? null : rvGap(), shortItems, overItems };
+}
+function rvSummaryHtml() {
+  const s = rvCreditSummary();
+  const hasLineGap = s.shortItems.length > 0 || s.overItems.length > 0;
+  const moneyRow = (label, amount) => '<div class="flex justify-between gap-3 text-sm font-bold mt-1"><span>' + label + '</span><span class="shrink-0" dir="rtl">₪' + fmtMoney(amount) + '</span></div>';
+  const linesHtml = (items, title, tone) => !items.length ? '' :
+    '<div class="rounded-xl border p-3 mt-3 ' + tone + '"><div class="font-black mb-2">' + title + '</div>' +
+    items.map(l => '<div class="flex justify-between gap-3 text-sm mb-1"><span>' + htmlEscape(l.name) + ' · ' + l.qty + ' יח׳</span><span class="font-black shrink-0">₪' + fmtMoney(l.total) + '</span></div>').join('') + '</div>';
+  let gapHtml = '';
+  if (s.gap != null) {
+    const abs = Math.abs(s.gap);
+    const label = abs > 1 ? (hasLineGap ? 'פער נוסף בסכום' : 'פער בבדיקת הסכום') : (abs > 0 ? 'הפרש קטן בסכום' : 'סכום התעודה תואם לכמויות הזיכוי');
+    gapHtml = '<div class="mt-3 pt-3 border-t border-slate-200 ' + (abs > 1 ? 'text-rose-700' : 'text-slate-600') + '">' +
+      moneyRow(label, abs) + (abs > 1 ? '<div class="text-xs mt-1">' + (s.gap > 0 ? 'סכום התעודה גבוה מסכום השורות.' : 'סכום השורות גבוה מסכום התעודה.') + ' יש לבדוק את הכמויות והמחירים שזוכו.</div>' : '') + '</div>';
+  }
+  return '<div class="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm text-slate-700">' +
+    moneyRow('שווי החזרות ששלחת', s.sentEx) +
+    (returnVerify.noteTotal == null ? '<div class="text-sm mt-1">סכום תעודת הזיכוי טרם הוזן</div>' : moneyRow('סכום תעודת הזיכוי', returnVerify.noteTotal)) +
+    moneyRow('לפי הכמויות שזוכו', s.creditedEx) +
+    '<div class="text-xs text-slate-500 mt-1">כל הסכומים ללא מע״מ</div>' +
+    linesHtml(s.shortItems, 'חסר זיכוי על:', 'bg-rose-50 border-rose-200 text-rose-800') +
+    linesHtml(s.overItems, 'זוכו יחידות נוספות:', 'bg-amber-50 border-amber-200 text-amber-800') +
+    (hasLineGap ? '<div class="font-bold text-sm text-rose-700 mt-2">התעודה תישאר פתוחה להשלמת בירור הזיכוי.</div>' : '') +
+    gapHtml + '<div class="mt-3 pt-2 border-t border-slate-200 text-sm font-bold text-slate-600">' + rvProgressHtml() + '</div></div>';
+}
 function rvProgressHtml() {
   const lines = (returnVerify.items || []);
   const done = lines.filter(l => l.checked).length, total = lines.length;
   const allDone = total > 0 && done === total;
-  return '<i class="fa-solid ' + (allDone ? 'fa-circle-check' : 'fa-list-check') + '"></i> סומנו ' + done + ' מתוך ' + total + ' מוצרים' + (allDone ? ' ✓' : '');
+  return '<i class="fa-solid ' + (allDone ? 'fa-circle-check' : 'fa-list-check') + '"></i> נבדקו ' + done + ' מתוך ' + total + ' מוצרים' + (allDone ? ' ✓' : '');
 }
 function refreshRvHeader() {
-  const g = rvGap();
-  const rn = $('rvReconNote'); if (rn) rn.textContent = '₪' + fmtMoney(rvNoteEx());
-  const gp = $('rvGap'); if (gp) gp.textContent = (g > 0 ? 'חסר ' : (g < 0 ? 'עודף ' : '')) + '₪' + fmtMoney(Math.abs(g));
+  const summary = $('rvSummary'); if (summary) summary.innerHTML = rvSummaryHtml();
+  const save = $('rvSave'); if (save) save.textContent = rvSaveLabel();
+}
+function rvSaveLabel() {
+  const s = rvCreditSummary();
+  return s.shortItems.length ? 'שמור חוסר בזיכוי' : (s.overItems.length || Math.abs(s.gap || 0) > 1 ? 'שמור עם פער פתוח' : 'שמור אימות');
+}
+function rvRefreshRow(idx, keepInput) {
+  const l = (returnVerify.items || [])[idx]; if (!l) return;
+  const card = $('rvCard_' + idx);
+  if (card && !keepInput) card.outerHTML = rvRowHtml(l, idx);
+  else if (card) {
+    card.className = rvRowClass(l);
+    const status = $('rvStatus_' + idx); if (status) status.innerHTML = rvRowStatusHtml(l);
+    const action = $('rvNoCredit_' + idx); if (action) action.innerHTML = rvNoCreditHtml(l, idx);
+  }
+  refreshRvHeader();
 }
 function rvToggleCheck(idx) {
   const l = (returnVerify.items || [])[idx]; if (!l) return;
   l.checked = !l.checked;
-  const card = document.querySelector('#app [data-rvcard="' + idx + '"]');
-  if (card) card.outerHTML = rvRowHtml(l, idx);
-  const pc = $('rvProgress'); if (pc) { pc.innerHTML = rvProgressHtml(); const all = returnVerify.items || []; const done = all.length > 0 && all.filter(x => x.checked).length === all.length; pc.className = 'mt-2 pt-2 border-t border-amber-200 text-xs font-black ' + (done ? 'text-emerald-700' : 'text-amber-900/70'); }
+  rvRefreshRow(idx);
+}
+function rvMarkNotCredited(idx) {
+  const l = (returnVerify.items || [])[idx]; if (!l || !(Number(l.qty) > 0)) return;
+  // The review tick alone never changes credited quantities. This explicit
+  // action records a known missing credit while preserving what was returned.
+  l.noteQty = 0;
+  l.checked = true;
+  rvRefreshRow(idx);
 }
 function rvStepNote(idx, delta) {
   const l = (returnVerify.items || [])[idx]; if (!l) return;
-  l.noteQty = Math.max(0, (Number(l.noteQty) || 0) + delta); renderReturnReconcile();
+  l.noteQty = Math.max(0, (Number(l.noteQty) || 0) + delta); rvRefreshRow(idx);
 }
 function rvSetNoteLive(idx, val) {
   const l = (returnVerify.items || [])[idx]; if (!l) return;
   let q = parseInt((val || '').toString().replace(/[^0-9]/g, ''), 10); if (isNaN(q) || q < 0) q = 0;
-  l.noteQty = q; refreshRvHeader();
+  l.noteQty = q; rvRefreshRow(idx, true);
 }
 function rvSetPriceLive(idx, val) {
   const l = (returnVerify.items || [])[idx]; if (!l) return;
-  const n = parseFloat((val || '').toString().replace(',', '.').replace(/[^0-9.]/g, '')); l.unitPrice = isFinite(n) && n >= 0 ? r2(n) : 0; refreshRvHeader();
+  const n = parseFloat((val || '').toString().replace(',', '.').replace(/[^0-9.]/g, '')); l.unitPrice = isFinite(n) && n >= 0 ? r2(n) : 0; rvRefreshRow(idx, true);
+}
+function rvRowClass(l) {
+  const diff = (Number(l.noteQty) || 0) - (Number(l.qty) || 0);
+  return 'rounded-2xl border p-3 shadow-sm ' + (diff < 0 ? 'bg-rose-50 border-rose-300' : (diff > 0 ? 'bg-amber-50 border-amber-300' : (l.checked ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-200')));
+}
+function rvRowStatusHtml(l) {
+  const sent = Number(l.qty) || 0, credited = Number(l.noteQty) || 0, diff = credited - sent;
+  if (diff < 0) return '<span class="text-rose-700 font-black">' + (credited === 0 ? 'לא זוכה' : 'חסר זיכוי על ' + (-diff) + ' יח׳') + '</span>';
+  if (diff > 0) return '<span class="text-amber-800 font-black">זוכו ' + diff + ' יח׳ נוספות</span>';
+  return l.checked ? '<span class="text-emerald-700 font-bold">זוכה במלואו</span>' : '<span class="text-slate-500">ממתין לבדיקה</span>';
+}
+function rvNoCreditHtml(l, idx) {
+  if (!(Number(l.qty) > 0)) return '';
+  const selected = Number(l.noteQty) === 0 && l.checked;
+  return '<button data-role="rv-not-credited" data-id="' + idx + '" aria-pressed="' + selected + '" class="btn-tap min-h-[44px] w-full border rounded-xl px-3 py-2 text-sm font-black ' + (selected ? 'bg-rose-100 border-rose-300 text-rose-800' : 'bg-white border-rose-200 text-rose-700') + '">' + (selected ? '<i class="fa-solid fa-check"></i> לא זוכה — נבדק' : 'לא זוכה') + '</button>';
 }
 function rvRowHtml(l, idx) {
   const sent = Number(l.qty) || 0, noteQty = Number(l.noteQty) || 0;
-  const diff = noteQty - sent;
-  let tag = '<span class="text-emerald-600 text-[11px] font-bold">תואם</span>';
-  if (diff < 0) tag = '<span class="text-rose-600 font-black text-[11px]">זוכה חסר ' + (-diff) + '</span>';
-  else if (diff > 0) tag = '<span class="text-amber-600 font-black text-[11px]">זוכה יתר ' + diff + '</span>';
-  const checkBtn = '<button data-role="rv-check" data-id="' + idx + '" class="btn-tap shrink-0 w-7 h-7 rounded-full flex items-center justify-center ' + (l.checked ? 'bg-emerald-500 text-white' : 'border-2 border-slate-300 text-transparent') + '"><i class="fa-solid fa-check text-xs"></i></button>';
-  return '<div data-rvcard="' + idx + '" class="' + (l.checked ? 'bg-emerald-50' : 'bg-white') + ' rounded-2xl border ' + (diff !== 0 ? 'border-rose-200' : 'border-slate-200') + ' p-3 shadow-sm">' +
-    '<div class="flex items-center justify-between gap-2 mb-2"><div class="flex items-center gap-2 min-w-0">' + checkBtn + '<div class="min-w-0"><div class="font-black text-slate-800 text-sm truncate">' + l.name + '</div>' +
-      '<div class="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">₪<input data-role="rv-price" data-id="' + idx + '" type="text" inputmode="decimal" value="' + priceFieldVal(l.unitPrice) + '" class="w-14 text-center border border-slate-200 rounded px-1 py-0.5 outline-none focus:border-blue-500"> ליח׳</div>' +
-    '</div></div>' + tag + '</div>' +
-    '<div class="flex items-center justify-between gap-2">' +
+  const checkBtn = '<button data-role="rv-check" data-id="' + idx + '" aria-pressed="' + !!l.checked + '" class="btn-tap min-h-[44px] shrink-0 rounded-xl border px-3 py-2 text-sm font-bold ' + (l.checked ? 'bg-white border-slate-300 text-slate-700' : 'bg-white border-blue-200 text-blue-700') + '"><i class="fa-solid fa-check"></i> ' + (l.checked ? 'נבדק' : 'בדקתי') + '</button>';
+  return '<div id="rvCard_' + idx + '" data-rvcard="' + idx + '" class="' + rvRowClass(l) + '">' +
+    '<div class="flex items-start justify-between gap-2 mb-2"><div class="min-w-0"><div class="font-black text-slate-800 text-base break-words">' + htmlEscape(l.name) + '</div>' +
+      '<div id="rvStatus_' + idx + '" class="text-sm mt-1">' + rvRowStatusHtml(l) + '</div></div>' + checkBtn + '</div>' +
+    '<div class="text-xs text-slate-500 flex flex-wrap items-center gap-1 mb-3">מחיר לזיכוי: ₪<input data-role="rv-price" data-id="' + idx + '" aria-label="מחיר לזיכוי ליחידה" type="text" inputmode="decimal" value="' + priceFieldVal(l.unitPrice) + '" class="w-16 min-h-[36px] text-center border border-slate-300 rounded-lg px-1 py-1 outline-none focus:border-blue-500 bg-white"> ליח׳ ללא מע״מ</div>' +
+    '<div class="flex flex-wrap items-center justify-between gap-2">' +
       '<div class="text-sm text-slate-500 font-bold">הוחזר: <span class="text-slate-800 font-black">' + sent + '</span></div>' +
-      '<div class="flex items-center gap-1.5"><span class="text-slate-500 font-bold text-xs">בתעודה:</span>' +
-        '<button data-role="rv-minus" data-id="' + idx + '" class="btn-tap w-8 h-8 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center"><i class="fa-solid fa-minus text-xs"></i></button>' +
-        '<input data-role="rv-note" data-id="' + idx + '" type="text" inputmode="numeric" value="' + noteQty + '" class="w-12 h-8 text-center font-black border-2 ' + (diff !== 0 ? 'border-rose-300' : 'border-slate-200') + ' rounded-lg outline-none focus:border-blue-500">' +
-        '<button data-role="rv-plus" data-id="' + idx + '" class="btn-tap w-8 h-8 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center"><i class="fa-solid fa-plus text-xs"></i></button>' +
+      '<div class="flex items-center gap-1.5"><span class="text-slate-600 font-bold text-sm">זוכה:</span>' +
+        '<button data-role="rv-minus" data-id="' + idx + '" aria-label="הפחת כמות שזוכתה" class="btn-tap w-11 h-11 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center"><i class="fa-solid fa-minus text-xs"></i></button>' +
+        '<input data-role="rv-note" data-id="' + idx + '" aria-label="כמות שזוכתה בתעודה" type="text" inputmode="numeric" value="' + noteQty + '" class="w-12 h-11 text-center font-black border-2 border-slate-300 bg-white rounded-lg outline-none focus:border-blue-500">' +
+        '<button data-role="rv-plus" data-id="' + idx + '" aria-label="הוסף כמות שזוכתה" class="btn-tap w-11 h-11 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center"><i class="fa-solid fa-plus text-xs"></i></button>' +
       '</div>' +
-    '</div>' +
+    '</div><div id="rvNoCredit_' + idx + '" class="mt-3">' + rvNoCreditHtml(l, idx) + '</div>' +
   '</div>';
 }
 function renderReturnReconcile() {
   if (!returnVerify) { setView('returnsHistory'); return; }
-  const note = returnVerify.noteTotal;
-  const gap = rvGap();
   app.innerHTML =
-    '<div class="px-1 py-1 mb-2"><h2 class="font-black text-2xl text-slate-800">אימות זיכוי</h2><div class="text-xs text-slate-400 mt-0.5">עבור מוצר-מוצר, סמן ✓ מה שבדקת, ותקן כמות/מחיר בשורות חריגות</div></div>' +
-    '<div class="bg-amber-50 border border-amber-200 rounded-2xl p-4 shadow-sm mb-3">' +
-      '<div class="flex justify-between text-sm font-bold text-amber-900"><span>תעודת הזיכוי (ללא מע״מ)</span><span>₪' + fmtMoney(note || 0) + '</span></div>' +
-      '<div class="flex justify-between text-sm font-bold text-amber-900 mt-1"><span>שוחזר מהשורות</span><span id="rvReconNote">₪' + fmtMoney(rvNoteEx()) + '</span></div>' +
-      '<div class="flex justify-between text-lg font-black mt-1.5 pt-1.5 border-t border-amber-200 ' + (Math.abs(gap) <= 1 ? 'text-emerald-700' : 'text-rose-700') + '"><span>הפרש שנותר</span><span id="rvGap">' + (gap > 0 ? 'חסר ' : (gap < 0 ? 'עודף ' : '')) + '₪' + fmtMoney(Math.abs(gap)) + '</span></div>' +
-      '<div id="rvProgress" class="mt-2 pt-2 border-t border-amber-200 text-xs font-black text-amber-900/70">' + rvProgressHtml() + '</div>' +
-    '</div>' +
+    '<div class="px-1 py-1 mb-3"><h2 class="font-black text-2xl text-slate-800">אימות זיכוי</h2><div class="text-sm text-slate-600 mt-1">בדוק כמה יחידות זוכו בכל מוצר. מוצר שלא מופיע בתעודת הזיכוי? לחץ ״לא זוכה״. הכמות שהחזרת נשמרת.</div></div>' +
+    '<div id="rvSummary" class="mb-3" aria-live="polite">' + rvSummaryHtml() + '</div>' +
     '<div class="space-y-2 mb-24">' + (returnVerify.items || []).map(rvRowHtml).join('') + '</div>' +
     '<div class="fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 p-3 flex gap-2 z-40">' +
       '<button data-role="rv-cancel" class="btn-tap flex-1 py-3 rounded-xl font-black bg-slate-100 text-slate-600">ביטול</button>' +
-      '<button data-role="rv-save" class="btn-tap flex-1 py-3 rounded-xl font-black bg-blue-600 text-white">שמור אימות</button>' +
+      '<button id="rvSave" data-role="rv-save" class="btn-tap flex-1 py-3 rounded-xl font-black bg-blue-600 text-white">' + rvSaveLabel() + '</button>' +
     '</div>';
 }
 function refreshReturnReconcile() { if (currentView === 'returnReconcile') renderReturnReconcile(); }
@@ -3621,16 +3683,18 @@ async function saveReturnVerify(opts) {
   }
   if (!opts.skipGap && returnVerify.noteTotal != null) {
     const g = rvGap();
-    if (Math.abs(g) > 1) { showConfirm('הפרש לא מוסבר', 'עדיין נשאר הפרש של ₪' + fmtMoney(Math.abs(g)) + ' בין תעודת הזיכוי למה ששוחזר מהשורות. לשמור בכל זאת?', 'שמור בכל זאת', function () { saveReturnVerify({ skipChecked: true, skipGap: true }); }); return; }
+    if (Math.abs(g) > 1) { showConfirm('נותר פער בסכום', 'סכום הכמויות שזוכו עדיין שונה מסכום התעודה ב־₪' + fmtMoney(Math.abs(g)) + '.' + (rvCreditSummary().shortItems.length ? ' הפער הזה נוסף למוצרים שכבר סימנת שלא זוכו.' : '') + ' התעודה תישאר פתוחה לבדיקה.', 'שמור עם פער פתוח', function () { saveReturnVerify({ skipChecked: true, skipGap: true }); }); return; }
   }
   const outItems = items.map(l => {
-    const line = { name: l.name, barcode: l.barcode || '', qty: Number(l.qty) || 0, unitPrice: r2(Number(l.unitPrice) || 0), lineTotal: r2((Number(l.unitPrice) || 0) * (Number(l.qty) || 0)) };
+    const line = { ...l, name: l.name, barcode: l.barcode || '', qty: Number(l.qty) || 0, unitPrice: r2(Number(l.unitPrice) || 0), lineTotal: r2((Number(l.unitPrice) || 0) * (Number(l.qty) || 0)) };
+    delete line.checked;
+    delete line.noteQty;
     if (Number(l.noteQty) !== Number(l.qty)) line.noteQty = Number(l.noteQty) || 0;
     return line;
   });
   // הזיכוי שמגיע לך = מה שהחזרת בפועל (לפי הכמות שסרקת), לא מה שהספק רשם בתעודה
   const sentEx = r2(items.reduce((a, l) => a + (Number(l.unitPrice) || 0) * (Number(l.qty) || 0), 0));
-  const open = outItems.some(l => l.noteQty != null && l.noteQty !== l.qty);
+  const open = outItems.some(l => l.noteQty != null && l.noteQty !== l.qty) || (returnVerify.noteTotal != null && Math.abs(rvGap()) > 1);
   const id = returnVerify.id, noteTotal = returnVerify.noteTotal;
   // v66: חוזרים לסכום שעל הנייר — החלק ששויך לחוסר של תעודה אחרת נספר בו
   const paperTotal = noteTotal == null ? null : r2(Number(noteTotal) + (Number(returnVerify.allocatedEx) || 0));
@@ -15388,13 +15452,14 @@ function returnCardInReceipts(r) {
     : retKeyed;
   const rt = returnTotals(r);
   const credited = !!r.credited;
-  const openGap = credited && returnsDiscrepancyInfo(r).open; // v78: פער שהוחזר לרשימת החזרות כבר לא פתוח כאן
+  const di = returnsDiscrepancyInfo(r);
+  const openGap = credited && di.open; // v78: פער שהוחזר לרשימת החזרות כבר לא פתוח כאן
   const barCls = !credited ? 'bg-amber-400 text-amber-900' : (openGap ? 'bg-rose-500 text-white' : 'bg-emerald-500 text-white');
   const borderCls = !credited ? 'border-amber-300' : (openGap ? 'border-rose-300' : 'border-emerald-300');
   const statusTxt = !credited
     ? '<i class="fa-solid fa-hourglass-half"></i> לא אומתה'
     : (openGap
-      ? '<i class="fa-solid fa-triangle-exclamation"></i> נותר פער'
+      ? '<i class="fa-solid fa-triangle-exclamation"></i> ' + (di.shortItems.length ? 'פתוח — חסר זיכוי' : 'פתוח — פער בזיכוי')
       : '<i class="fa-solid fa-circle-check"></i> אומתה' + (r.creditedAt ? ' · ' + new Date(r.creditedAt).toLocaleDateString('he-IL') : ''));
   const rows = (r.items || []).map(it =>
     '<div class="flex items-center justify-between gap-2 py-1 border-b border-slate-100 last:border-0">' +
@@ -15402,6 +15467,8 @@ function returnCardInReceipts(r) {
       '<div class="text-sm font-black text-slate-600 shrink-0">' + (it.qty != null ? it.qty + ' יח׳' : '') + '</div>' +
     '</div>'
   ).join('');
+  const missingCredit = openGap && di.shortItems.length ? '<div class="bg-rose-50 border border-rose-200 text-rose-800 rounded-xl p-3 mt-2"><div class="font-black text-sm mb-1">חסר זיכוי על:</div>' +
+    di.shortItems.map(l => '<div class="flex justify-between gap-2 text-sm"><span>' + htmlEscape(l.name) + '</span><span class="shrink-0 font-bold">' + l.n + ' יח׳</span></div>').join('') + '</div>' : '';
   const actionArea = !credited
     ? '<div class="mt-2">' + creditAllocationsHtml(r) + '</div>' +
       retVerifyRowHtml(r) + '<button data-role="ret-edit-items" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + retUnsendBtnHtml(r) + (returns.filter(x => !x.credited).length >= 2 ? retMergeBtnHtml(r.id) : '') + '<button data-role="ret-delete" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>'
@@ -15422,7 +15489,7 @@ function returnCardInReceipts(r) {
         '<div class="flex items-center gap-2 shrink-0"><div class="text-left"><div class="text-[11px] text-slate-400">זיכוי ללא מע"מ</div><div class="font-black text-emerald-700">₪' + fmtMoney(rt.ex) + '</div></div><i class="fa-solid fa-chevron-down hist-chevron text-slate-400 transition-transform"></i></div>' +
       '</div>' +
     '</summary>' +
-    '<div class="px-4 pb-4"><div class="bg-slate-50 rounded-xl p-3 border border-slate-100">' + rows + '</div>' + retMergedNoteHtml(r) + actionArea + '</div>' +
+    '<div class="px-4 pb-4"><div class="bg-slate-50 rounded-xl p-3 border border-slate-100">' + rows + '</div>' + missingCredit + retMergedNoteHtml(r) + actionArea + '</div>' +
   '</details>';
 }
 function receiptsRangeHtml() {
@@ -20567,6 +20634,7 @@ app.addEventListener('click', (e) => {
   else if (role === 'rv-add-note') { const inp = $('rvAdd_' + id); const v = inp ? parseNoteVal(inp.value) : null; if (v == null) { showToast('הקלד את סכום תעודת הזיכוי המשלימה', null, null, 2200); return; } addCreditNote(id, v); }
   else if (role === 'rv-open') openReturnVerify(id, null);
   else if (role === 'rv-check') rvToggleCheck(parseInt(id, 10));
+  else if (role === 'rv-not-credited') rvMarkNotCredited(parseInt(id, 10));
   else if (role === 'rv-minus') rvStepNote(parseInt(id, 10), -1);
   else if (role === 'rv-plus') rvStepNote(parseInt(id, 10), 1);
   else if (role === 'rv-cancel') { returnVerify = null; setView(rvOrigin); }
