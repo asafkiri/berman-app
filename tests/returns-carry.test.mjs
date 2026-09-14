@@ -32,7 +32,7 @@ const htmlEscape = v => String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({ 
 
 const FNS = ['r2', 'lineTotalFromUnit', 'dDisp', 'fmtMoney', 'vatRateForDoc',
   'amountIncForDoc', 'returnTotals', 'creditAllocationList', 'creditAllocatedEx',
-  'returnsCreditForReturns', 'returnsBalance',
+  'returnsCreditForReturns', 'returnsBalance', 'returnCreditNotes', 'returnLinkedCreditEx', 'consumeReturnLinkedCredit',
   'returnCarriedNotes', 'retCarryKey', 'consumeReturnCarriedNotes', 'returnsDiscrepancyInfo',
   'returnCarriedVal', 'retCarryDocLabel', 'retCarryPlan', 'retCarrySideText',
   'retCarryBoxHtml', 'retCarryBtnHtml', 'buildReturnRow', 'anIsCarriedLine', 'anIsDepositLine'];
