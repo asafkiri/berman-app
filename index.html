@@ -44,6 +44,31 @@
       .hist-chevron { transition: transform .2s ease; }
       details[open] .hist-chevron { transform: rotate(180deg); }
 
+      /* Keep each paper row together while reviewing uncertain scan values. */
+      .ocr-review { margin-top:12px; }
+      .ocr-review-notice { border:1px solid #fbbf24; border-radius:12px; background:#fffbeb; padding:12px; }
+      .ocr-review-notice p { margin:4px 0 0; font-size:14px; line-height:1.6; }
+      .ocr-review-products { display:grid; gap:16px; margin-top:16px; }
+      .ocr-review-card { min-width:0; margin:0; padding:0; border:2px solid #cbd5e1; border-radius:14px; background:#fff; overflow:hidden; box-shadow:0 2px 5px rgb(15 23 42 / .06); }
+      .ocr-review-card-heading { padding:12px; border-bottom:1px solid #cbd5e1; background:#f1f5f9; }
+      .ocr-review-card-name { font-size:17px; font-weight:900; line-height:1.5; overflow-wrap:anywhere; }
+      .ocr-review-location { display:inline-block; margin-top:5px; padding:2px 8px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#475569; font-size:12px; font-weight:700; }
+      .ocr-review-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; padding:12px; }
+      .ocr-review-field { display:flex; min-width:0; flex-direction:column; gap:6px; font-size:14px; font-weight:700; }
+      .ocr-review-field-wide { grid-column:1 / -1; }
+      .ocr-review-field input { box-sizing:border-box; width:100%; min-width:0; min-height:48px; margin-top:auto; padding:10px; border:1px solid #94a3b8; border-radius:9px; background:#fff; color:#0f172a; font:800 18px 'Heebo',sans-serif; }
+      .ocr-review-field input:focus { border-color:#2563eb; outline:2px solid #93c5fd; outline-offset:1px; }
+      .ocr-review-summary .ocr-review-card-heading { background:#eff6ff; }
+      .price-audit-product-card { margin-top:12px; padding:12px; border:1px solid #cbd5e1; border-inline-start:4px solid #94a3b8; border-radius:12px; }
+      .price-audit-product-card[data-price-result="difference"] { border-inline-start-color:#e11d48; }
+      .price-audit-product-card[data-price-result="match"] { border-inline-start-color:#059669; }
+      html.dark .ocr-review-notice { background:#422f13; border-color:#b45309; }
+      html.dark .ocr-review-card { background:#1e293b; border-color:#64748b; }
+      html.dark .ocr-review-card-heading { background:#334155; border-color:#64748b; }
+      html.dark .ocr-review-location { background:#1e293b; border-color:#64748b; color:#cbd5e1; }
+      html.dark .ocr-review-summary .ocr-review-card-heading { background:#1e3a5f; }
+      html.dark .price-audit-product-card { border-color:#64748b; }
+
       /* ===== מצב כהה ===== */
       html.dark body, html.dark .bg-slate-50 { background-color:#0f172a !important; }
       html.dark .bg-white { background-color:#1e293b !important; }
@@ -812,7 +837,7 @@ const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '87'; // קישור זיכוי מתעודת חזרות חדשה לחוסר בזיכוי קודם
+const APP_VERSION = '88'; // כרטיס נפרד לכל מוצר בבדיקת הנתונים והמחירים מהתעודה
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -9813,13 +9838,37 @@ function bermanOcrReviewHtml() {
   const labels = { itemCode: 'קוד פריט', barcode: 'ברקוד', quantity: 'כמות', unitPriceExVat: 'מחיר יחידה מודפס',
     docNumber: 'מספר תעודה', docDate: 'תאריך תעודה', totalUnits: 'סך יחידות', printedLines: 'מספר שורות',
     netToChargeExVat: 'נטו לחיוב', vatAmountPrinted: 'סכום מע״מ', totalToChargeInclVat: 'סכום כולל מע״מ' };
-  return bermanOcrPendingDocs().map(doc => '<div data-ocr-review class="rounded-xl border-2 border-amber-400 bg-amber-50 p-3 mt-3">'
-    + '<div class="font-black">נשארו מספרים לבדיקה מול התעודה</div><p class="mt-1 text-sm">האימות האוטומטי לא הכריע. בדוק את המספרים המודפסים ועדכן אם צריך. הספירה שלך שמורה.</p>'
-    + bermanOcrReviewFields(doc).map(f => '<label class="block font-bold mt-3">' + htmlEscape(f.name || '')
-      + (f.line != null ? ' · שורה ' + f.line : '') + ' · ' + labels[f.field]
-      + '<input data-ocr-doc="' + doc.noteIndex + '" data-ocr-key="' + htmlEscape(f.key) + '" value="' + htmlEscape(String(f.value))
-      + '" class="block border rounded-lg bg-white w-full p-3 mt-1" dir="ltr"></label>').join('')
-    + '<button data-role="berman-ocr-confirm" data-id="' + doc.noteIndex + '" class="btn-tap w-full bg-amber-700 text-white rounded-xl p-3 mt-3 font-black">בדקתי מול התעודה — שמור את הנתונים</button></div>').join('');
+  return bermanOcrPendingDocs().map(doc => {
+    const raw = doc.__pricePaper || doc, groups = new Map();
+    bermanOcrReviewFields(doc).forEach(field => {
+      if (!groups.has(field.rowIndex)) groups.set(field.rowIndex, []);
+      groups.get(field.rowIndex).push(field);
+    });
+    // Group by the source row, not its name/code: repeated products and pages
+    // must keep their own inputs and the existing correction keys.
+    const cards = [...groups].sort(([a], [b]) => (a < 0 ? Infinity : a) - (b < 0 ? Infinity : b)).map(([rowIndex, fields]) => {
+      const row = rowIndex < 0 ? null : raw.rows[rowIndex];
+      const name = row ? row.description || 'מוצר ללא שם' : 'סיכום התעודה';
+      const location = row ? [row.sourcePage != null ? 'עמוד ' + row.sourcePage : '',
+        row.lineNumber != null ? 'שורה ' + row.lineNumber : 'מוצר ' + (rowIndex + 1)].filter(Boolean).join(' · ') : '';
+      return '<fieldset class="ocr-review-card' + (row ? '' : ' ocr-review-summary') + '">'
+        + '<legend class="sr-only">' + htmlEscape(name + (location ? ' · ' + location : '')) + '</legend>'
+        + '<div class="ocr-review-card-heading" aria-hidden="true"><div class="ocr-review-card-name">' + htmlEscape(name) + '</div>'
+        + (location ? '<span class="ocr-review-location">' + htmlEscape(location) + '</span>' : '') + '</div>'
+        + '<div class="ocr-review-fields">' + fields.map(f => {
+          const wide = !['quantity', 'unitPriceExVat', 'totalUnits', 'printedLines'].includes(f.field);
+          const inputMode = ['docNumber', 'docDate'].includes(f.field) ? 'text'
+            : ['itemCode', 'barcode', 'quantity', 'totalUnits', 'printedLines'].includes(f.field) ? 'numeric' : 'decimal';
+          return '<label class="ocr-review-field' + (wide || fields.length === 1 ? ' ocr-review-field-wide' : '') + '"><span>' + labels[f.field] + '</span>'
+            + '<input data-ocr-doc="' + doc.noteIndex + '" data-ocr-key="' + htmlEscape(f.key) + '" value="' + htmlEscape(String(f.value))
+            + '" type="text" inputmode="' + inputMode + '" dir="ltr"></label>';
+        }).join('') + '</div></fieldset>';
+    }).join('');
+    return '<div data-ocr-review class="ocr-review"><div class="ocr-review-notice">'
+      + '<div class="font-black">נשארו מספרים לבדיקה מול התעודה</div><p>בדוק בכל מוצר את הנתונים שמודפסים בתעודה ועדכן אם צריך. הספירה שלך שמורה.</p></div>'
+      + '<div class="ocr-review-products">' + cards + '</div>'
+      + '<button data-role="berman-ocr-confirm" data-id="' + doc.noteIndex + '" class="btn-tap w-full bg-amber-700 text-white rounded-xl p-3 mt-3 font-black">בדקתי מול התעודה — שמור את הנתונים</button></div>';
+  }).join('');
 }
 function bermanConfirmOcr(index) {
   const doc = bermanOcrPendingDocs().find(d => d.noteIndex === index);
@@ -10000,7 +10049,7 @@ function receiptPriceAuditHtml(report) {
   const money = n => n == null ? 'לא זמין' : '₪' + fmtUnitPrice(n, true);
   const confirmed = a.rows.filter(r => r.result === 'confirmed_inference').length;
   const title = differences.length ? 'המחיר בתעודה שונה מהמחיר שבמאגר' : (confirmed ? 'הבדיקה כוללת הנחה שאושרה מהתעודה' : a.complete ? 'המחירים שנבדקו תואמים' : 'בדיקת המחירים אינה מלאה');
-  const cards = a.rows.map(r => '<article data-price-row="' + htmlEscape(r.id) + '" data-price-result="' + htmlEscape(r.result || r.capability) + '" class="border-t border-slate-200 py-3">' +
+  const cards = a.rows.map(r => '<article data-price-row="' + htmlEscape(r.id) + '" data-price-result="' + htmlEscape(r.result || r.capability) + '" class="price-audit-product-card">' +
     '<div class="font-black text-base">' + htmlEscape(r.name) + '</div><div class="text-xs text-slate-600">' + htmlEscape(r.code) + ' · כמות בתעודה: ' + (r.quantity == null ? 'חסרה' : r.quantity) + '</div>' +
     '<div class="text-xs text-slate-600">תעודה ' + htmlEscape(r.documentNumber || String(r.documentIndex + 1) + ' (מספר לא נקרא)') + ' · עמוד ' + (r.page ?? 'לא נקרא') + ' · שורה ' + (r.line ?? 'לא נקראה') + ' · ' + htmlEscape(r.date || 'תאריך חסר') + '</div>' +
     '<div class="mt-2">מחיר יחידה מודפס: <b>' + money(r.originalUnitPrice) + '</b></div>' +
