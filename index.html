@@ -840,7 +840,7 @@ const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '95'; // הערת הטשטוש הוסרה — המדד נכשל בבדיקת שדה
+const APP_VERSION = '96'; // הערת הטשטוש הוסרה — המדד נכשל בבדיקת שדה
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -9001,9 +9001,25 @@ function aiPaperSpan(bright, rough, width, height, axis) {
   const lo = paper * 0.80, hi = paper * 1.12;
   // הצמיחה רק מרחיבה את הגרעין ולעולם אינה מכווצת אותו: הגרעין כבר עבר
   // את מבחן הבהירות והחלקות, ואסור שמדרון תאורה יוריד ממנו.
-  let a = core.lo, b = core.hi;
-  while (a > 0 && rawP85[a - 1] >= lo && rawP85[a - 1] <= hi) a--;
-  while (b < n - 1 && rawP85[b + 1] >= lo && rawP85[b + 1] <= hi) b++;
+  //
+  // חספוס אינו פוסל פס בצמיחה, אבל ריצה מחוספסת ארוכה כן עוצרת אותה.
+  // ההבחנה נמדדה על צילומים אמיתיים: קמט בקבלה הוא פס מקומי של שתי
+  // עמודות, ואילו מחצלת כסופה מחוספסת לכל האורך. בלי הכלל הזה הצמיחה
+  // נמשכה לתוך המחצלת בצד שבו בהירותה יורדת בהדרגה ואין מדרגה לעצור בה.
+  const roughRun = Math.max(3, Math.round(n * 0.04));
+  const inBand = (i) => rawP85[i] >= lo && rawP85[i] <= hi;
+  let a = core.lo, b = core.hi, streak = 0;
+  while (a > 0 && inBand(a - 1)) {
+    streak = sd[a - 1] > smoothCut ? streak + 1 : 0;
+    if (streak > roughRun) break;
+    a--;
+  }
+  streak = 0;
+  while (b < n - 1 && inBand(b + 1)) {
+    streak = sd[b + 1] > smoothCut ? streak + 1 : 0;
+    if (streak > roughRun) break;
+    b++;
+  }
   return { lo: a, hi: b };
 }
 // יעד ההקטנה. ה-API מקטין כל תמונה לתקציב patches לפני שהמודל רואה אותה,
