@@ -86,6 +86,28 @@ test('the promotion line is billed at the promotion price, with no phantom surpl
   assert.deepEqual(json(r, 'aiScanEvaluation.findings.map(f => f.type)').filter(t => t !== 'printed_promo'), []);
 });
 
+test('the comparison panel does not announce a surplus the scan already resolved', async () => {
+  const r = await deliveryWithCredit();
+  // הפאנל העליון נקרא לפני כל לחיצה — הוא חייב להראות את אותו כסף שהסריקה
+  // הכריעה, ולא את מחיר המאגר. v88 הציג כאן "עודף ₪34.21" מעל "הכול תקין".
+  assert.equal(r.run('reconcileNoteInc()'), r2(CHARGE_TOTAL - CREDIT_TOTAL));
+  assert.equal(r.run('reconcileGap()'), 0);
+  assert.equal(r.run('reconcileIsBalanced()'), true);
+  const line = json(r, 'reconcileData.find(l => l.productId === ' + JSON.stringify(BUNS.id) + ')');
+  assert.equal(r2(line.price), PROMO_UNIT);
+  assert.ok(line.promoOnPaper);
+  // המחיר בלבד — הכמויות וסימוני הבדיקה לא נגעו לפני אישור המשתמש.
+  assert.equal(line.received, 18);
+  assert.equal(line.checked, false);
+});
+
+test('a line the scan did not resolve keeps its catalog price', async () => {
+  const r = await deliveryWithCredit();
+  const bread = json(r, 'reconcileData.find(l => l.productId === ' + JSON.stringify(BREAD.id) + ')');
+  assert.equal(r2(bread.price), r2(BREAD.price));
+  assert.equal(bread.promoOnPaper, undefined);
+});
+
 test('applying the scan writes the paper price and records the promotion on the line', async () => {
   const r = await deliveryWithCredit();
   r.click('ai-apply');

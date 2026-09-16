@@ -837,7 +837,7 @@ const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '89'; // שלוש צורות המחיר מוכרעות לפי שורה; זיכוי במקבץ נספר עם הסימן שלו
+const APP_VERSION = '90'; // מסך ההשוואה מתמחר לפי הצורה שהסריקה הכריעה — בלי "עודף" מדומה
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -5484,6 +5484,36 @@ function promoOnPaperSummaryFromLines(lines) {
     promoName: String(l.promoOnPaper.promoName || ''), saved: r2((Number(l.promoOnPaper.expectedNet) - Number(l.promoOnPaper.promoFixedPrice)) * (Number(l.qty) || 0))
   }));
 }
+// v89: המחיר שהסריקה הכריעה לשורה כשהמבצע ירד כבר בתעודה. מסך ההשוואה חייב
+// לעבוד על אותו מחיר — בדיוק אותו כלל שנכתב ב-v61 עבור ההכרעה הידנית, שלא
+// חל על הכרעת הסריקה. בלעדיו המסך ממציא מחדש את הפער שהסריקה הרגע סגרה
+// ומכריז "עודף ₪34.21" על סחורה שהתקבלה במלואה ובמחיר הנכון.
+function bermanScanPromoOnPaperUnit(productId) {
+  const aggregates = aiScanEvaluation && aiScanEvaluation.aggregates instanceof Map ? aiScanEvaluation.aggregates : null;
+  const aggregate = aggregates ? aggregates.get(String(productId)) : null;
+  if (!aggregate || bermanAggregateForm(aggregate) !== BERMAN_FORM_PROMO_ON_PAPER) return 0;
+  const unit = Number(aggregate.paperUnitPrice) || 0;
+  return unit > 0 ? unit : 0;
+}
+// מחיל את אותה הכרעה על שורות השוואה שכבר נבנו — למקרה שהסריקה נחתה אחרי
+// שהמסך נפתח. נוגע במחיר בלבד: לא בכמויות, לא בסימוני הבדיקה, ולא בשורות
+// שהסריקה לא הכריעה. אידמפוטנטי — שורה שכבר במחיר הנכון אינה משתנה.
+function bermanRepriceReconcileFromScan() {
+  if (!Array.isArray(reconcileData)) return 0;
+  let changed = 0;
+  reconcileData.forEach(line => {
+    if (!line || line.isDeposit) return;
+    const unit = bermanScanPromoOnPaperUnit(line.productId);
+    if (!(unit > 0)) return;
+    const expectedNet = Number(line.basePrice) || Number(line.price) || 0;
+    if (!(expectedNet > unit + 0.005)) return;
+    if (Math.abs((Number(line.price) || 0) - unit) <= 0.005) return;
+    line.price = unit;
+    line.promoOnPaper = promoOnPaperStamp(expectedNet, unit, promoTitle(aiActiveFixedPromoFor(line.productId, priceAuditPromoDay())));
+    changed++;
+  });
+  return changed;
+}
 // סטטוס הנחות מרכזת בתעודה הנוכחית (לתצוגה בלבד — לא משפיע על סכום התעודה)
 // v49: מוצרים שהמבצע שלהם ירד כבר בתעודה הזאת (המחיר המודפס = מחיר המבצע).
 // ידוע משני מקורות: שורת ההשוואה שכבר נרשמה במחיר הנייר (אחרי לחיצת הקליטה),
@@ -6607,6 +6637,8 @@ function openReconcile() {
     if (paperPrice != null) row.promoOnPaper = promoOnPaperStamp(listed, paperPrice, promoTitle(mePromo));
     return row;
   });
+  // v89: והכרעת הסריקה — המקור הרביעי, ובמסלול הצילום הנפוץ ביותר.
+  bermanRepriceReconcileFromScan();
   // מיון חד-פעמי בפתיחה: שורות חריגות (חסר/עודף) למעלה — לא ממוין מחדש תוך כדי עבודה
   reconcileData.sort((a, b) => ((Number(a.noteQty) || 0) === (Number(a.received) || 0) ? 1 : 0) - ((Number(b.noteQty) || 0) === (Number(b.received) || 0) ? 1 : 0));
   // v173: שורות פיקדון נגזרות — מאושרות מראש (אין מה לסרוק פיזית); אם
@@ -8075,6 +8107,9 @@ function aiRefreshScanEvaluation() {
   // גם תקלה בהשוואה/תצוגה אינה מאבדת קריאה שכבר התקבלה מהשרת.
   try { aiScanEvaluation = aiEvaluateInvoiceScan(aiScanResponse); }
   finally { saveReceiptDraft(); }
+  // v89: סריקה שנחתה בזמן שמסך ההשוואה כבר פתוח מעדכנת את מחירי השורות
+  // שהיא הכריעה, כדי שהמסך לא יציג פער שהיא כבר סגרה.
+  try { bermanRepriceReconcileFromScan(); } catch (repriceError) {}
   return aiScanEvaluation;
 }
 // התמונות נשארות זמניות; כל פלט הפענוח ומספר העמודים המקורי נשמרים.
