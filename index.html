@@ -840,7 +840,7 @@ const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '92'; // מדידת איכות הצילום של התעודה, וניגודיות שלא מחשיכה את הנייר
+const APP_VERSION = '93'; // ללא הערת טשטוש הצילום של התעודה, וניגודיות שלא מחשיכה את הנייר
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -8856,7 +8856,21 @@ function aiMeasurePageQuality(luma, width, height, box) {
 function aiQualityAdvice(quality) {
   if (!quality) return null;
   if (quality.paperPx != null && quality.paperPx < 900) return { code: 'too_far', text: 'התעודה קטנה בפריים — צילום מקרוב ייקרא טוב יותר' };
-  if (quality.sharpness < 1.20) return { code: 'blurry', text: 'התמונה נראית מטושטשת — הנח את היד על הדלפק וצלם שוב' };
+  // הערת הטשטוש הוסרה אחרי בדיקת שדה. המדד sharpness ממשיך להישמר, אבל
+  // הוא אינו ראוי להצגה ולא לחסימה, ולכן אינו מייצר הערה:
+  //
+  //   תעודה חדה ב-4032px           1.321
+  //   אותה תעודה מוקטנת ל-1500px   0.918   (מתחת לכל סף סביר)
+  //   תעודה מטושטשת באמת, מוקטנת   0.986   (גבוה מהחדה)
+  //
+  // ההקטנה עצמה היא מסנן נמוך-תדר, ולכן היא מוחקת את ההבדל בין חד למטושטש
+  // עוד לפני שיש מה למדוד. וגם ברזולוציה מקורית היחס מתהפך תחת רעש חיישן:
+  // ככל שהתמונה מטושטשת יותר יש בה פחות אות, הרעש דומיננטי יותר, והיחס
+  // נוטה ל-1 — כלומר מטושטש נמדד כחד יותר מחד. ברעש sigma=8 מדדתי 0.997
+  // למטושטש מול 0.761 לחד.
+  //
+  // מדידת פוקוס אמינה בצילום טלפון דורשת כיול מול צילומים אמיתיים מתויגים.
+  // עד שיהיו — עדיף לשתוק מלצעוק על כל צילום.
   if (quality.glarePct > 10) return { code: 'glare', text: 'יש בוהק על הנייר — הזז אותו מתחת לתאורה' };
   if (quality.contrast < 35) return { code: 'faint', text: 'הדפוס חיוור מאוד — נסה תאורה חזקה יותר' };
   if (quality.paperLuma != null && quality.paperLuma < 110) return { code: 'dark', text: 'הצילום כהה — הדלק אור או התרחק מהצל' };
