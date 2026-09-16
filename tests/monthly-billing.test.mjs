@@ -17,10 +17,12 @@ const FNS = ['priceAuditCapture','makeOperationId','r2', 'fmtMoney', 'normalizeB
   'productDiscountPct', 'finalUnitPrice', 'promoFixedPrice', 'promoActive', 'promoForProduct',
   'promoTriggered', 'promoUnitPriceOf', 'effectivePrice', 'lineTotalFromUnit', 'todayStr',
   'activeReceiptDate', 'aiMoneyCents', 'aiDocRowUnits', 'bermanBuildCodeIndex',
-  'aiActiveFixedPromoFor', 'bermanAdaptScanPayload', 'bermanFullListMatch', 'bermanPaperAnchorCheck',
+  'aiActiveFixedPromoFor', 'bermanPrintedProvesPromo', 'bermanPriceForm', 'bermanAggregateForm', 'bermanAdaptScanPayload', 'bermanFullListMatch', 'bermanPaperAnchorCheck',
   'bermanPaperAnchorsFromScan', 'bermanScanDocumentDate', 'aiPriceBreakdownRows', 'aiPriceGapContext',
   'aiMonthEndPendingRecord', 'aiGapExplainedLine'];
-const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;'];
+const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;',
+  "const BERMAN_FORM_REGULAR = 'regular';", "const BERMAN_FORM_FULL_LIST = 'full_list';",
+  "const BERMAN_FORM_PROMO_ON_PAPER = 'promo_on_paper';"];
 const api = eval(extractSource(FNS, CONSTS) + '\n({ ' + FNS.join(', ') + ' })');
 function doc(rows, total, date = '01/09/2026') {
   return { docType: 'invoice', docDate: date, noteIndex: 0, netToChargeExVat: total,

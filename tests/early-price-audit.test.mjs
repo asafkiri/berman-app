@@ -114,9 +114,13 @@ if(supplier==='yotvata'){
  });
 }
 if(supplier==='berman'){
+ // v89: המחיר המותאם הוא הצורה שהוכרעה לשורה. מחיר מודפס ששווה למחיר המבצע
+ // הוא ראיה ישירה שהמבצע ירד כבר בתעודה, ולכן החיוב הוא 6 ולא 8. "מחיר מלא"
+ // אינו מוכרע בשורה — מודפס=מחירון הוא גם המצב הרגיל — ולכן נשאר 8 עד
+ // שהחשבון ברמת המסמך יכריע אחרת.
  for(const [unit,form] of [[10,'מחיר מלא'],[6,'מבצע חודשי'],[8,'הנחה קבועה'],[7,null],[4.8,null]])test('berman: active monthly promotion price '+unit,async()=>{
   const data=fixture({unit,base:10,discount:20,promo:{fixedPrice:6}}),c=create(data);c.expectedUploads=1;const html=await scan(c,data);const r=report(c).rows[0];
-  assert.equal(r.originalUnitPrice,unit);assert.equal(r.adaptedUnitPrice,8);assert.equal(r.expectedOptions.length,3);assert.equal(r.result,form?'match':'difference');
+  assert.equal(r.originalUnitPrice,unit);assert.equal(r.adaptedUnitPrice,unit===6?6:8);assert.equal(r.expectedOptions.length,3);assert.equal(r.result,form?'match':'difference');
   if(form)assert.deepEqual(r.matchedForms,[form]);else assert.match(html,/הפרש לשורה/);
   assert.match(html,/זיהוי המחיר אינו אישור שהתקבל זיכוי/);assert.equal(c.run('receiptPromoOnPaper.length'),0);assert.equal(requests(c),1);record('monthly price '+unit,c,html);
  });
