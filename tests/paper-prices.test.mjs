@@ -12,10 +12,12 @@ const FNS = ['priceAuditCapture','makeOperationId','r2', 'fmtMoney', 'normalizeB
   'productDiscountPct', 'finalUnitPrice', 'promoFixedPrice', 'promoActive', 'promoForProduct',
   'promoTriggered', 'promoUnitPriceOf', 'effectivePrice', 'lineTotalFromUnit', 'todayStr',
   'activeReceiptDate', 'aiMoneyCents', 'aiDocRowUnits', 'bermanBuildCodeIndex',
-  'aiActiveFixedPromoFor', 'bermanAdaptScanPayload', 'bermanFullListMatch', 'bermanPaperAnchorCheck',
+  'aiActiveFixedPromoFor', 'bermanPrintedProvesPromo', 'bermanPriceForm', 'bermanAggregateForm', 'bermanAdaptScanPayload', 'bermanFullListMatch', 'bermanPaperAnchorCheck',
   'bermanPaperAnchorsFromScan', 'monthEndPromoForProduct', 'monthEndUnitRebate',
   'receiptPromoOnPaperHas', 'receivingUnitPrice', 'bermanScanDocumentDate'];
-const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;'];
+const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;',
+  "const BERMAN_FORM_REGULAR = 'regular';", "const BERMAN_FORM_FULL_LIST = 'full_list';",
+  "const BERMAN_FORM_PROMO_ON_PAPER = 'promo_on_paper';"];
 const api = eval(extractSource(FNS, CONSTS) + '\n({ ' + FNS.join(', ') + ' })');
 const byCode = code => products.find(p => p.code === String(code));
 function document(rows, amount, date = '07/09/2026') {
@@ -55,10 +57,20 @@ check('each document in a batch uses its own printed prices', () => {
 check('preserve catalog prices and the existing reconciliation baseline', () => {
   const before = JSON.stringify({ products, promos, receiptPromoOnPaper });
   const row = adapt(document([[1231, 4, 8.5]], 34)).scan.documents[0].rows[0];
-  assert.equal(row.unitPriceExVat, byCode(1231).price);
-  assert.equal(row.lineTotalExVat, rounded(1231, 4));
+  // v89: כסף השורה הוא הצורה שהוכרעה לה — כאן המבצע שירד בתעודה. עד v88
+  // הוא היה תמיד המחיר הרגיל, והמבצע חי רק בשדה הצדדי.
+  assert.equal(row.__bermanPriceForm, 'promo_on_paper');
+  assert.equal(row.unitPriceExVat, 8.5);
+  assert.equal(row.lineTotalExVat, 34);
+  assert.equal(row.__bermanPaperLineTotalExVat, 34);
   assert.equal(row.printedListUnitPrice, 8.5);
   assert.equal(JSON.stringify({ products, promos, receiptPromoOnPaper }), before);
+});
+check('a regular-price row keeps the catalog net price and is marked regular', () => {
+  const row = adapt(document([[1231, 4, 20.46]], rounded(1231, 4))).scan.documents[0].rows[0];
+  assert.equal(row.__bermanPriceForm, 'regular');
+  assert.equal(row.unitPriceExVat, byCode(1231).price);
+  assert.equal(row.lineTotalExVat, rounded(1231, 4));
 });
 check('promotion on paper must not validate the regular-price total', () => {
   assert.equal(gate(document([[1231, 4, 8.5]], rounded(1231, 4))).ok, false);
