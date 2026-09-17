@@ -840,7 +840,7 @@ const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '98'; // עוגן טקסט: חיתוך אגרסיבי בשני גלאים בהסכמה
+const APP_VERSION = '99'; // ממצא שויך לשורה נעצר בה; נייר מאומת עונה על הפער במקום הבלש
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
