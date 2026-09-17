@@ -10424,9 +10424,22 @@ function priceAuditIdentity(mapped, raw) {
   const resolved = aiResolveInvoiceBarcode(mapped);
   return resolved && resolved.product || null;
 }
+// ממצא אימות ששויך לשורה מסוימת כבר מטופל בשורה עצמה: היא מסומנת ocr_uncertain
+// ואינה נבדקת. לכן אין סיבה שיפיל גם את שאר התעודה — וזה בדיוק מה שקרה: חמש
+// שורות בביטחון נמוך הפכו ל"19/19 לא נבדקו", ובדיקת המחיר האמיתית לא רצה על
+// אף שורה. ממצא שאינו מצביע על שום שורה — סתירה בבלוק הסיכום, פער בצ'קסאם,
+// ביטחון ברמת המסמך — כן מפיל את התעודה: אין שורה אחת שתישא אותו.
+// quantitySensitive מוסיף את הממצאים שיכולים להזיז כמות נספרת, עבור מסלול
+// הוכחת הכמויות שסופר אותן בפועל.
+function bermanOcrUnattributableIssues(doc, quantitySensitive) {
+  const verification = doc && doc.__bermanOcrVerification;
+  if (!verification || verification.status !== 'needs_review') return [];
+  return (verification.issues || []).filter(issue =>
+    (issue.rowIndex == null && issue.lineNumber == null)
+    || (quantitySensitive && ['quantity', 'row'].includes(issue.field)));
+}
 function priceAuditDocumentComplete(doc, raw, input) {
-  if (doc && doc.__bermanOcrVerification && doc.__bermanOcrVerification.status === 'needs_review'
-    && (doc.__bermanOcrVerification.issues || []).some(issue => issue.field !== 'unitPriceExVat')) return false;
+  if (bermanOcrUnattributableIssues(doc).length) return false;
   const rows = raw && raw.rows || [], pages = input && ((input.pages || []).length || input.restoredPageCount || input.savedPageCount);
   if (!raw || !rows.length || !pages || raw.pageCount !== pages || rows.some(r => !Number.isInteger(r.sourcePage) || r.sourcePage < 1 || r.sourcePage > pages || !(priceAuditNumber(r.quantity) > 0))) return false;
   if (raw.partial || raw.incomplete || (raw.warnings || []).some(w => /חסר.*(עמוד|דף)|missing.*page|partial|incomplete/i.test(w))) return false;
@@ -10483,8 +10496,9 @@ function bermanQuantityPaperState(catalog) {
   for (const doc of docs) {
     if (!Number.isInteger(doc.noteIndex) || doc.noteIndex < 0 || doc.noteIndex >= aiScanDocuments.length || seenNotes.has(doc.noteIndex)) return null;
     seenNotes.add(doc.noteIndex);
-    if (doc.__bermanOcrVerification && doc.__bermanOcrVerification.status === 'needs_review'
-      && (doc.__bermanOcrVerification.issues || []).some(issue => issue.field !== 'unitPriceExVat')) return null;
+    // כאן הכמות הנספרת עצמה היא התוצר, ולכן ממצא שנוגע בכמות של שורה עוצר גם
+    // כשהוא משויך לשורה — אין דרך לספור סביבו.
+    if (bermanOcrUnattributableIssues(doc, true).length) return null;
     const raw = doc.__pricePaper, input = aiScanDocuments[doc.noteIndex];
     const pages = input && ((input.pages || []).length || input.savedPageCount);
     if (!raw || !pages || raw.pageCount !== pages || raw.partial || raw.incomplete || raw.docType === 'credit'
@@ -10806,9 +10820,14 @@ function bermanOcrReviewFields(doc) {
     const index = issue.rowIndex != null ? issue.rowIndex : issue.lineNumber != null
       ? raw.rows.findIndex(row => row.sourcePage === issue.sourcePage && row.lineNumber === issue.lineNumber) : -1;
     const row = index >= 0 ? raw.rows[index] : null;
+    // ממצא ברמת המסמך שאינו נושא שם שדה בר-הקלדה ייצר עד כה בלוק ריק: כותרת
+    // "בדוק בכל מוצר" בלי אף מוצר, וכפתור אישור שאין מה לאשר בו. שלושת עוגני
+    // בלוק הסיכום הם בדיוק מה שמוכיח קריאה של תעודה שלמה, והם נראים במבט אחד
+    // בתחתית הנייר — אז הם מה שמוצג במקום מסך סתום.
     let names = row ? (issue.field === 'row' ? ['itemCode', 'quantity', 'unitPriceExVat']
       : issue.field === 'identity' ? ['itemCode'] : [issue.field])
-      : issue.field === 'totals' ? ['netToChargeExVat', 'vatAmountPrinted', 'totalToChargeInclVat'] : [issue.field];
+      : issue.field === 'totals' ? ['netToChargeExVat', 'vatAmountPrinted', 'totalToChargeInclVat']
+      : issue.field === 'document' ? ['netToChargeExVat', 'totalUnits', 'printedLines'] : [issue.field];
     names = names.filter(field => (row ? ['itemCode', 'barcode', 'quantity', 'unitPriceExVat']
       : ['docNumber', 'docDate', 'totalUnits', 'printedLines', 'netToChargeExVat', 'vatAmountPrinted', 'totalToChargeInclVat']).includes(field));
     for (const field of names) {
@@ -10827,7 +10846,15 @@ function bermanOcrReviewHtml() {
     netToChargeExVat: 'נטו לחיוב', vatAmountPrinted: 'סכום מע״מ', totalToChargeInclVat: 'סכום כולל מע״מ' };
   return bermanOcrPendingDocs().map(doc => {
     const raw = doc.__pricePaper || doc, groups = new Map();
-    bermanOcrReviewFields(doc).forEach(field => {
+    const reviewFields = bermanOcrReviewFields(doc);
+    // אין אף שדה להקלדה — אין מה לבקש מהמשתמש. עד כאן הוצג בלוק ריק עם כפתור
+    // אישור; במקומו נאמר במפורש מה לא אומת, ומאשרים במשפט אחד.
+    if (!reviewFields.length) {
+      return '<div data-ocr-review class="ocr-review"><div class="ocr-review-notice">'
+        + '<div class="font-black">הקריאה לא אומתה במלואה</div><p>לא נמצא מספר מסוים לבדיקה. השווה את בלוק הסיכום בתחתית התעודה למה שמוצג למעלה, ואשר. הספירה שלך שמורה.</p></div>'
+        + '<button data-role="berman-ocr-confirm" data-id="' + doc.noteIndex + '" class="btn-tap w-full bg-amber-700 text-white rounded-xl p-3 mt-3 font-black">בדקתי מול התעודה — המשך</button></div>';
+    }
+    reviewFields.forEach(field => {
       if (!groups.has(field.rowIndex)) groups.set(field.rowIndex, []);
       groups.get(field.rowIndex).push(field);
     });
