@@ -7707,7 +7707,22 @@ function detectiveIsSimpleSafeResult(result) {
   return result.solutions.every(sol => Array.isArray(sol.components) && sol.components.length === 1 &&
     sol.components[0].allocations.some(a => Array.isArray(a.moves) && a.moves.length === 1));
 }
+// הנייר צולם, נקרא שורה-שורה ואומת — ואז התשובה לפער כבר בידינו: איזה מוצר
+// ובאיזו כמות. הבלש נבנה למצב ההפוך, שבו אין תעודה מצולמת ואין ברירה אלא
+// לנחש מהכסף. בשטח הוא הוצג ראשון גם כשהנייר היה קרוי: על פער של ₪20.84
+// ושתי יחידות הוא הציע מוצר אחר לגמרי שסגר את הסכום עד 3 אגורות ואת היחידות
+// בדיוק — התאמה מתמטית מצוינת, ופשוט לא מה שקרה. שתי תשובות סותרות על אותו
+// פער הן בלבול, והניחוש הוא הפחות אמין מביניהן.
+// התנאי הוא בדיוק זה שפותח את כפתור ההחלה במסך הראיות (aiApplyInvoiceResult
+// דורש ev.valid), ולכן עוברים לשם רק כשהוא באמת יודע לסגור את ההפרש. פענוח
+// שאינו valid — תעודה שלא נקראה, שורה שאבדה, ברקוד לא מוכרע — אינו יודע את
+// התשובה, ושם הבלש עדיין הדרך הנכונה. אימות: קריאה שאיבדה שורה מייחסת "עודף
+// 11 יחידות" שמעולם לא קרה, ו-basketComplete אינו מבדיל אותה מקריאה תקינה.
+function aiPaperAnswersTheGap() {
+  return !!(AI_SCAN_ENABLED && aiScanEvaluation && aiScanEvaluation.valid);
+}
 function detectiveStepForResult(result) {
+  if (aiPaperAnswersTheGap()) return 'ai';
   if (detectiveIsSimpleSafeResult(result)) return 'detective';
   // v219: תוצאת חילוץ — מוצר בודד שסוגר את הפער רק בקירוב. מוצגת כהצעה עם
   // אזהרת "בדוק את הסכום שהוקלד", במקום ויתור מוחלט של "לא הצליח לזהות".
@@ -15038,7 +15053,9 @@ function renderReconcile() {
       rcStep = detectiveStepForResult(ds);
       // v14: מאגר בינוני (5–96) בלי עוגן יחידות — קומת השאלות של הבלש
       // נכנסת לפני ויתור לסריקה; אם אין שאלה מפרידה, נופלים לסריקה כרגיל.
-      if (rcStep === 'ai' && ds && ds.complete && ds.overflow && ds.unitGap == null && ds.solutions.length && detectiveBestQuestion(ds)) rcStep = 'detective-question';
+      // קומת השאלות של הבלש נבדקת אחרי הניתוב, ולכן היא הייתה מחזירה אותו
+      // דרך הדלת האחורית גם כשהנייר כבר יודע את התשובה.
+      if (rcStep === 'ai' && !aiPaperAnswersTheGap() && ds && ds.complete && ds.overflow && ds.unitGap == null && ds.solutions.length && detectiveBestQuestion(ds)) rcStep = 'detective-question';
     }
   }
   // אם התאזן בכל שלב — עוברים ל"מאוזן"
