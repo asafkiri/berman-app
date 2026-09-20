@@ -7,11 +7,12 @@
 // הרצה: node tests/paper-anchors.test.mjs
 import { extractSource } from './extract.mjs';
 
-const FNS = ['r2', 'fmtMoney', 'aiMoneyCents', 'aiDocRowUnits', 'bermanFullListMatch', 'bermanPaperAnchorCheck', 'bermanPaperAnchorsFromScan'];
+const FNS = ['r2', 'fmtMoney', 'aiMoneyCents', 'aiDocRowUnits', 'bermanFullListMatch', 'bermanPaperAnchorCheck',
+  'bermanSeparateDocumentsCheck', 'bermanSeparateDocumentsProblem', 'bermanPaperAnchorsFromScan', 'bermanPaperScanNotes'];
 const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;'];
 // eslint-disable-next-line no-eval
 const api = eval(extractSource(FNS, CONSTS) + '\n({ ' + FNS.join(', ') + ' })');
-const { bermanPaperAnchorCheck, bermanPaperAnchorsFromScan } = api;
+const { bermanPaperAnchorCheck, bermanPaperAnchorsFromScan, bermanSeparateDocumentsCheck, bermanPaperScanNotes } = api;
 
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
@@ -134,6 +135,78 @@ check('הבעיה מיוחסת לתעודה הנכונה', mixed.problems.some(p
 section('[9] סריקה ריקה');
 const empty = bermanPaperAnchorsFromScan({ scan: { documents: [] } });
 check('לא ok, ולא קורס', empty.ok === false && empty.problems.length === 1);
+
+// v100: שתי תעודות שצולמו ככרטיס אחד. המקרה מ-20.9.2026: תעודה 244685560
+// (8 שורות · 63 יח׳ · ₪388.11) ותעודה 290094585 (שורה אחת · 8 יח׳ · ₪39.30)
+// כשני עמודים של כרטיס אחד — השרת החזיר 9 שורות מול הסיכום של העמוד הראשון.
+section('[10] שתי תעודות בכרטיס אחד');
+function onPage(rows, page) { return rows.map(r => Object.assign({ sourcePage: page }, r)); }
+const SECOND = [row('ברמן אסלי 5 פיתות', 8, 4.9131)]; // 39.30 — התעודה השנייה
+const merged = doc(onPage(CLEAN, 1).concat(onPage(SECOND, 2)), { invoiceNumber: '244685560', pageCount: 2 });
+const firstOnly = doc(CLEAN); // בלוק הסיכום של העמוד הראשון בלבד
+merged.subtotalExVat = firstOnly.subtotalExVat; merged.printedUnits = firstOnly.printedUnits; merged.printedLines = firstOnly.printedLines;
+const c10 = bermanPaperAnchorCheck(merged);
+check('התעודה הממוזגת נכשלת בשלושת העוגנים', !c10.ok && c10.money === false && c10.units === false && c10.lines === false);
+const split10 = bermanSeparateDocumentsCheck(merged, c10);
+check('העמוד הראשון נסגר לבדו — הזיהוי מבני, בלי אזהרה מהמודל', !!split10 && split10.closedPages === 1 && split10.firstExtraPage === 2, JSON.stringify(split10));
+check('השורות העודפות נספרות', split10 && split10.extraRows === 1 && split10.extraUnits === 8);
+const g10 = bermanPaperAnchorsFromScan(scan([merged]));
+check('השער סגור ובלי עוגנים', !g10.ok && g10.notes.length === 0);
+check('הודעה אחת במקום שלושה פערים', g10.problems.length === 1, JSON.stringify(g10.problems));
+check('ההודעה אומרת מה קרה', /יותר מתעודה אחת/.test(g10.problems[0]) && /244685560/.test(g10.problems[0]) && /מעמוד 2/.test(g10.problems[0]) && /שורה אחת · 8 יח׳/.test(g10.problems[0]), g10.problems[0]);
+check('ההודעה אומרת מה לעשות', /כרטיס משלה/.test(g10.problems[0]));
+check('ההודעה אינה מפנה לאחוז ההנחה', !/אחוז הנחה/.test(g10.problems[0]));
+check('הצילום הבא נפתח בשני כרטיסים', g10.documentCount === 2, String(g10.documentCount));
+check('מפוצל לשני כרטיסים — שתי התעודות עוברות', bermanPaperAnchorsFromScan(scan([doc(CLEAN), doc(SECOND)])).ok);
+
+// עיגול של הספק בעמוד הראשון אינו מסתיר את הפיצול: 22 אג׳ בתוך הסיבולת של 30.
+const mergedGap = doc(onPage(CLEAN, 1).concat(onPage(SECOND, 2)));
+mergedGap.subtotalExVat = withGap(CLEAN, 22).subtotalExVat; mergedGap.printedUnits = firstOnly.printedUnits; mergedGap.printedLines = firstOnly.printedLines;
+check('הפיצול מזוהה גם עם פער עיגול בעמוד הראשון', !!bermanSeparateDocumentsCheck(mergedGap, bermanPaperAnchorCheck(mergedGap)));
+
+// תעודה אמיתית של שני עמודים: בלוק הסיכום מכסה את שניהם — אין פיצול.
+const twoPages = doc(onPage(CLEAN.slice(0, 3), 1).concat(onPage(CLEAN.slice(3), 2)), { pageCount: 2 });
+check('תעודה של שני עמודים שנסגרת אינה מפוצלת', bermanPaperAnchorCheck(twoPages).ok && bermanSeparateDocumentsCheck(twoPages, bermanPaperAnchorCheck(twoPages)) === null);
+check('והשער פתוח לה כרגיל', bermanPaperAnchorsFromScan(scan([twoPages])).ok);
+
+// שורה שפוספסה בעמוד הראשון של תעודה דו-עמודית: העמוד הראשון אינו נסגר לבדו,
+// ולכן ההודעות הישנות (מה לא נסגר) נשארות — לא ממציאים פיצול.
+const twoPagesMissing = doc(onPage(CLEAN.slice(0, 3), 1).concat(onPage(CLEAN.slice(3), 2)), { pageCount: 2 });
+twoPagesMissing.rows = twoPagesMissing.rows.slice(1);
+const g10b = bermanPaperAnchorsFromScan(scan([twoPagesMissing]));
+check('בלי עמוד שנסגר לבדו אין פיצול', bermanSeparateDocumentsCheck(twoPagesMissing, bermanPaperAnchorCheck(twoPagesMissing)) === null);
+check('וההודעות המספריות נשארות', !g10b.ok && g10b.problems.some(p => p.includes('סה״כ שורות')) && g10b.problems.every(p => !p.includes('יותר מתעודה אחת')), JSON.stringify(g10b.problems));
+
+// שורות בלי sourcePage (תשובה ישנה) — עמוד אחד, אין מה לפצל.
+const legacy = doc(CLEAN.concat(SECOND));
+legacy.subtotalExVat = firstOnly.subtotalExVat; legacy.printedUnits = firstOnly.printedUnits; legacy.printedLines = firstOnly.printedLines;
+check('בלי מספרי עמודים ההתנהגות הישנה נשמרת', bermanSeparateDocumentsCheck(legacy, bermanPaperAnchorCheck(legacy)) === null && bermanPaperAnchorsFromScan(scan([legacy])).problems.length === 3);
+
+// SERVICE_VERSION 6: השרת מדווח separateDocuments במבנה. גם כשהעמוד הראשון
+// אינו נסגר לבדו (60 אג׳ — אחוז הנחה שהתיישן בנוסף לפיצול) ההסבר הראשון הוא הפיצול.
+const reported = doc(onPage(CLEAN, 1).concat(onPage(SECOND, 2)), { invoiceNumber: '244685560', pageCount: 2,
+  separateDocuments: [{ sourcePage: 2, docNumber: '290094585' }] });
+reported.subtotalExVat = withGap(CLEAN, 60).subtotalExVat; reported.printedUnits = firstOnly.printedUnits; reported.printedLines = firstOnly.printedLines;
+const g10c = bermanPaperAnchorsFromScan(scan([reported]));
+check('דיווח השרת מכריע גם בלי סגירה מבנית', !g10c.ok && g10c.problems.length === 1 && /290094585/.test(g10c.problems[0]) && /מעמוד 2/.test(g10c.problems[0]), JSON.stringify(g10c.problems));
+check('הודעת השרת אינה טוענת שהעמוד הראשון נסגר', !/נסגרת לבדה/.test(g10c.problems[0]));
+// תעודה שדווחה כמפוצלת לעולם אינה מאומצת בשקט — גם אם המודל השמיט את השורות של העמוד השני.
+const reportedButClosing = doc(onPage(CLEAN, 1), { pageCount: 2, separateDocuments: [{ sourcePage: 2, docNumber: '290094585' }] });
+const g10d = bermanPaperAnchorsFromScan(scan([reportedButClosing]));
+check('תעודה שדווחה כמפוצלת אינה מאומצת בשקט', bermanPaperAnchorCheck(reportedButClosing).ok && !g10d.ok && g10d.notes.length === 0 && /290094585/.test(g10d.problems[0]), JSON.stringify(g10d.problems));
+check('ומבקשת שני כרטיסים', g10d.documentCount === 2);
+check('דיווח ריק אינו פיצול', bermanPaperAnchorsFromScan(scan([doc(CLEAN, { separateDocuments: [] })])).ok);
+
+// במקבץ: הפיצול מיוחס לתעודה הנכונה, וכרטיס לכל תעודה שנמצאה.
+const bundle = bermanPaperAnchorsFromScan(scan([doc(CLEAN), merged]));
+check('במקבץ הפיצול מיוחס לתעודה הנכונה', !bundle.ok && bundle.problems.length === 1 && bundle.problems[0].startsWith('תעודה 2: '), JSON.stringify(bundle.problems));
+check('ומספר הכרטיסים כולל את התעודה שהתגלתה', bundle.documentCount === 3);
+
+// הערות המודל מגיעות למסך הקליטה: אלה שעל התעודה ואלה שעל כל הסריקה.
+const notes = bermanPaperScanNotes({ scan: { warnings: ['קבוצת התמונות מכילה בפועל שתי תעודות מודפסות נפרדות.'],
+  documents: [Object.assign({}, merged, { warnings: ['עמוד 2 אינו המשך של התעודה שבעמוד 1 (290094585).'] })] } });
+check('הערות התעודה והסריקה נאספות יחד', notes.length === 2 && notes[0].includes('290094585') && notes[1].includes('שתי תעודות'), JSON.stringify(notes));
+check('סריקה ריקה — בלי הערות ובלי קריסה', bermanPaperScanNotes(null).length === 0);
 
 console.log('\n' + (fail ? '✗ ' + fail + ' נכשלו' : '✓ הכל עבר') + ' (' + pass + '/' + (pass + fail) + ')');
 process.exit(fail ? 1 : 0);

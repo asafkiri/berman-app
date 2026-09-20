@@ -18,7 +18,7 @@ const FNS = ['priceAuditCapture','makeOperationId','r2', 'fmtMoney', 'normalizeB
   'promoTriggered', 'promoUnitPriceOf', 'effectivePrice', 'lineTotalFromUnit', 'todayStr',
   'activeReceiptDate', 'aiMoneyCents', 'aiDocRowUnits', 'bermanBuildCodeIndex',
   'aiActiveFixedPromoFor', 'bermanPrintedProvesPromo', 'bermanPriceForm', 'bermanAggregateForm', 'bermanAdaptScanPayload', 'bermanFullListMatch', 'bermanPaperAnchorCheck',
-  'bermanPaperAnchorsFromScan', 'bermanScanDocumentDate', 'aiPriceBreakdownRows', 'aiPriceGapContext',
+  'bermanSeparateDocumentsCheck', 'bermanSeparateDocumentsProblem', 'bermanPaperAnchorsFromScan', 'bermanScanDocumentDate', 'aiPriceBreakdownRows', 'aiPriceGapContext',
   'aiMonthEndPendingRecord', 'aiGapExplainedLine'];
 const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;',
   "const BERMAN_FORM_REGULAR = 'regular';", "const BERMAN_FORM_FULL_LIST = 'full_list';",
