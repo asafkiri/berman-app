@@ -10524,6 +10524,10 @@ function bermanQuantityPaperState(catalog) {
       || (raw.warnings || []).some(w => /חסר.*(עמוד|דף)|missing.*page|partial|incomplete/i.test(String(w)))
       || !Array.isArray(raw.rows) || !raw.rows.length || raw.rows.length !== doc.rows.length
       || Number(raw.printedLines) !== raw.rows.length) return null;
+    // v100: שתי תעודות בכרטיס אחד — גם כשהמודל השמיט את שורות העמוד השני
+    // והעמוד הראשון נסגר לבדו. בלי זה דחיית ההנחה הייתה מאמצת את התעודה
+    // הראשונה בשקט, והשנייה הייתה נעלמת.
+    if (bermanDocHasSeparateDocuments(doc, catalog)) return null;
     if (!priceAuditDate(doc.__priceConfirmedDate || raw.docDate || receiptDocDate)) return null;
     const amount = Number(raw.netToChargeExVat ?? raw.subtotalExVat), units = Number(raw.totalUnits ?? raw.printedUnits);
     if (!Number.isFinite(amount) || !(amount > 0) || !Number.isSafeInteger(units) || units <= 0) return null;
@@ -10604,8 +10608,14 @@ function bermanMissingDiscountHtml() {
     '<div class="font-black text-lg text-purple-900">' + (priceCheck ? 'הסכום עדיין לא תואם — בדוק את ההנחה שנמסרה' : 'חסר אחוז הנחה — לבירור מול הספק') + '</div>' +
     '<p class="text-sm text-purple-900 mt-2">אם ההנחה ידועה, הזן אותה כאן. אחרת אפשר לבדוק כמויות ולשמור את התעודה פתוחה עד לבירור.</p>' +
     missing.map(p => bermanKnownDiscountHtml(p, '', bermanDeferredSourceKey())).join('') +
+    // v100: כשהצילומים מכילים יותר מתעודה אחת אין נייר להמשיך מולו — הכפתור
+    // היה מוביל רק להודעת סירוב. הצילום מחדש קודם, ההנחה אחריו.
     (deferred ? '<div class="font-bold text-purple-900 mt-3">ההנחה תושלם בהמשך. אפשר להמשיך בבדיקת הכמויות.</div>' :
+      bermanScanHasSeparateDocuments() ? '<div class="font-bold text-purple-900 mt-3">הצילומים מכילים יותר מתעודה אחת — צלם קודם את התעודות מחדש, ואז השלם את ההנחה.</div>' :
       '<button data-role="berman-discount-later" class="btn-tap w-full rounded-xl border-2 border-purple-400 bg-white text-purple-900 p-3 mt-3 font-black">אשלים מול הספק בהמשך — המשך לבדיקת כמויות</button>') + '</section>';
+}
+function bermanScanHasSeparateDocuments() {
+  try { return bermanPaperAnchorsFromScan(aiScanResponse).splits.some(Boolean); } catch (error) { return false; }
 }
 // Rebuild amounts from the prices/promotions captured with this receipt, not
 // today's catalog. Physical quantities and the original OCR evidence are retained.
@@ -10830,8 +10840,11 @@ function bermanDiscountAction(target) {
   return false;
 }
 function bermanOcrPendingDocs() {
+  // v100: תעודה שבתוכה תעודה נוספת ממילא תצולם מחדש. דיאלוג האישור שלה היה
+  // מבקש לאשר "סך יחידות" ו"מספר שורות" שהפיצול כבר מסביר — ומי שהיה מקליד
+  // בו את הסכומים הממוזגים היה הופך את ההסבר בחזרה לפער כסף.
   return (aiScanResponse && aiScanResponse.scan && aiScanResponse.scan.documents || [])
-    .filter(doc => doc.__bermanOcrVerification && doc.__bermanOcrVerification.status === 'needs_review');
+    .filter(doc => doc.__bermanOcrVerification && doc.__bermanOcrVerification.status === 'needs_review' && !bermanDocHasSeparateDocuments(doc));
 }
 function bermanOcrReviewFields(doc) {
   const raw = doc.__pricePaper || doc, fields = [], seen = new Set();
@@ -13014,16 +13027,20 @@ function bermanPaperAnchorCheck(doc, catalog) {
   if (printedLines == null) missing.push('"סה״כ שורות"');
   if (!amountsPresent) missing.push('מחיר או זיהוי מוצר לחישוב אחת השורות');
   const failed = [];
-  if (discountMissing) failed.push('חסרה הגדרה של אחוז הנחה למוצר בתעודה. בדוק את חישוב ההנחה בבדיקת המחירים.');
+  const discountProblem = discountMissing ? 'חסרה הגדרה של אחוז הנחה למוצר בתעודה. בדוק את חישוב ההנחה בבדיקת המחירים.' : null;
+  if (discountProblem) failed.push(discountProblem);
   // הפער נאמר באגורות לצד הסיבולת שנחרגה, ולא רק כשני סכומים להשוואה. פער
   // שחורג מסיבולת העיגול הוא כמעט תמיד אחוז הנחה שהתיישן בכרטיס מוצר, ולכן
   // זו ההנחיה — ולא "צלם שוב", שלא יעזור כשהקריאה נכונה והמחיר הוא שאינו.
-  if (money === false) failed.push('החישוב לפי המחירון והמבצעים (₪' + fmtMoney(rowsCents / 100) + ') אינו תואם ל"נטו לחיוב" המודפס (₪' + fmtMoney(printedNet / 100) + ') — פער של ' + Math.abs(gapCents) + ' אג׳, מעל סיבולת העיגול (' + tolCents + ' אג׳). כמעט תמיד זה אחוז הנחה שהתיישן בכרטיס מוצר, לא עיגול');
+  // v100: ההנחיה נאמרת רק כששני העוגנים המדויקים סגורים. כשהיחידות או השורות
+  // לא נסגרו, הן כבר מסבירות את פער הכסף — והפניה לאחוז ההנחה מטעה.
+  const discountHint = units === false || lines === false ? '' : '. כמעט תמיד זה אחוז הנחה שהתיישן בכרטיס מוצר, לא עיגול';
+  if (money === false) failed.push('החישוב לפי המחירון והמבצעים (₪' + fmtMoney(rowsCents / 100) + ') אינו תואם ל"נטו לחיוב" המודפס (₪' + fmtMoney(printedNet / 100) + ') — פער של ' + Math.abs(gapCents) + ' אג׳, מעל סיבולת העיגול (' + tolCents + ' אג׳)' + discountHint);
   if (units === false) failed.push('סכום הכמויות שנקראו (' + Math.round(readUnits) + ') אינו תואם ל"סה״כ כללי" המודפס (' + printedUnits + ')');
   if (lines === false) failed.push('מספר השורות שנקראו (' + rows.length + ') אינו תואם ל"סה״כ שורות" המודפס (' + printedLines + ')');
   return {
     ok: money === true && units === true && lines === true,
-    money, units, lines, missing, failed,
+    money, units, lines, missing, failed, discountProblem,
     gapCents, tolCents,
     roundingGapCents: doc ? doc.__bermanRoundingGapCents : 0,
     amount: printedNet == null ? null : r2(printedNet / 100),
@@ -13045,9 +13062,18 @@ function bermanPaperAnchorCheck(doc, catalog) {
 function bermanSeparateDocumentsCheck(doc, check, catalog) {
   const rows = doc && Array.isArray(doc.rows) ? doc.rows : [];
   const pages = rows.map(row => Number(row && row.sourcePage) || 1);
-  const reported = (doc && Array.isArray(doc.separateDocuments) ? doc.separateDocuments : [])
-    .filter(item => item && Number.isFinite(Number(item.sourcePage)))
-    .map(item => ({ sourcePage: Math.max(2, Math.round(Number(item.sourcePage))), docNumber: item.docNumber == null ? null : String(item.docNumber) }));
+  const ownNumber = doc && (doc.invoiceNumber != null ? String(doc.invoiceNumber) : doc.docNumber != null ? String(doc.docNumber) : null);
+  // דיווח השרת, באותה משמעות שבה השרת עצמו קורא אותו: תעודה נוספת מתחילה
+  // מעמוד 2 ואילך (עמוד 1 הוא תמיד התעודה הראשונה), כל עמוד פעם אחת, ועמוד
+  // שנושא את מספר התעודה עצמה הוא צילום נוסף של אותו נייר — לא תעודה אחרת.
+  const reportedPages = new Map();
+  (doc && Array.isArray(doc.separateDocuments) ? doc.separateDocuments : []).forEach(item => {
+    const page = item && Number(item.sourcePage);
+    const docNumber = item && item.docNumber != null ? String(item.docNumber) : null;
+    if (!Number.isInteger(page) || page < 2 || (docNumber && docNumber === ownNumber) || reportedPages.has(page)) return;
+    reportedPages.set(page, docNumber);
+  });
+  const reported = Array.from(reportedPages, ([sourcePage, docNumber]) => ({ sourcePage, docNumber }));
   const lastPage = pages.reduce((max, page) => Math.max(max, page), 1);
   let closed = null;
   if (check && !check.ok) {
@@ -13055,14 +13081,21 @@ function bermanSeparateDocumentsCheck(doc, check, catalog) {
       const subset = rows.filter((row, i) => pages[i] <= page);
       if (!subset.length) continue;
       const partial = bermanPaperAnchorCheck(Object.assign({}, doc, { rows: subset }), catalog);
-      if (partial.ok) closed = { pages: page, check: partial };
+      // שני העוגנים המדויקים סגורים על קידומת ממש של העמודים — זו ההוכחה. כסף
+      // שאי אפשר לחשב (אחוז הנחה חסר) אינו סותר אותה; כסף שנכשל — כן.
+      if (partial.units === true && partial.lines === true && partial.money !== false) closed = { pages: page, check: partial };
     }
   }
   if (!closed && !reported.length) return null;
   const firstExtraPage = closed ? closed.pages + 1 : reported.reduce((min, item) => Math.min(min, item.sourcePage), Infinity);
   const extraRows = rows.filter((row, i) => pages[i] >= firstExtraPage);
+  // דיווח שהמבנה סותר: כל השורות, כולל אלה שבעמוד "הנוסף", סוגרות יחד את
+  // בלוק הסיכום — אז העמוד הזה הוא המשך התעודה, לא תעודה אחרת. דיווח בלי
+  // שורות בעמוד הנוסף (המודל השמיט אותן) נשאר חוסם — אין מה שיסתור אותו.
+  if (!closed && check && check.ok && extraRows.length) return null;
   return {
     firstExtraPage,
+    lastPage,
     closedPages: closed ? closed.pages : null,
     closedCheck: closed ? closed.check : null,
     extraRows: extraRows.length,
@@ -13079,8 +13112,14 @@ function bermanSeparateDocumentsProblem(doc, split) {
   const closedText = split.closedCheck
     ? first + ' מסתיימת בעמוד ' + split.closedPages + ' ונסגרת לבדה מול בלוק הסיכום שלה (' + lines(split.closedCheck.printedLines) + ' · ' + split.closedCheck.printedUnits + ' יח׳ · ₪' + fmtMoney(split.closedCheck.amount) + ')'
     : first + ' מסתיימת לפני עמוד ' + split.firstExtraPage;
-  return 'הצילומים מכילים יותר מתעודה אחת: ' + closedText + ', ומעמוד ' + split.firstExtraPage + ' מתחילה תעודה אחרת' + others +
-    ' — ' + lines(split.extraRows) + ' · ' + split.extraUnits + ' יח׳ שאינן שייכות לה. צלם כל תעודה בכרטיס משלה ("עוד תעודה מאותו משלוח"), לא כעמוד נוסף.';
+  // בלי דיווח מהשרת אי אפשר לדעת אם העמודים שאחרי הסגירה הם תעודה אחת או
+  // יותר — נאמר "לפחות אחת", והכרטיסים הנוספים מתווספים במסך הצילום.
+  const another = !split.docNumbers.length && split.lastPage > split.firstExtraPage ? 'תעודה אחרת אחת לפחות' : 'תעודה אחרת';
+  const extra = split.extraRows
+    ? ' — ' + lines(split.extraRows) + ' · ' + split.extraUnits + ' יח׳ שאינן שייכות לה'
+    : ', ושורותיה לא נקראו כלל';
+  return 'הצילומים מכילים יותר מתעודה אחת: ' + closedText + ', ומעמוד ' + split.firstExtraPage + ' מתחילה ' + another + others + extra +
+    '. צלם כל תעודה בכרטיס משלה ("עוד תעודה מאותו משלוח"), לא כעמוד נוסף.';
 }
 // העוגנים כפי שנקראו מהנייר, או הסיבה שאי אפשר לסמוך עליהם. כל התעודות
 // במקבץ חייבות לעבור: מספיק שאחת מהן לא נסגרת בתוך עצמה כדי שההקלדה
@@ -13095,9 +13134,19 @@ function bermanPaperAnchorsFromScan(scan) {
     const prefix = docs.length > 1 ? 'תעודה ' + (i + 1) + ': ' : '';
     if (c.missing.length) problems.push(prefix + 'לא נקרא ' + c.missing.join(' ולא ') + ' מתחתית הנייר');
     // v100: שתי תעודות בכרטיס אחד — ההסבר מחליף את שלושת הפערים ואת ההפניה
-    // לאחוז ההנחה, שאינם הסיבה.
-    if (splits[i]) problems.push(prefix + bermanSeparateDocumentsProblem(docs[i], splits[i]));
-    else c.failed.forEach(f => problems.push(prefix + f));
+    // לאחוז ההנחה, שאינם הסיבה. אחוז הנחה שחסר באמת נשאר משימה גלויה.
+    if (splits[i]) {
+      problems.push(prefix + bermanSeparateDocumentsProblem(docs[i], splits[i]));
+      if (c.discountProblem) problems.push(prefix + c.discountProblem);
+    } else {
+      c.failed.forEach(f => problems.push(prefix + f));
+      // העמוד הראשון לא נסגר לבדו (למשל אחוז הנחה שהתיישן בנוסף לפיצול), אבל
+      // הסימן של שתי תעודות בכרטיס אחד עדיין גלוי: יותר מעמוד אחד, ויותר
+      // שורות ממה שבלוק הסיכום מכריז. נאמר כאפשרות, לא כקביעה.
+      const rows = docs[i] && Array.isArray(docs[i].rows) ? docs[i].rows : [];
+      const multiPage = rows.some(row => Number(row && row.sourcePage) > 1);
+      if (c.lines === false && multiPage && rows.length > c.printedLines) problems.push(prefix + 'השורות נקראו מיותר מעמוד אחד ומספרן עולה על "סה״כ שורות" המודפס — ייתכן שהצילומים מכילים יותר מתעודה אחת. אם כך, צלם כל תעודה בכרטיס משלה.');
+    }
   });
   const ok = checks.every(c => c.ok) && splits.every(s => !s);
   return {
@@ -13122,7 +13171,17 @@ function bermanPaperScanNotes(response) {
   docs.forEach((doc, i) => (Array.isArray(doc && doc.warnings) ? doc.warnings : [])
     .forEach(w => notes.push((docs.length > 1 ? 'תעודה ' + (i + 1) + ': ' : '') + String(w))));
   (scan && Array.isArray(scan.warnings) ? scan.warnings : []).forEach(w => notes.push(String(w)));
-  return notes.filter(Boolean);
+  // כשזוהו שתי תעודות בכרטיס אחד, "לא ניתן לאמת את הקריאה: סך יחידות" של
+  // השרת אינה ספק בקריאה אלא אותו ממצא עצמו — והיא הייתה סותרת את ההסבר.
+  let split = false;
+  try { split = bermanPaperAnchorsFromScan(response).splits.some(Boolean); } catch (error) { split = false; }
+  return notes.filter(note => note && !(split && /לא ניתן לאמת את הקריאה/.test(note)));
+}
+// v100: תעודה שבתוכה תעודה נוספת אינה נייר שאפשר לעבוד מולו — לא לבדיקת
+// כמויות, לא לדחיית הנחה ולא לדיאלוג אישור הקריאה. הצילום מחדש מחליף אותה.
+function bermanDocHasSeparateDocuments(doc, catalog) {
+  try { return !!bermanSeparateDocumentsCheck(doc, bermanPaperAnchorCheck(doc, catalog), catalog); }
+  catch (error) { return false; }
 }
 function bermanPaperScanNotesHtml() {
   const html = aiScanWarningsHtml({ warnings: bermanPaperScanNotes(aiScanResponse) });

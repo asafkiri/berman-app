@@ -151,3 +151,55 @@ test('a genuine two-page note still passes, and a server-reported split is never
   b.click('rc-paper-rescan');
   assert.equal(b.run('aiScanDocuments.length'), 2);
 });
+
+test('a reported split is not swallowed by the missing-discount path', async () => {
+  const products = PRODUCTS.map(p => p.id === 'challah' ? Object.assign({}, p, { discountSet: false, discountPct: 0 }) : p);
+  const reported = payload([document(FIRST, { pageCount: 2, separateDocuments: [{ sourcePage: 2, docNumber: '290094585' }] })]);
+  const r = runtime({ data: Object.assign(data(reported), { products }) });
+  photoScreen(r, 1, 2);
+  r.click('rc-open-photo-quantity'); await settle();
+  assert.equal(r.run('receiptPaperScanState'), 'failed');
+  assert.equal(r.run('bermanQuantityPaperState()'), null);
+  assert.ok(r.run('bermanMissingDiscountProducts().length > 0'));
+  const html = manualScreen(r);
+  assert.match(html, /290094585/);
+  assert.match(html, /data-role="rc-paper-rescan"/);
+  assert.doesNotMatch(html, /berman-discount-later|data-role="rc-quantity-all"/);
+  assert.match(html, /צלם קודם את התעודות מחדש/);
+  assert.equal(r.run('bermanDeferDiscount()'), false);
+  assert.equal(r.run('receiptNotes.length'), 0);
+  assert.equal(r.run('receiptPaperScanState'), 'failed');
+});
+
+test('under the deployed v5 service the merged scan no longer opens the anchor-confirmation dialog', async () => {
+  const merged = mergedPayload();
+  merged.verification = { version: 1, status: 'needs_review', primaryReads: 2, escalationAttempted: true, reasons: ['inconsistent'],
+    issues: [{ noteIndex: 0, field: 'totalUnits', reason: 'inconsistent' }, { noteIndex: 0, field: 'printedLines', reason: 'inconsistent' }],
+    agreementCleared: 0, readCount: 3 };
+  merged.scan.warnings.push('לא ניתן לאמת את הקריאה: סך יחידות. בדוק את המספר המודפס.');
+  const r = runtime({ data: data(merged) });
+  photoScreen(r, 1, 2);
+  r.click('rc-open-photo-quantity'); await settle();
+  assert.equal(r.run('receiptPaperScanState'), 'failed');
+  assert.equal(r.run('aiScanResponse.scan.documents[0].__bermanOcrVerification.status'), 'needs_review');
+  assert.equal(r.run('bermanOcrPendingDocs().length'), 0);
+  const html = manualScreen(r);
+  assert.match(html, /יותר מתעודה אחת/);
+  assert.doesNotMatch(html, /בדקתי מול התעודה|berman-ocr-confirm/);
+  assert.doesNotMatch(html, /לא ניתן לאמת את הקריאה/);
+  assert.match(html, /שתי תעודות מודפסות נפרדות/);
+});
+
+test('a note whose first page does not close on its own keeps the numeric messages, without the stale-discount hint', async () => {
+  const merged = mergedPayload();
+  merged.scan.documents[0].netToChargeExVat = 114.48; // 60 אג׳ מעל הסיבולת בעמוד הראשון
+  const r = runtime({ data: data(merged) });
+  photoScreen(r, 1, 2);
+  r.click('rc-open-photo-quantity'); await settle();
+  assert.equal(r.run('receiptPaperScanState'), 'failed');
+  const problems = json(r, 'receiptPaperScanProblems');
+  assert.ok(problems.some(p => /סה״כ שורות/.test(p)), JSON.stringify(problems));
+  assert.ok(!problems.some(p => /אחוז הנחה שהתיישן/.test(p)), JSON.stringify(problems));
+  assert.ok(problems.some(p => /ייתכן שהצילומים מכילים יותר מתעודה אחת/.test(p)), JSON.stringify(problems));
+  assert.equal(r.run('bermanPaperRescanDocCount()'), 1);
+});

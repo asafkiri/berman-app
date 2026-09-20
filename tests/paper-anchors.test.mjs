@@ -202,11 +202,53 @@ const bundle = bermanPaperAnchorsFromScan(scan([doc(CLEAN), merged]));
 check('במקבץ הפיצול מיוחס לתעודה הנכונה', !bundle.ok && bundle.problems.length === 1 && bundle.problems[0].startsWith('תעודה 2: '), JSON.stringify(bundle.problems));
 check('ומספר הכרטיסים כולל את התעודה שהתגלתה', bundle.documentCount === 3);
 
+// דיווח באותה משמעות של השרת: עמוד 1 אינו תעודה נוספת, כל עמוד פעם אחת,
+// ומספר התעודה עצמה הוא צילום נוסף של אותו נייר — לא תעודה אחרת.
+check('דיווח על עמוד 1 אינו פיצול', bermanPaperAnchorsFromScan(scan([doc(CLEAN, { separateDocuments: [{ sourcePage: 1, docNumber: '1' }] })])).ok);
+check('דיווח שנושא את מספר התעודה עצמה אינו פיצול', bermanPaperAnchorsFromScan(scan([doc(CLEAN, { invoiceNumber: '244685560', pageCount: 2, separateDocuments: [{ sourcePage: 2, docNumber: '244685560' }] })])).ok);
+const dupReport = doc(onPage(CLEAN, 1), { pageCount: 2, separateDocuments: [{ sourcePage: 2, docNumber: '1' }, { sourcePage: 2, docNumber: '2' }] });
+const dupSplit = bermanSeparateDocumentsCheck(dupReport, bermanPaperAnchorCheck(dupReport));
+check('עמוד שדווח פעמיים נספר פעם אחת', !!dupSplit && dupSplit.documentCount === 2, JSON.stringify(dupSplit));
+// דיווח שהמבנה סותר: כל השורות, כולל אלה שבעמוד המדווח, סוגרות יחד את הסיכום.
+const contradicted = doc(onPage(CLEAN.slice(0, 3), 1).concat(onPage(CLEAN.slice(3), 2)), { pageCount: 2, separateDocuments: [{ sourcePage: 2, docNumber: null }] });
+check('דיווח שהשורות סותרות אינו פיצול — התעודה עוברת', bermanPaperAnchorsFromScan(scan([contradicted])).ok);
+check('דיווח בלי שורות בעמוד הנוסף — נאמר שהן לא נקראו, בלי "0 שורות"', /לא נקראו כלל/.test(g10d.problems[0]) && !/0 שורות/.test(g10d.problems[0]), g10d.problems[0]);
+
+// אחוז הנחה חסר בעמוד הראשון: הכסף אינו ניתן לחישוב, אבל שני העוגנים
+// המדויקים עדיין מוכיחים את הפיצול — וההנחה החסרה נשארת משימה גלויה.
+const noDiscount = doc(onPage(CLEAN, 1).concat(onPage(SECOND, 2)), { invoiceNumber: '244685560', pageCount: 2 });
+noDiscount.subtotalExVat = firstOnly.subtotalExVat; noDiscount.printedUnits = firstOnly.printedUnits; noDiscount.printedLines = firstOnly.printedLines;
+noDiscount.rows[0] = Object.assign({}, noDiscount.rows[0], { __bermanDiscountMissing: true });
+const g10e = bermanPaperAnchorsFromScan(scan([noDiscount]));
+check('אחוז הנחה חסר אינו מסתיר את הפיצול', !g10e.ok && g10e.problems.some(p => p.includes('יותר מתעודה אחת')) && g10e.documentCount === 2, JSON.stringify(g10e.problems));
+check('וההנחה החסרה נשארת משימה', g10e.problems.length === 2 && g10e.problems.some(p => p.includes('אחוז הנחה למוצר')), JSON.stringify(g10e.problems));
+
+// העמוד הראשון לא נסגר לבדו (60 אג׳ מעל הסיבולת) ואין דיווח: ההודעות
+// המספריות נשארות — בלי ההפניה לאחוז ההנחה, כי היחידות והשורות כבר מסבירות
+// את פער הכסף — ועם רמז לשתי תעודות בכרטיס אחד.
+const imperfect = doc(onPage(CLEAN, 1).concat(onPage(SECOND, 2)), { pageCount: 2 });
+imperfect.subtotalExVat = withGap(CLEAN, 60).subtotalExVat; imperfect.printedUnits = firstOnly.printedUnits; imperfect.printedLines = firstOnly.printedLines;
+const g10f = bermanPaperAnchorsFromScan(scan([imperfect]));
+check('בלי סגירה ובלי דיווח — ההודעות המספריות נשארות', !g10f.ok && g10f.problems.some(p => p.includes('סה״כ שורות')) && !g10f.problems.some(p => p.includes('יותר מתעודה אחת:')), JSON.stringify(g10f.problems));
+check('ההפניה לאחוז ההנחה נשמטת כשעוגן מדויק נכשל', !g10f.problems.some(p => p.includes('אחוז הנחה שהתיישן')), JSON.stringify(g10f.problems));
+check('ורמז לשתי תעודות בכרטיס אחד נאמר כאפשרות', g10f.problems.some(p => p.includes('ייתכן שהצילומים מכילים יותר מתעודה אחת')));
+check('פער כסף לבדו עדיין מפנה לאחוז ההנחה', bermanPaperAnchorsFromScan(scan([withGap(CLEAN, 60)])).problems.some(p => p.includes('אחוז הנחה שהתיישן')));
+check('כמות שנקראה שגוי בעמוד יחיד — בלי רמז לשתי תעודות', !bermanPaperAnchorsFromScan(scan([badQty])).problems.some(p => p.includes('ייתכן שהצילומים')));
+
+// עמודים נוספים בלי דיווח: לא ידוע אם הם תעודה אחת או יותר — "אחת לפחות".
+const three = doc(onPage(CLEAN, 1).concat(onPage(SECOND, 2)).concat(onPage([row('חלה קלועה', 3, 4.6276)], 3)), { pageCount: 3 });
+three.subtotalExVat = firstOnly.subtotalExVat; three.printedUnits = firstOnly.printedUnits; three.printedLines = firstOnly.printedLines;
+check('עמודים נוספים בלי דיווח — "תעודה אחרת אחת לפחות"', /תעודה אחרת אחת לפחות/.test(bermanPaperAnchorsFromScan(scan([three])).problems[0]), bermanPaperAnchorsFromScan(scan([three])).problems[0]);
+
 // הערות המודל מגיעות למסך הקליטה: אלה שעל התעודה ואלה שעל כל הסריקה.
 const notes = bermanPaperScanNotes({ scan: { warnings: ['קבוצת התמונות מכילה בפועל שתי תעודות מודפסות נפרדות.'],
   documents: [Object.assign({}, merged, { warnings: ['עמוד 2 אינו המשך של התעודה שבעמוד 1 (290094585).'] })] } });
 check('הערות התעודה והסריקה נאספות יחד', notes.length === 2 && notes[0].includes('290094585') && notes[1].includes('שתי תעודות'), JSON.stringify(notes));
 check('סריקה ריקה — בלי הערות ובלי קריסה', bermanPaperScanNotes(null).length === 0);
+// "לא ניתן לאמת את הקריאה: סך יחידות" של השרת היא אותו ממצא, לא ספק בקריאה.
+const serverDoubt = 'לא ניתן לאמת את הקריאה: סך יחידות. בדוק את המספר המודפס.';
+check('ספק השרת בעוגנים נשמט כשהפיצול מסביר אותו', !bermanPaperScanNotes({ scan: { warnings: [serverDoubt], documents: [merged] } }).includes(serverDoubt));
+check('ובלי פיצול הוא מוצג', bermanPaperScanNotes({ scan: { warnings: [serverDoubt], documents: [badQty] } }).includes(serverDoubt));
 
 console.log('\n' + (fail ? '✗ ' + fail + ' נכשלו' : '✓ הכל עבר') + ' (' + pass + '/' + (pass + fail) + ')');
 process.exit(fail ? 1 : 0);
