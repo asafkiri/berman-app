@@ -57,7 +57,7 @@ aiRunAnalyzer=async()=>{};
 let scanRequests=0;
 window.fetch=async(url)=>{if(String(url)===AI_SCAN_WORKER_URL){scanRequests++;return{ok:true,status:200,json:async()=>structuredClone(testData.paper)}}throw new Error('External network is forbidden in local replay: '+url)};
 window.sharedTest={
-  state:()=>({owner:sharedReceiving?.isOwner,revision:sharedReceiving?.revision,ready:sharedReceiving?.ready,status:sharedReceiptStatus.status,dirty:sharedReceiptStatus.dirty,items:structuredClone(receiptList),photos:structuredClone(aiScanDocuments),view:currentView,reconcile:structuredClone(reconcileData),requests:scanRequests,qtyValue:$('qtyVal').value,modal:sharedReceiptModalOpen('qtyModal'),draftId:receiptDraftId}),
+  state:()=>({owner:sharedReceiving?.isOwner,revision:sharedReceiving?.revision,ready:sharedReceiving?.ready,status:sharedReceiptStatus.status,dirty:sharedReceiptStatus.dirty,items:structuredClone(receiptList),photos:structuredClone(aiScanDocuments),view:currentView,reconcile:structuredClone(reconcileData),requests:scanRequests,qtyValue:$('qtyVal').value,modal:sharedReceiptModalOpen('qtyModal'),draftId:receiptDraftId,busy:aiScanBusy,paperState:receiptPaperScanState,response:aiScanResponse,notes:structuredClone(receiptNotes)}),
   scan:async()=>{receiptList=[];receiptNotes=[];receiptOpened=true;receiptDocDate='2026-09-09';receiptEntryMode='photo';receiptAnchorSource=null;bermanSeedPhotoFirstScan(1);aiScanDocuments[0].pages=[{dataUrl:${JSON.stringify(photo)},orientationConfirmed:true}];await bermanRunPaperScanInBackground();receiptList=structuredClone(testData.items);saveReceiptDraft();renderReceiving();},
   openQuantity:()=>promptQty(products.find(p=>p.id===receiptList[0].productId),'receipt'),
   openPhoto:()=>aiOpenOrientationReview(0,0,false),
@@ -94,59 +94,50 @@ async function device(){
 }
 const state=page=>page.evaluate(()=>window.sharedTest.state());
 try{
-  const a=await device();await a.waitForFunction(()=>sharedTest.state().owner);
-  const b=await device();assert.equal((await state(b)).owner,false);
+  const a=await device();await a.waitForFunction(()=>sharedTest.state().ready);
+  const b=await device();assert.equal((await state(b)).owner,true);
+  assert.equal(await b.locator('#sharedReceivingTakeover').count(),0);
   await a.evaluate(()=>sharedTest.scan());
   await b.waitForFunction(()=>sharedTest.state().items.length===5);
   assert.deepEqual((await state(b)).items,(await state(a)).items);
   assert.deepEqual((await state(b)).photos,(await state(a)).photos);
   assert.equal((await state(b)).requests,0);
-  const qty='[data-role="rc-qty"]';
+  for (const page of [a,b]) {
+    const result=await state(page);assert.equal(result.busy,false);assert.ok(result.response);assert.equal(result.paperState,'ok');assert.equal(result.notes.length,1);
+  }
   const firstId=(await state(a)).items[0].productId;
   const plus='[data-role="rc-plus"][data-id="'+firstId+'"]';
-  await b.locator(plus).click();assert.equal((await state(b)).items[0].qty,12,'Viewer click must be blocked');
-  await a.locator(plus).click();await b.waitForFunction(()=>sharedTest.state().items[0].qty===13);
-  assert.equal(await b.locator(qty).first().inputValue(),'13');
-  await b.screenshot({path:'/tmp/berman-shared-viewer.png',fullPage:true});
+  await b.locator(plus).click();await a.waitForFunction(()=>sharedTest.state().items[0].qty===13);
+  await a.locator(plus).click();await b.waitForFunction(()=>sharedTest.state().items[0].qty===14);
+  await b.screenshot({path:'/tmp/berman-live-receiving.png',fullPage:true});
   await a.evaluate(()=>sharedTest.openPhoto());
   await b.locator('#aiOrientationModal').waitFor({state:'visible'});
   assert.equal(await b.locator('#aiOrientationImage').getAttribute('src'),photo);
   await b.locator('#aiOrientationConfirm').click();
-  await a.locator('#aiOrientationConfirm').click();
+  await a.locator('#aiOrientationModal').waitFor({state:'hidden'});
   await a.evaluate(()=>sharedTest.openQuantity());
   await a.locator('#qtyVal').fill('4');
   await b.waitForFunction(()=>sharedTest.state().modal&&sharedTest.state().qtyValue==='4');
-  await b.locator('#qty_done').click();assert.equal((await state(b)).items[0].qty,13,'Viewer cannot commit modal');
-  await b.keyboard.press('Escape');await b.locator('#qtyModal').waitFor({state:'hidden'});
-  await b.locator('#segReturns').click();await b.waitForFunction(()=>sharedTest.state().view==='returns');
-  await a.locator('#qtyVal').fill('5');
-  await a.waitForFunction(()=>!sharedTest.state().dirty&&sharedTest.state().status==='synced');
-  const revision=(await state(a)).revision;
-  await b.waitForFunction(rev=>sharedTest.state().revision>=rev,revision);
-  await b.locator('#segReceiving').click();
-  await b.waitForFunction(()=>sharedTest.state().modal&&sharedTest.state().qtyValue==='5');
-  await b.locator('#sharedReceivingTakeover').waitFor({state:'visible'});
-  await b.locator('#qtyVal').focus();
-  const tabFocus=[];for(let i=0;i<15;i++){await b.keyboard.press('Tab');const id=await b.evaluate(()=>document.activeElement.id);tabFocus.push(id);if(id==='sharedReceivingTakeover')break;}
-  assert.ok(tabFocus.includes('sharedReceivingTakeover'),'Tab must reach takeover in modal: '+JSON.stringify(tabFocus));
-  await b.screenshot({path:'/tmp/berman-shared-takeover.png',fullPage:true});
-  await b.keyboard.press('Enter');
-  await b.waitForFunction(()=>sharedTest.state().owner);
-  await a.waitForFunction(()=>!sharedTest.state().owner);
-  assert.equal((await state(b)).qtyValue,'5');
   await b.locator('#qty_done').click();
   await a.waitForFunction(()=>sharedTest.state().items[0].qty===18);
   assert.equal((await state(b)).items[0].qty,18);
+  await a.locator('#qtyModal').waitFor({state:'hidden'});
+  // Both devices edit different products before either debounce expires.
+  const ids=(await state(a)).items.slice(0,2).map(x=>x.productId);
+  const before=(await state(a)).items.slice(0,2).map(x=>x.qty);
+  await Promise.all([a.locator('[data-role="rc-plus"][data-id="'+ids[0]+'"]').click(),
+    b.locator('[data-role="rc-plus"][data-id="'+ids[1]+'"]').click()]);
+  for(const page of [a,b]) await page.waitForFunction(before=>sharedTest.state().items[0].qty===before[0]+1&&sharedTest.state().items[1].qty===before[1]+1,before);
   await b.evaluate(()=>sharedTest.reconcile());
   await a.waitForFunction(()=>sharedTest.state().view==='reconcile');
   assert.deepEqual((await state(a)).reconcile,(await state(b)).reconcile);
-  await a.screenshot({path:'/tmp/berman-shared-reconcile.png',fullPage:true});
+  await a.screenshot({path:'/tmp/berman-live-reconcile.png',fullPage:true});
   assert.equal((await state(a)).requests,1);assert.equal((await state(b)).requests,0);
   const c=await device();await c.waitForFunction(()=>sharedTest.state().view==='reconcile');
   assert.deepEqual((await state(c)).photos,(await state(b)).photos);
   assert.deepEqual((await state(c)).items,(await state(b)).items);
-  assert.equal((await state(c)).owner,false);assert.equal((await state(c)).requests,0);
+  assert.equal((await state(c)).owner,true);assert.equal((await state(c)).requests,0);
   assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
-  console.log('PASS: owner → viewer photos/OCR/counts; read-only guards; keyboard modal takeover; restored modal after tab return; new-owner edit → old owner; reconciliation; third-device reload; no duplicated OCR; zero external requests.');
-  console.log('Screenshots: /tmp/berman-shared-viewer.png /tmp/berman-shared-takeover.png /tmp/berman-shared-reconcile.png');
+  console.log('PASS: three editable devices, bidirectional photos/OCR/counts, shared modal completion, concurrent independent edits, reconciliation, reload, no duplicate OCR, zero external requests.');
+  console.log('Screenshots: /tmp/berman-live-receiving.png /tmp/berman-live-reconcile.png');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
