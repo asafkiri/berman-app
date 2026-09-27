@@ -229,13 +229,31 @@ test('a detected paper frame crops from the source before the downscale and repo
   assert.ok(page.sourceRegion.x + page.sourceRegion.width <= 4000);
   assert.ok(page.sourceRegion.y + page.sourceRegion.height <= 3000);
   assert.ok(page.sourceRegion.width < 4000, 'a crop must be smaller than the full frame');
-  // הקטנה אחת בלבד, אל יעד ה-patches.
+  // שני הפלטים נקראים ישירות מהמקור: הנייר למודל ופריים מלא לביטול חיתוך.
   assert.equal(Math.max(drawn[7], drawn[8]), 1850);
-  assert.equal(output(draws).length, 1, 'exactly one resample reaches the model');
+  assert.equal(output(draws).length, 2, 'model and full-frame undo each use one direct source resample');
+  const full = output(draws)[1].args;
+  assert.deepEqual(full.slice(1, 5), [0, 0, 4000, 3000]);
+  assert.equal(Math.max(full[7], full[8]), 1850);
+  assert.equal(drawn[0], full[0], 'undo must start from the original source, not the cropped JPEG');
   // התרשים מקבל ארבעה מספרים מנורמלים כדי להראות מה הוסר.
   const kept = page.cropInfo.kept;
   assert.ok(kept && kept.w > 0 && kept.w <= 1 && kept.h > 0 && kept.h <= 1);
-  assert.equal(page.originalImage, null, 'the cropped encode must never pose as the original');
+  assert.ok(page.originalImage);
+  assert.notEqual(page.originalImage.dataUrl, page.dataUrl, 'the cropped encode must never pose as the original');
+  assert.deepEqual(plain(page.originalImage.region), { x:0, y:0, width:4000, height:3000 });
+});
+
+test('a synchronized auto-cropped page can restore the full frame without its local source file', async () => {
+  const ctx = context(), { c } = ctx;
+  ctx.setCropPlan({ x:150, y:112, width:1200, height:900 });
+  const page = await capture(ctx), cropped = page.dataUrl, full = page.originalImage.dataUrl;
+  delete page.sourceBlob;
+  await c.aiRestoreOriginalImage();
+  assert.notEqual(page.dataUrl, cropped);
+  assert.equal(page.dataUrl, full);
+  assert.equal(page.cropped, false);
+  assert.deepEqual(plain(page.sourceRegion), { x:0, y:0, width:4000, height:3000 });
 });
 
 test('every refusal falls back to the exact full frame and names its reason', async () => {

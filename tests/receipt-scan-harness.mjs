@@ -42,7 +42,8 @@ export function fixture() {
   return { products, promos, paper, items };
 }
 
-export function runtime({ storage = new Map(), data = fixture(), realCloudTasks = false } = {}) {
+export function runtime({ storage = new Map(), data = fixture(), realCloudTasks = false,
+  sharedReceiving = false, loadSharedEngine = false, globals = {} } = {}) {
   const nodes = new Map(), callbacks = [], events = new Map(), requests = [], writes = [], toasts = [];
   function node(id) {
     if (nodes.has(id)) return nodes.get(id);
@@ -52,7 +53,7 @@ export function runtime({ storage = new Map(), data = fixture(), realCloudTasks 
         contains: v => classes.has(v), toggle: v => classes.has(v) ? classes.delete(v) : classes.add(v) },
       addEventListener(type, fn) { events.set(id + ':' + type, fn); },
       setAttribute() {}, removeAttribute() {}, getAttribute() { return null; },
-      querySelector() { return null; }, querySelectorAll() { return []; }, insertAdjacentHTML() {},
+      querySelector() { return null; }, querySelectorAll() { return []; }, contains() { return false; }, insertAdjacentHTML() {},
       focus() {}, blur() {}, scrollIntoView() {}, appendChild() {}, remove() {},
       getContext() { return { clearRect() {} }; },
       getBoundingClientRect() { return { top: 0, left: 0, width: 400, height: 600 }; } };
@@ -76,14 +77,22 @@ export function runtime({ storage = new Map(), data = fixture(), realCloudTasks 
       requests.push({ url: String(url), body: options?.body });
       if (!String(url).endsWith('/scan')) throw new Error('Unexpected network request: ' + url);
       return { ok: true, status: 200, json: async () => structuredClone(data.paper) };
-    }
+    },
+    ...globals
   });
+  if (loadSharedEngine) vm.runInContext(fs.readFileSync(new URL('../shared-receiving.js', import.meta.url), 'utf8'), context,
+    { filename: 'shared-receiving.js', timeout: 5000 });
   vm.runInContext(moduleSource, context, { filename: 'index.html', timeout: 5000 });
   context.testData = structuredClone(data); context.testWrites = writes; context.testToasts = toasts;
   const run = script => vm.runInContext(script, context, { timeout: 5000 });
   run(`products = testData.products; promos = testData.promos;
     showToast = text => testToasts.push(text);
     const auditOriginalAnalyzer = aiRunAnalyzer; aiRunAnalyzer = async () => {};`);
+  if (!sharedReceiving) run(`
+    if (typeof canEditSharedReceipt === "function") canEditSharedReceipt = () => true;
+    if (typeof finishSharedReceipt === "function") finishSharedReceipt = (id, data) =>
+      runCloudTask('save receipt before clearing draft', {op:'set', path:dataPath('receipts', id), data, operationId:id});
+  `);
   if (!realCloudTasks) run('runCloudTask = async (label, task) => { testWrites.push(structuredClone(task)); return true; };');
   async function scan() {
     run(`receiptOpened = true; receiptDocDate = '2026-09-09'; receiptList = [];
@@ -96,5 +105,5 @@ export function runtime({ storage = new Map(), data = fixture(), realCloudTasks 
     const target = { dataset: { role, id }, closest: selector => selector === '[data-role]' ? target : null };
     return events.get('app:click')({ target });
   }
-  return { context, run, scan, click, node, nodes, events, requests, storage, writes, toasts };
+  return { context, run, scan, click, node, nodes, events, requests, storage, writes, toasts, callbacks };
 }

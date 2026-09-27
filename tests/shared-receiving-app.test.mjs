@@ -1,0 +1,298 @@
+// Actual application integration with the coordinator/network boundaries faked.
+// Engine transactions and media chunks have their own multi-device suite.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { fixture, runtime } from './receipt-scan-harness.mjs';
+
+const plain = value => JSON.parse(JSON.stringify(value));
+
+function device({ owner = true, ...options } = {}) {
+  const r = runtime({ ...options, sharedReceiving: true, loadSharedEngine: true });
+  const saved = [], finished = [];
+  const status = { ready: true, isOwner: owner, busy: false, status: 'synced', error: null,
+    revision: 2, owner: owner ? 'this-device' : 'other-device', epoch: 'epoch-2', dirty: false,
+    head: { schema: 1, revision: 2, owner: owner ? 'this-device' : 'other-device', epoch: 'epoch-2' } };
+  const coordinator = {
+    ready: true, isOwner: owner, busy: false, status, head: status.head, revision: 2, payload: null,
+    save: async payload => { saved.push(plain(payload)); return { revision: 3 }; },
+    flush: async () => ({ revision: 3 }),
+    finish: async (receiptId, data, empty) => { finished.push({ receiptId, data: plain(data), empty: plain(empty) }); return { revision: 4 }; },
+    claim: async () => true, start: async () => true, stop() {}
+  };
+  r.context.testSharedCoordinator = coordinator;
+  r.context.testSharedStatus = status;
+  r.run('sharedReceiving = testSharedCoordinator; sharedReceiptHooksReady = true; sharedReceivingStatusChanged(testSharedStatus);');
+  return { ...r, saved, finished, coordinator, status };
+}
+
+function transfer(from, to, source = 'remote') {
+  to.context.testIncomingReceipt = plain(from.run('captureSharedReceipt()'));
+  to.context.testIncomingMeta = { source, isOwner: to.coordinator.isOwner, head: to.status.head, revision: 2 };
+  return to.run('applySharedReceipt(testIncomingReceipt, testIncomingMeta)');
+}
+
+test('another device receives the same photos, OCR, counts and comparison without paying for another scan', async () => {
+  const source = device();
+  await source.scan();
+  source.run('openReconcile()');
+  const expected = plain(source.run('aiScanEvaluation.findings'));
+  const target = device({ owner: false });
+  await transfer(source, target);
+  assert.deepEqual(plain(target.run('receiptList')), plain(source.run('receiptList')));
+  assert.deepEqual(plain(target.run('aiScanDocuments')), plain(source.run('aiScanDocuments')));
+  assert.deepEqual(plain(target.run('aiScanResponse')), plain(source.run('aiScanResponse')));
+  assert.deepEqual(plain(target.run('reconcileData')), plain(source.run('reconcileData')));
+  assert.deepEqual(plain(target.run('aiScanEvaluation.findings')), expected);
+  assert.equal(target.run('aiScanEvaluation.aggregates instanceof Map'), true);
+  assert.equal(target.run('currentView'), 'reconcile');
+  assert.equal(target.requests.length, 0);
+  assert.match(target.node('app').innerHTML, /יש הבדלים מול הנייר/);
+});
+
+test('manual quantity and reconciliation decisions arrive together with the same draft identity', async () => {
+  const source = device();
+  await source.scan();
+  source.run(`openReconcile(); receiptCountingMode = 'manual';
+    receiptQuantityReview = {rows: [{productId:'code_238', received:3, expected:4, status:'shortage'}]};
+    reconcileData[0].checked = true; reconcileData[0].noteQty = 13;
+    reconcilePaperEntered = true; manualSearchTerm = 'לחם'; manualSearchOpen = true;
+    manualAssigned = [{productId:'code_238', qty:3}]; manualPromoMarks = {code_238:true};
+    noteCheckRows = [{pid:'code_238', st:'shortage', q:3, price:5}]; noteCheckQtyMode = true;
+    detectiveQuestionState = {fingerprint:'review-1', asked:2, constraints:[{pid:'code_238', qty:3}]};`);
+  const target = device({ owner: false });
+  await transfer(source, target);
+  for (const expression of ['receiptDraftId', 'receiptCountingMode', 'receiptQuantityReview', 'reconcileData',
+    'reconcilePaperEntered', 'manualSearchTerm', 'manualSearchOpen', 'manualAssigned', 'manualPromoMarks',
+    'noteCheckRows', 'noteCheckQtyMode', 'detectiveQuestionState']) {
+    assert.deepEqual(plain(target.run(expression)), plain(source.run(expression)), expression);
+  }
+  assert.equal(target.requests.length, 0);
+});
+
+test('unfinished manual anchor fields follow the shared screen without becoming approved anchors', async () => {
+  const source = device();
+  source.run("receiptEntryMode = 'manual'; renderReceiving()");
+  const values = { rcNoteInput: '123.45', rcNoteUnits: '30', rcNoteLines: '5', rcDocDate: '2026-09-09', rcDigits: '729' };
+  for (const [id, value] of Object.entries(values)) source.node(id).value = value;
+  const target = device({ owner: false });
+  await transfer(source, target);
+  for (const [id, value] of Object.entries(values)) assert.equal(target.node(id).value, value, id);
+  assert.equal(target.run('receiptNotes.length'), 0);
+  assert.equal(target.run('receiptAnchorSource'), null);
+});
+
+test('remote takeover fences the old in-flight OCR response even when the draft identity is unchanged', async () => {
+  const source = device();
+  let resolveResponse, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  source.context.fetch = () => { entered(); return new Promise(resolve => { resolveResponse = resolve; }); };
+  source.run(`receiptOpened = true; receiptDocDate = '2026-09-09'; bermanSeedPhotoFirstScan(1);
+    aiScanDocuments[0].pages = [{dataUrl:'data:image/jpeg;base64,Zml4dHVyZQ==',orientationConfirmed:true}];`);
+  const pending = source.run('bermanRunPaperScanInBackground()');
+  await started;
+  const beforeId = source.run('receiptDraftId');
+  source.coordinator.isOwner = false;
+  source.status.isOwner = false;
+  source.status.owner = 'other-device';
+  source.run('sharedReceivingStatusChanged(testSharedStatus)');
+  resolveResponse({ ok: true, status: 200, json: async () => structuredClone(fixture().paper) });
+  await pending;
+  assert.equal(source.run('receiptDraftId'), beforeId);
+  assert.equal(source.run('aiScanResponse'), null);
+  assert.equal(source.run('canEditSharedReceipt()'), false);
+});
+
+test('claiming an interrupted scan preserves its photographs and requires an explicit OCR retry', async () => {
+  const source = device();
+  source.run(`receiptOpened = true; bermanSeedPhotoFirstScan(1);
+    aiScanDocuments[0].pages = [{dataUrl:'data:image/jpeg;base64,Zml4dHVyZQ==',orientationConfirmed:true}];
+    aiScanBusy = true; aiAnalyzeBusy = true; receiptPaperScanState = 'running';`);
+  const target = device();
+  await transfer(source, target, 'claim');
+  assert.equal(target.run('aiScanBusy'), false);
+  assert.equal(target.run('aiAnalyzeBusy'), false);
+  assert.equal(target.run('receiptPaperScanState'), 'failed');
+  assert.equal(target.run('aiTotalPages()'), 1);
+  assert.match(target.run('aiScanError'), /פענוח מחדש/);
+  assert.equal(target.requests.length, 0);
+});
+
+for (const action of ['prepare', 'rotate']) test('late image ' + action + ' cannot alter a remotely replaced page', async () => {
+  const source = device();
+  let complete;
+  source.context.deferImage = () => new Promise(resolve => { complete = resolve; });
+  source.run(`bermanSeedPhotoFirstScan(1);
+    aiScanDocuments[0].pages = [{dataUrl:'original-page',orientationConfirmed:true}];`);
+  const pending = action === 'prepare'
+    ? source.run('aiCompressInvoiceImage = deferImage; aiAddInvoiceFiles(0,[{}])')
+    : source.run('aiRenderInvoiceRotation = deferImage; aiRotateInvoicePage(0,0)');
+  const remote = plain(source.run('captureSharedReceipt()'));
+  remote.state.aiScanDocuments[0].pages = [{dataUrl:'remote-page',orientationConfirmed:true}];
+  remote.state.aiScanBusy = true;
+  remote.state.aiScanProgressText = 'remote job';
+  source.context.testReplacement = remote;
+  source.run('applySharedReceipt(testReplacement, {source:"remote"})');
+  complete({dataUrl:'stale-processed-page', bytes:100});
+  await pending;
+  assert.equal(source.run('aiScanDocuments[0].pages.length'), 1);
+  assert.equal(source.run('aiScanDocuments[0].pages[0].dataUrl'), 'remote-page');
+  assert.equal(source.run('aiScanBusy'), true);
+  assert.equal(source.run('aiScanProgressText'), 'remote job');
+});
+
+test('late analyzer completion cannot overwrite decisions received from another device', async () => {
+  const source = device();
+  await source.scan();
+  source.run('openReconcile()');
+  let complete, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  source.context.fetch = () => { entered(); return new Promise(resolve => { complete = resolve; }); };
+  const pending = source.run('auditOriginalAnalyzer({auto:true})');
+  await started;
+  const remote = plain(source.run('captureSharedReceipt()'));
+  remote.state.aiAnalyzeResult = {summary:'remote decision', accepted:false};
+  remote.state.aiAnalyzeBusy = true;
+  source.context.testReplacement = remote;
+  source.run('applySharedReceipt(testReplacement, {source:"remote"})');
+  complete({ok:true, json:async()=>({ok:true,analysis:{claims:[],summary:'stale decision'}})});
+  await pending;
+  assert.equal(source.run('aiAnalyzeResult.summary'), 'remote decision');
+  assert.equal(source.run('aiAnalyzeBusy'), true);
+});
+
+test('late crop confirmation cannot clear a new remote OCR result or dismiss its photo preview', async () => {
+  const source = device();
+  await source.scan();
+  const remote = plain(source.run('captureSharedReceipt()'));
+  remote.ui.orientation = {doc:0, page:0, reviewOnly:true};
+  let complete;
+  source.context.deferCrop = () => new Promise(resolve => { complete = resolve; });
+  source.run(`aiOrientationSession = {page:aiScanDocuments[0].pages[0],reviewOnly:false,cropMode:true};
+    aiCropState = {moved:true}; aiApplyCropIfMoved = deferCrop;`);
+  const pending = source.run('aiConfirmOrientationReview()');
+  source.context.testReplacement = remote;
+  source.run('applySharedReceipt(testReplacement, {source:"remote"})');
+  complete();
+  await pending;
+  assert.ok(source.run('aiScanResponse'));
+  assert.equal(source.run('aiOrientationSession.page === aiScanDocuments[0].pages[0]'), true);
+  assert.equal(source.run('aiOrientationSession.reviewOnly'), true);
+  assert.equal(source.node('aiOrientationModal').classList.contains('hidden'), false);
+});
+
+test('a viewer cannot finish an inherited receipt summary or start a paid OCR request', async () => {
+  const source = device();
+  await source.scan();
+  source.run(`openReconcile(); showConfirm = (title, text, button, confirm) => confirm();`);
+  source.click('ai-close-receipt');
+  assert.ok(source.run('pendingReceipt'));
+  const target = device({ owner: false });
+  await transfer(source, target);
+  assert.ok(target.run('pendingReceipt'));
+  await target.run('confirmReceipt()');
+  await target.run('aiRunInvoiceScan()');
+  assert.equal(target.finished.length, 0);
+  assert.equal(target.writes.length, 0);
+  assert.equal(target.requests.length, 0);
+  assert.ok(target.run('pendingReceipt'), 'A denied viewer action must retain the shared summary');
+});
+
+test('the capture event guard blocks receiving and summary edits for viewers but permits navigation', () => {
+  const viewer = device({ owner: false });
+  for (const area of ['#app', '#receiptSummaryModal, #receiptQuantityModal, #aiOrientationModal, #aiLiveCameraModal']) {
+    let prevented = false, stopped = false;
+    viewer.context.testEvent = {
+      target: { closest: selector => selector === area ? viewer.node('workflow') : null },
+      preventDefault() { prevented = true; }, stopImmediatePropagation() { stopped = true; }
+    };
+    viewer.run('guardSharedReceiptEvent(testEvent)');
+    assert.equal(prevented, true, area);
+    assert.equal(stopped, true, area);
+  }
+  let blocked = false;
+  const target = { dataset: { role: 'rc-history' }, closest: selector =>
+    selector === '#app' ? viewer.node('app') : selector === '[data-role]' ? target : null };
+  viewer.context.testEvent = { target, preventDefault() { blocked = true; }, stopImmediatePropagation() {} };
+  viewer.run('guardSharedReceiptEvent(testEvent)');
+  assert.equal(blocked, false);
+});
+
+test('final confirmation uses the fenced shared finish and retains the draft if it fails', async () => {
+  const source = device();
+  await source.scan();
+  source.run('openReconcile(); showConfirm = (title, text, button, confirm) => confirm();');
+  source.click('ai-close-receipt');
+  const finish = source.coordinator.finish;
+  source.coordinator.finish = async () => { throw new Error('not-owner'); };
+  const originalId = source.run('receiptDraftId');
+  await source.run('confirmReceipt()');
+  assert.equal(source.run('receiptDraftId'), originalId);
+  assert.ok(source.run('pendingReceipt'));
+  assert.ok(source.run('aiScanResponse'));
+  source.coordinator.finish = finish;
+  await source.run('confirmReceipt()');
+  assert.equal(source.finished.length, 1);
+  assert.equal(source.finished[0].receiptId, originalId);
+  assert.ok(source.finished[0].data.paperScan.response.scan.documents.length);
+  assert.equal(source.finished[0].empty.state.receiptList.length, 0);
+  assert.equal(source.run('receiptDraftId'), null);
+  assert.equal(source.run('pendingReceipt'), null);
+  assert.equal(source.writes.length, 0, 'Finalization must not use an unfenced receipt-only write');
+});
+
+test('server-cleared draft replaces an old local receipt and does not replay OCR on reload', async () => {
+  const previous = device();
+  await previous.scan();
+  const restored = device({ owner: false, storage: previous.storage });
+  assert.ok(restored.run('receiptList.length'));
+  const empty = device();
+  await transfer(empty, restored, 'finish');
+  assert.equal(restored.run('receiptList.length'), 0);
+  assert.equal(restored.run('receiptDraftId'), null);
+  assert.equal(restored.run('aiScanResponse'), null);
+  assert.equal(restored.run('aiTotalPages()'), 0);
+  const next = device({ owner: false, storage: restored.storage });
+  assert.equal(next.run('receiptList.length'), 0);
+  assert.equal(next.run('aiScanResponse'), null);
+  assert.equal(restored.requests.length, 0);
+  assert.equal(next.requests.length, 0);
+});
+
+for (const previouslyShared of [false, true]) test(previouslyShared
+  ? 'startup does not offer a previously synchronized local receipt as a legacy draft after the server cleared it'
+  : 'startup retains a legacy local backup but uses the authoritative empty shared state', async () => {
+  const previous = device();
+  await previous.scan();
+  const storage = new Map(previous.storage);
+  if (!previouslyShared) {
+    const legacy = JSON.parse(storage.get('bm_receipt_draft'));
+    delete legacy.sharedReceivingVersion;
+    storage.set('bm_receipt_draft', JSON.stringify(legacy));
+  }
+  const noop = () => {};
+  const restored = runtime({ storage, sharedReceiving: true,
+    globals: { doc: noop, getDoc: noop, onSnapshot: noop, runTransaction: noop, setDoc: noop, writeBatch: noop } });
+  let claims = 0;
+  restored.context.BermanSharedReceiving = { create(options) {
+    return { head: { owner: 'other-device' }, payload: null, ready: true, isOwner: false,
+      async start() {
+        options.onState(null, { source: 'remote', isOwner: false });
+        options.onStatus({ ready: true, isOwner: false, busy: false, dirty: false, status: 'synced' });
+      },
+      async claim() { claims++; },
+      async save() { throw new Error('Legacy draft must never be saved automatically'); }
+    };
+  } };
+  await restored.run('startSharedReceiving()');
+  assert.equal(restored.run('receiptList.length'), 0);
+  assert.equal(restored.run('aiScanResponse'), null);
+  if (previouslyShared) {
+    assert.equal(restored.run('sharedReceiptLegacy'), null);
+    assert.equal(storage.has('bm_receipt_before_shared_v101'), false);
+  } else {
+    assert.equal(restored.run('sharedReceiptLegacy.state.receiptList.length'), fixture().items.length);
+    assert.ok(storage.get('bm_receipt_before_shared_v101'));
+  }
+  assert.equal(claims, 0);
+  assert.equal(restored.requests.length, 0);
+});
