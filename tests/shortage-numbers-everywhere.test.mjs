@@ -223,9 +223,13 @@ test('history: numbers never leak NaN/undefined from odd saved data', () => {
 });
 
 // Review fixes. The line's paper quantity is not always what the paper says:
-// "קלוט ותטפל בהפרש אחר כך" derives it from the findings (received + qty per
-// finding), and two findings on one product give a number the paper never
-// printed. The summary checks it against what was read for that product; the
+// "קלוט ותטפל בהפרש אחר כך" derives it from the findings. Until v105 each
+// finding overwrote the last one (received ± qty), so two findings on one
+// product gave a number the paper never printed; since v105 it is written once
+// per product from the engine's paper-vs-scan comparison, not from the analyzer's
+// claims (tests/handle-later-paper-qty).
+// Receipts saved before that, and partial baskets, still need the guards: the
+// summary checks the quantity against what was read for that product; the
 // saved receipt checks that its paper quantities close the document at all.
 function acceptConfirm(r) {
   r.run('if (confirmCb) { const cb = confirmCb; hideConfirm(); cb(); }');
@@ -244,11 +248,13 @@ async function savedHistoryBlock(r) {
   return html.slice(at, end > 0 ? end : undefined);
 }
 
-test('close "handle later" after a substitution split: summary and history never label a derived quantity as billed', async () => {
+test('close "handle later" after a substitution split: the saved paper quantity is what the paper billed, not received ± the last claim', async () => {
   // Paper 238 = 12, 101 = 10; scanned 238 = 4, 101 = 12. The analyzer says
   // shortage 238 × 6 plus substitution 238 → 101 × 2, and the evaluation is not
-  // valid, so only ai-close-receipt is offered. The saved 238 paper quantity
-  // becomes 4 + 2 = 6, not the 12 on the paper.
+  // valid, so only ai-close-receipt is offered. The saved 238 paper quantity is
+  // the 12 on the paper, from the engine's paper-vs-scan comparison (until v105
+  // the last claim won: 4 + 2 = 6, "חסר 2" and 6 units nobody owned) — the same
+  // number ai-apply saves.
   const r = await scanned([[238, 12], [101, 10]], { 238: 4, 101: 12 });
   adoptClaims(r, [
     { kind: 'shortage', productId: 'code_238', quantity: 6 },
@@ -258,19 +264,20 @@ test('close "handle later" after a substitution split: summary and history never
   assert.match(r.node('app').innerHTML, /data-role="ai-close-receipt"/);
   r.click('ai-close-receipt');
   acceptConfirm(r);
-  // The data path is unchanged (display only): the last finding wins, 4 + 2.
-  // If aiRecordFindingsAsPaperQty ever accumulates per product, update this test.
-  assert.equal(r.run("String(reconcileData.find(l => l.productId === 'code_238').noteQty)"), '6');
+  assert.equal(r.run("String(reconcileData.find(l => l.productId === 'code_238').noteQty)"), '12');
+  assert.equal(r.run("String(reconcileData.find(l => l.productId === 'code_101').noteQty)"), '10');
   const text = strip(r.node('rsBody').innerHTML);
-  assert.ok(!/חויב בתעודה 6/.test(text), text);
-  assert.match(text, /ברמן אסלי 5 פיתות התקבל 4 × ₪4\.91 · חסר 2/, '238 keeps the plain line');
-  // 101's paper quantity is exactly what was read for it: the numbers stay.
+  assert.ok(!/חויב בתעודה 6|חסר 2\b/.test(text), text);
+  assert.match(text, /ברמן אסלי 5 פיתות חויב בתעודה 12 · נסרק בפועל 4 × ₪4\.91 · חסר 8/, text);
   assert.match(text, /אחיד פרוס ברמן חויב בתעודה 10 · נסרק בפועל 12 × ₪[\d.]+ · עודף 2/);
 
+  // History: billed − scanned = the gap on every row, and nothing is left unowned.
   const block = await savedHistoryBlock(r);
-  assert.ok(!/חויב בתעודה/.test(strip(block)), 'units gap 6: the saved paper quantities do not close the document');
-  assert.match(rowText(block, 'ברמן אסלי 5 פיתות'), /^חסר: ברמן אסלי 5 פיתות 2 יח׳ · ₪9\.83 מצא קיזוז$/);
-  assert.ok(strip(block).includes('פער יחידות שטרם שויך 6'));
+  assert.match(rowText(block, 'ברמן אסלי 5 פיתות'), /^חסר: ברמן אסלי 5 פיתות חויב בתעודה 12 · נסרק בפועל 4 · חסר 8 יח׳ · ₪39\.30 מצא קיזוז$/);
+  assert.match(rowText(block, 'אחיד פרוס ברמן'), /^עודף: אחיד פרוס ברמן חויב בתעודה 10 · נסרק בפועל 12 · עודף 2 יח׳ · ₪11\.48 מצא קיזוז$/);
+  assert.ok(!strip(block).includes('פער יחידות שטרם שויך'), strip(block));
+  assert.ok(!strip(block).includes('פער סכום שטרם שויך'), strip(block));
+  assert.ok(strip(block).includes('תעודת ספק ₪116.37 · לתשלום ₪77.07'), strip(block));
 });
 
 test('partial basket closed "handle later": the summary says "billed (resolved rows)", the saved receipt keeps the plain row', async () => {
