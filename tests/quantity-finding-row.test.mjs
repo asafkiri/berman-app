@@ -89,3 +89,42 @@ test('real scan: every rendered row closes against the engine numbers', async ()
     assert.equal(Number(c[label]), f.qty, f.name);
   }
 });
+
+// v104: the owner looks at the big card first ("יש הבדלים מול הנייר"). Until now
+// it said only "חסר 8"; the three numbers sat behind "רוצה הסבר?".
+test('default view (details closed): the main card itself shows billed · scanned · gap', async () => {
+  const data = fixture();
+  const extra = data.products.find(p => p.code === '119');
+  data.items.push({ productId: extra.id, name: extra.name, barcode: extra.barcode, qty: 3 });
+  const r = runtime({ data });
+  await r.scan();
+  r.run('openReconcile()');
+  assert.equal(r.run('rcStep'), 'ai');
+  r.run('aiDetailsOpen = false; renderReconcile();');
+  const html = r.node('app').innerHTML;
+  assert.ok(!/התצוגה נכשלה/.test(html));
+  assert.ok(html.includes('רוצה הסבר מה קרה בתעודה'), 'details are closed');
+  assert.ok(html.includes('יש הבדלים מול הנייר'), 'the main differences card is shown');
+  const card = html.slice(html.indexOf('יש הבדלים מול הנייר'), html.indexOf('רוצה הסבר מה קרה בתעודה'));
+  const findings = JSON.parse(r.run('JSON.stringify(aiScanEvaluation.findings.filter(aiIsActionableFinding).filter(f => f.type === "shortage" || f.type === "surplus").map(f => ({ type: f.type, name: f.name, qty: f.qty, billed: (aiScanEvaluation.aggregates.get(f.productId) || { qty: 0 }).qty, scanned: (reconcileData.find(l => l.productId === f.productId) || { received: 0 }).received })))'));
+  assert.ok(findings.length >= 1);
+  for (const f of findings) {
+    const label = f.type === 'shortage' ? 'חסר' : 'עודף';
+    const start = card.indexOf(f.name);
+    assert.ok(start > 0, f.name + ' is in the main card');
+    const c = cells(card.slice(start, card.indexOf('bg-white rounded-xl px-3 py-2.5 mt-2', start + 1) > 0 ? card.indexOf('bg-white rounded-xl px-3 py-2.5 mt-2', start + 1) : undefined));
+    assert.equal(Number(c['חויב בתעודה']), f.billed, f.name);
+    assert.equal(Number(c['נסרק בפועל']), f.scanned, f.name);
+    assert.equal(Number(c[label]), f.qty, f.name);
+  }
+});
+
+test('main card: a row whose numbers do not close stays the plain one-liner', () => {
+  const r = runtime();
+  r.context.f = { type: 'shortage', productId: 'p1', name: 'חלה', qty: 1, claimId: 'claim-0' };
+  const h = r.run(`aiScanEvaluation = { aggregates: new Map([['p1', { qty: 6 }]]), basketComplete: true, findings: [f] };
+    reconcileData = [{ productId: 'p1', received: 6 }];
+    aiSimpleSummaryHtml({ findings: [f] }, {})`);
+  assert.ok(strip(h).includes('חלה חסר 1'));
+  assert.deepEqual(cells(h), {});
+});
