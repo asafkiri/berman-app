@@ -97,6 +97,38 @@ test('shortage and surplus remain quantities after the discount is supplied; nei
   assert.equal(c.run('receiptDiscrepancyInfo(receipts[0]).overItems[0].n'), 1);
   assert.equal(c.run('receipts[0].totalExVat'), 200.74);
 });
+// v105: the late discount rebuilds prices only. A saved line without noteQty
+// means "billed = received" (every reader reads it so); the rebuild used to put
+// the OCR paper quantity back on it, silently undoing a paper correction made in
+// "תקן" — and bringing back a line the owner removed there.
+test('a paper correction made in "תקן" survives the late discount; only prices change', async () => {
+  const fixThenRate = async edit => {
+    const c = await savedReceipt({ shortage: 2 });
+    assert.deepEqual(json(c, 'receipts[0].items.map(l=>[l.productId,l.qty,l.noteQty])'), [['missing', 28, 30], ['known', 5, 5]]);
+    c.run('openReceiptFix(receipts[0].id)');
+    c.run(edit);
+    await c.run('saveReceiptFix()');
+    c.context.fixUpdate = c.writes.at(-1).data;
+    c.run('Object.assign(receipts[0], fixUpdate)');
+    const fixed = json(c, '[receipts[0].items.map(l=>[l.productId,l.qty,l.noteQty==null?l.qty:l.noteQty]),receipts[0].totalExVat,receiptDiscrepancyInfo(receipts[0]).shortItems.map(s=>s.productId+":"+s.n)]');
+    assert.equal(await saveRate(c, '8'), true);
+    const rated = json(c, '[receipts[0].items.map(l=>[l.productId,l.qty,l.noteQty==null?l.qty:l.noteQty]),receipts[0].totalExVat,receiptDiscrepancyInfo(receipts[0]).shortItems.map(s=>s.productId+":"+s.n)]');
+    assert.ok(Math.abs(c.run("receipts[0].items.find(l=>l.productId==='missing').unitPrice") - 5.7408) < 1e-10, 'the discount itself is applied');
+    return { fixed, rated };
+  };
+  // The paper really says 28 (= received): no noteQty is stored, and no shortage comes back.
+  const equal = await fixThenRate("receiptFix.items.find(l => l.productId === 'missing').noteQty = 28");
+  assert.deepEqual(equal.fixed, [[['missing', 28, 28], ['known', 5, 5]], 212.22, []]);
+  assert.deepEqual(equal.rated, equal.fixed, 'was missing 28/30, "חסר 2" and ₪200.74 again');
+  // A line removed in "תקן" stays removed.
+  const removed = await fixThenRate("receiptFix.items.find(l => l.productId === 'missing').noteQty = 28; Object.assign(receiptFix.items.find(l => l.productId === 'known'), { qty: 0, noteQty: 0 })");
+  assert.deepEqual(removed.fixed, [[['missing', 28, 28]], 212.22, []]);
+  assert.deepEqual(removed.rated, removed.fixed, 'was back as known 0/5 with "חסר 5"');
+  // Control: a correction that differs from received was always kept.
+  const lower = await fixThenRate("receiptFix.items.find(l => l.productId === 'missing').noteQty = 29");
+  assert.deepEqual(lower.rated[0], [['missing', 28, 29], ['known', 5, 5]]);
+  assert.deepEqual(lower.rated[2], ['missing:1']);
+});
 test('a late discount uses the historical catalog and document date', async () => {
   const c = await savedReceipt();
   c.run("products[1].listPrice=100;products[1].price=80;products[0].listPrice=7;receiptDocDate='2026-11-01'");

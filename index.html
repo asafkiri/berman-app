@@ -10702,7 +10702,12 @@ function bermanMissingDiscountHtml() {
 }
 // Rebuild amounts from the prices/promotions captured with this receipt, not
 // today's catalog. Physical quantities and the original OCR evidence are retained.
-function bermanBuildDeferredReceipt(review, counted) {
+// v105: opts.stored — בנייה מחדש של תעודה שמורה (הנחה שהושלמה מאוחר). השורות
+// השמורות הן האמת: noteQty חסר פירושו "כמו הכמות" (בדיוק כמו בכל קורא אחר),
+// ושורה שהוסרה ב"תקן" נשארת מוסרת. עד עכשיו הכמות מהנייר חזרה לשורה שאין לה
+// noteQty, ותיקון נייר שהבעלים עשה ("בנייר באמת 28") התבטל בשקט עם ההנחה.
+function bermanBuildDeferredReceipt(review, counted, opts) {
+  const storedItems = !!(opts && opts.stored);
   const catalog = cloneSafe(review.catalog), updated = cloneSafe(review), rates = review.rates || {};
   catalog.forEach(p => { if (Object.prototype.hasOwnProperty.call(rates, p.id)) {
     p.discountPct = rates[p.id]; p.discountSet = true; p.price = finalUnitPrice(p.listPrice, p.discountPct);
@@ -10747,11 +10752,12 @@ function bermanBuildDeferredReceipt(review, counted) {
     const prev = actual.get(l.productId);
     actual.set(l.productId, { ...l, qty: Number(l.qty) + (prev ? prev.qty : 0) });
   });
-  const ids = new Set([...aggregates.keys(), ...actual.keys()]);
+  const ids = new Set(storedItems ? [...actual.keys()] : [...aggregates.keys(), ...actual.keys()]);
   const lines = Array.from(ids).map(id => {
     const a = aggregates.get(id), old = actual.get(id), p = a ? a.product : catalog.find(p => p.id === id);
     if (!p) throw new Error('חסר מוצר ששייך לספירה');
-    const qty = old ? Number(old.qty) : 0, noteQty = old && old.noteQty != null ? Number(old.noteQty) : a ? a.paperQty : 0;
+    const qty = old ? Number(old.qty) : 0;
+    const noteQty = old && old.noteQty != null ? Number(old.noteQty) : (storedItems && old) ? qty : a ? a.paperQty : 0;
     const unit = a ? a.rawTotal / a.paperQty : (p.discountSet ? Number(p.price) : 0);
     return { ...(old || {}), productId: id, name: p.name, barcode: p.barcode || '', code: p.code || '', qty, noteQty,
       unitPrice: unit, basePrice: Number(p.price) || 0, listPrice: Number(p.listPrice) || 0,
@@ -10820,7 +10826,7 @@ async function bermanSaveKnownDiscount(productId, value, receiptId, fingerprint)
   let update = null;
   if (rc) {
     const review = cloneSafe(rc.discountReview); review.rates = { ...(review.rates || {}), [productId]: pct };
-    const built = bermanBuildDeferredReceipt(review, rc.items);
+    const built = bermanBuildDeferredReceipt(review, rc.items, { stored: true });
     const probe = { ...rc, items: built.lines, discountReview: built.discountReview, unresolvedAmountGap: built.unresolvedAmountGap, unresolvedUnitsGap: built.unresolvedUnitsGap };
     update = { items: built.lines, discountReview: built.discountReview, totalExVat: built.ex, totalIncVat: amountIncForDoc(rc, built.ex),
       receivedExVat: built.calculatedEx, calculatedExVat: built.calculatedEx, unresolvedAmountGap: built.unresolvedAmountGap,
@@ -12341,7 +12347,12 @@ function aiEvaluateInvoiceScan(payload) {
       old.qty += docSign * qty; old.totalCents += docSign * cents; old.rows.push({ document: index + 1, page: row.sourcePage, line: row.lineNumber, credit: docIsCredit, confidence: isFinite(rowConfidence) ? rowConfidence : 0, barcodeObserved: barcodeMatch.observed, barcodeMatchMethod: barcodeMatch.method, identityEvidence: barcodeMatch.identityEvidence || null });
       // קיבוץ אבחוני בלבד לזיהוי מחירים מודפסים שונים; אינו משתתף בחישוב הסכום.
       // כאן השוואה ברמת אגורות מכוונת, כדי שעיגולי שורה תקינים לא ייראו כמחירים שונים.
-      if (qty > 0) old.priceVariants.add(r2(cents / 100 / qty));
+      // v105: בברמן אין סכום שורה בנייר — הסכום מחושב ממחיר הצורה שהוכרעה לשורה,
+      // ועיגול הסכום לשורה (58.96 / 12 = 4.91 מול 9.83 / 2 = 4.92) אינו מחיר אחר.
+      // לכן שורה מזוהה נמדדת במחיר היחידה המדויק שלה. עד עכשיו העיגול יצר "חויב
+      // ביותר ממחיר אחד" ותביעת זיכוי של אגורות על אותו מוצר בשתי שורות, או בחיוב
+      // ובזיכוי — והתעודה נשמרה פתוחה.
+      if (qty > 0) old.priceVariants.add(r2(row.__bermanPriceForm && Number(row.unitPriceExVat) > 0 ? Number(row.unitPriceExVat) : cents / 100 / qty));
       if (row.promotionText) old.promotionTexts.push(String(row.promotionText));
       aggregates.set(product.id, old);
     });
@@ -16376,12 +16387,17 @@ function receiptFixTotals() {
   const usePaperTotal = receiptFix.noteTotalInc != null && unitAnchor.matches && receiptMoneyMatches(calculatedEx, receiptFix.noteTotalInc, true);
   return { ex: usePaperTotal ? r2(receiptFix.noteTotalInc) : calculatedEx, grossEx, calculatedEx };
 }
+// v105: יחידות הנייר נטו — זיכוי מופחת (notesAnchor, אותו כלל כמו בהיסטוריה),
+// ושורת פיקדון אינה יחידות. עד עכשיו החיוב והזיכוי חוברו (12 + 2 = 24 מול 20
+// שויכו), היחידות "לא התאימו" לעולם, ותעודה עם זיכוי שנשמרה ב"תקן" נפתחה על
+// אגורת עיגול.
 function receiptFixUnitAnchorState(items) {
   const parts = Array.isArray(receiptFix && receiptFix.noteParts) ? receiptFix.noteParts : [];
   const normalized = parts.map(normNote);
   const complete = normalized.length > 0 && normalized.every(x => x.units != null);
-  const paperUnits = complete ? normalized.reduce((a, x) => a + (Number(x.units) || 0), 0) : null;
-  const assignedUnits = (items || []).reduce((a, l) => a + (l.noteQty != null ? (Number(l.noteQty) || 0) : (Number(l.qty) || 0)), 0);
+  const paperUnits = complete ? notesAnchor(normalized, 'units') : null;
+  const assignedUnits = (items || []).reduce((a, l) => a + (!l || l.isDeposit || String(l.productId || '').indexOf('deposit-') === 0 ? 0
+    : (l.noteQty != null ? (Number(l.noteQty) || 0) : (Number(l.qty) || 0))), 0);
   return { complete, paperUnits, assignedUnits, matches: complete && assignedUnits === paperUnits };
 }
 function receiptFixEffectiveInfo(items) {
