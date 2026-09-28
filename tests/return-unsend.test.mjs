@@ -271,6 +271,30 @@ head('[10] מקצה לקצה — תעודה מאומתת אינה מציעה א�
   ok('וגם קריאה ישירה נעצרת', rt.run('returnsList.length') === 0 && rt.run('testDeletes.length') === 0);
 }
 
+head('[11] v103 — כפתור "מחק תעודה" אחד בכל כרטיס, לא שניים');
+{
+  // עד v102 כרטיס תעודה שלא אומתה בהיסטוריית החזרות הציג שני כפתורי "מחק
+  // תעודה" זה מתחת לזה (ret-delete ו-del-return) שעושים אותו דבר.
+  const deletes = html => (html.match(/<i class="fa-solid fa-trash-can"><\/i> מחק תעודה<\/button>/g) || []).length;
+  const rt = stubbedRuntime();
+  rt.context.testDoc = JSON.parse(JSON.stringify(openDoc()));
+  rt.run(`returns = [testDoc]; returnsList = []; returnsSlots = { weekly: returnsList, daily: [] };
+    returnsSlot = 'weekly'; currentView = 'returnsHistory'; renderReturnsHistory();`);
+  const card = rt.node('app').innerHTML;
+  ok('היסטוריית חזרות: כפתור מחיקה אחד', deletes(card) === 1, String(deletes(card)));
+  ok('והוא אותו כפתור שבשאר הכרטיסים', card.indexOf('data-role="ret-delete" data-id="ret_open"') > -1 && card.indexOf('data-role="del-return"') === -1);
+  ok('תעודות: כפתור מחיקה אחד', deletes(rt.run('returnCardInReceipts(returns[0])')) === 1);
+  rt.context.testDoc2 = JSON.parse(JSON.stringify(openDoc({ credited: true, creditedAt: Date.UTC(2026, 8, 10, 6, 0), creditStatus: 'ok', creditNoteTotal: openEx })));
+  ok('ותעודה מאומתת — גם אחד', deletes(rt.run('returns = [testDoc2]; renderReturnsHistory(); document.getElementById("app").innerHTML')) === 1);
+
+  rt.run('returns = [testDoc]; renderReturnsHistory();');
+  rt.click('ret-delete', 'ret_open');
+  ok('המחיקה שואלת לפני', rt.node('confirmMsg').textContent.indexOf('למחוק את תעודת החזרה') > -1);
+  await rt.events.get('confirmOk:click')();
+  const del = rt.run('JSON.parse(JSON.stringify(testDeletes))');
+  ok('ומוחקת עם גיבוי לסל המחזור', del.length === 1 && del[0].name === 'returns' && del[0].id === 'ret_open' && (del[0].data.items || []).length === 2);
+}
+
 console.log('\n' + (fail ? '✗ נכשלו ' + fail : '✓ הכל עבר') + ' (' + pass + '/' + (pass + fail) + ')' +
   (backupArg ? ' · מול הגיבוי' : ' · מול fixture.json'));
 process.exit(fail ? 1 : 0);
