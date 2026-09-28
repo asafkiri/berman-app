@@ -849,7 +849,7 @@ let sharedReceiptScanToken = null;
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '102'; // קליטה משותפת: צילום, פענוח, ספירה ובדיקה בכל המכשירים
+const APP_VERSION = '103'; // כפתור "מחק תעודה" אחד בכרטיס תעודת חזרות, לא שניים
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -3125,7 +3125,7 @@ function renderReturnsHistory() {
         '</div>' : '')) : '';
       const actionArea = !credited
         ? creditAllocationsHtml(r) +
-          retVerifyRowHtml(r) + '<button data-role="ret-edit-items" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + retUnsendBtnHtml(r) + (pending >= 2 ? retMergeBtnHtml(r.id) : '') + '<button data-role="ret-delete" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>' + '<button data-role="del-return" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-rose-200 text-rose-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>'
+          retVerifyRowHtml(r) + '<button data-role="ret-edit-items" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + retUnsendBtnHtml(r) + (pending >= 2 ? retMergeBtnHtml(r.id) : '') + '<button data-role="ret-delete" data-id="' + r.id + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>'
         : breakdown +
           retCarryBoxHtml(r) +
           creditAllocationsHtml(r) +
@@ -3370,21 +3370,43 @@ function retVerifyRowHtml(r) {
   const amount = retVerifyAmount(r);
   return '<div class="text-[11px] text-slate-400 font-bold mb-1.5"><i class="fa-solid fa-circle-info"></i> הקלד את סכום תעודת הזיכוי <b class="text-slate-600">ללא מע״מ</b>, או אשר שהוא בדיוק ₪' + fmtMoney(amount) + ' — כל מה שהוחזר</div>' +
     '<div class="flex gap-1.5 items-stretch mb-2">' +
-      '<div class="flex-1 min-w-0 flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500"><span class="text-slate-400 font-black text-sm">₪</span><input id="rvNote_' + r.id + '" type="text" inputmode="decimal" placeholder="סכום הזיכוי" class="w-full min-w-0 h-11 text-center text-sm font-black outline-none bg-transparent"></div>' +
+      '<div class="flex-1 min-w-0 flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500"><span class="text-slate-400 font-black text-sm">₪</span><input id="rvNote_' + r.id + '" type="text" inputmode="decimal" placeholder="סכום הזיכוי" class="w-full min-w-0 h-11 text-center text-base font-black outline-none bg-transparent"></div>' +
       '<button data-role="rv-verify-inline" data-id="' + r.id + '" class="btn-tap shrink-0 px-3 rounded-xl font-black text-sm bg-green-600 text-white flex items-center gap-1"><i class="fa-solid fa-check-double"></i> בדוק</button>' +
       '<button data-role="rv-approve" data-id="' + r.id + '" class="btn-tap shrink-0 px-3 rounded-xl font-black text-sm bg-emerald-700 text-white flex items-center gap-1"><i class="fa-solid fa-stamp"></i> אישור</button>' +
     '</div>';
 }
+// "בדוק": סכום הנייר שהוקלד מול מה שהוחזר. גם "אישור" מגיע לכאן כשכבר הוקלד
+// סכום בשדה (v103).
+function verifyReturnInline(id) {
+  const inp = $('rvNote_' + id); const v = inp ? parseNoteVal(inp.value) : null;
+  if (v == null) { showToast('הקלד את סכום תעודת הזיכוי', null, null, 2000); return; }
+  const rr = returns.find(x => x.id === id); if (!rr) return;
+  const surplus = returnsCreditSurplus(rr, v);
+  if (surplus > 0 && openCreditSplitPrompt(id, v)) return;
+  else if (Math.abs(surplus) <= 1) markReturnVerified(id, v);
+  else openReturnVerify(id, v);
+}
 function openReturnApproveConfirm(id) {
   const r = returns.find(x => x.id === id); if (!r) return;
   if (r.credited) return;
+  // v103: סכום שכבר הוקלד בשדה הוא סכום הנייר — "אישור" מגיש אותו בדיוק כמו
+  // "בדוק", ולא מחליף אותו בשקט בסך התעודה (זה היה סוגר תעודה עם פער כ"בלי פער")
+  const inp = $('rvNote_' + id);
+  if (inp && parseNoteVal(inp.value) != null) { verifyReturnInline(id); return; }
   const amount = retVerifyAmount(r);
   const alloc = creditAllocatedEx(r);
   showConfirm('אישור תעודת זיכוי',
     'לאשר שהספק זיכה בדיוק ₪' + fmtMoney(returnTotals(r).ex) + ' (ללא מע״מ) — כל מה שהוחזר' +
     (alloc > 0 ? ', ובנוסף ₪' + fmtMoney(alloc) + ' ששויכו לחוסר בקליטה' : '') +
     '? התעודה תיסגר בלי פער, בלי להקליד את הסכום.',
-    'אשר תעודה', () => markReturnVerified(id, amount));
+    'אשר תעודה', () => {
+      // v103: אם התעודה השתנתה או אומתה ממכשיר אחר בזמן שהחלון היה פתוח, הסכום
+      // שאושר כבר אינו "כל מה שהוחזר" — לא סוגרים אותה בשמו
+      const cur = returns.find(x => x.id === id);
+      if (!cur || cur.credited) { showToast('התעודה כבר אומתה או הוסרה במכשיר אחר', null, null, 2600); return; }
+      if (Math.abs(retVerifyAmount(cur) - amount) > 0.009) { showToast('התעודה השתנתה בזמן האישור — בדוק שוב מול הנייר', null, null, 3200); return; }
+      markReturnVerified(id, amount);
+    });
 }
 // ===== v80: ביטול שליחה — החזרת תעודה שלא אומתה לרשימת החזרות הפתוחה =====
 // זה לא אחיו של v78 אלא ההפך ממנו. שם הסחורה כן יצאה והספק זיכה חלקית, ולכן
@@ -22114,7 +22136,7 @@ app.addEventListener('click', (e) => {
   }
   else if (role === 'edit-barcode') openBarcodePrompt(id, true);
   // v66: העודף שעל הנייר נבדק מול חוסר פתוח בקליטה לפני שהוא נחשב פער בחזרות
-  else if (role === 'rv-verify-inline') { const inp = $('rvNote_' + id); const v = inp ? parseNoteVal(inp.value) : null; if (v == null) { showToast('הקלד את סכום תעודת הזיכוי', null, null, 2000); return; } const rr = returns.find(x => x.id === id); if (!rr) return; const surplus = returnsCreditSurplus(rr, v); if (surplus > 0 && openCreditSplitPrompt(id, v)) return; else if (Math.abs(surplus) <= 1) markReturnVerified(id, v); else openReturnVerify(id, v); }
+  else if (role === 'rv-verify-inline') verifyReturnInline(id);
   else if (role === 'rv-add-note') { const inp = $('rvAdd_' + id); const v = inp ? parseNoteVal(inp.value) : null; if (v == null) { showToast('הקלד את סכום תעודת הזיכוי המשלימה', null, null, 2200); return; } addCreditNote(id, v); }
   else if (role === 'credit-split-open') { const r = returns.find(x => x.id === id); if (r && !openCreditSplitPrompt(id, r.creditNoteTotal)) showToast('לא נותרה התאמה לחוסר פתוח', null, null, 2600); }
   else if (role === 'rv-open') openReturnVerify(id, null);

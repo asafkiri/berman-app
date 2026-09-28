@@ -271,6 +271,74 @@ head('[10] מקצה לקצה — תעודה מאומתת אינה מציעה א�
   ok('וגם קריאה ישירה נעצרת', rt.run('returnsList.length') === 0 && rt.run('testDeletes.length') === 0);
 }
 
+head('[11] v103 — כפתור "מחק תעודה" אחד בכל כרטיס, לא שניים');
+{
+  // עד v102 כרטיס תעודה שלא אומתה בהיסטוריית החזרות הציג שני כפתורי "מחק
+  // תעודה" זה מתחת לזה (ret-delete ו-del-return) שעושים אותו דבר.
+  const deletes = html => (html.match(/<i class="fa-solid fa-trash-can"><\/i> מחק תעודה<\/button>/g) || []).length;
+  const rt = stubbedRuntime();
+  rt.context.testDoc = JSON.parse(JSON.stringify(openDoc()));
+  rt.run(`returns = [testDoc]; returnsList = []; returnsSlots = { weekly: returnsList, daily: [] };
+    returnsSlot = 'weekly'; currentView = 'returnsHistory'; renderReturnsHistory();`);
+  const card = rt.node('app').innerHTML;
+  ok('היסטוריית חזרות: כפתור מחיקה אחד', deletes(card) === 1, String(deletes(card)));
+  ok('והוא אותו כפתור שבשאר הכרטיסים', card.indexOf('data-role="ret-delete" data-id="ret_open"') > -1 && card.indexOf('data-role="del-return"') === -1);
+  ok('תעודות: כפתור מחיקה אחד', deletes(rt.run('returnCardInReceipts(returns[0])')) === 1);
+  rt.context.testDoc2 = JSON.parse(JSON.stringify(openDoc({ credited: true, creditedAt: Date.UTC(2026, 8, 10, 6, 0), creditStatus: 'ok', creditNoteTotal: openEx })));
+  ok('ותעודה מאומתת — גם אחד', deletes(rt.run('returns = [testDoc2]; renderReturnsHistory(); document.getElementById("app").innerHTML')) === 1);
+
+  rt.run('returns = [testDoc]; renderReturnsHistory();');
+  rt.click('ret-delete', 'ret_open');
+  ok('המחיקה שואלת לפני', rt.node('confirmMsg').textContent.indexOf('למחוק את תעודת החזרה') > -1);
+  await rt.events.get('confirmOk:click')();
+  const del = rt.run('JSON.parse(JSON.stringify(testDeletes))');
+  ok('ומוחקת עם גיבוי לסל המחזור', del.length === 1 && del[0].name === 'returns' && del[0].id === 'ret_open' && (del[0].data.items || []).length === 2);
+}
+
+head('[12] v103 — "אישור" עם סכום שכבר הוקלד, ותעודה שהשתנתה בזמן החלון');
+{
+  // סכום שהוקלד בשדה הוא סכום הנייר: "אישור" מגיש אותו כמו "בדוק" — ולא מחליף
+  // אותו בשקט בסך התעודה, מה שהיה סוגר תעודה חסרה כ"בלי פער".
+  const fresh = () => {
+    const rt = stubbedRuntime();
+    rt.context.testDoc = JSON.parse(JSON.stringify(openDoc()));
+    rt.run(`returns = [testDoc]; returnsList = []; returnsSlots = { weekly: returnsList, daily: [] };
+      returnsSlot = 'weekly'; currentView = 'returnsHistory'; renderReturnsHistory();`);
+    return rt;
+  };
+  const short = r2(openEx - 5);
+  const a = fresh();
+  a.node('rvNote_ret_open').value = String(short);
+  const writesBefore = a.writes.length;
+  a.click('rv-approve', 'ret_open');
+  ok('סכום שהוקלד אינו נסגר כ"זיכה בדיוק"', a.writes.length === writesBefore && a.run('currentView') === 'returnReconcile', a.run('currentView'));
+  ok('ונפתח מסך ההתאמה עם הסכום שהוקלד', near(a.run('returnVerify.noteTotal'), short));
+  const b = fresh();
+  b.node('rvNote_ret_open').value = String(short);
+  b.click('rv-verify-inline', 'ret_open');
+  ok('בדיוק כמו "בדוק" עם אותו סכום', b.run('currentView') === 'returnReconcile' && near(b.run('returnVerify.noteTotal'), short));
+
+  const same = fresh();
+  same.node('rvNote_ret_open').value = String(openEx);
+  same.click('rv-approve', 'ret_open');
+  const w = same.writes[same.writes.length - 1];
+  ok('סכום תואם שהוקלד נסגר עם הסכום שהוקלד', !!w && w.data.credited === true && near(w.data.creditNoteTotal, openEx));
+
+  // התעודה נערכה ממכשיר אחר בזמן שחלון האישור היה פתוח — הסכום שאושר כבר אינו
+  // "כל מה שהוחזר", ולכן היא אינה נסגרת בשמו.
+  const c = fresh();
+  c.click('rv-approve', 'ret_open');
+  const cw = c.writes.length;
+  c.run('returns[0].totalExVat = r2(returns[0].totalExVat + 5); returns[0].totalIncVat = r2(returns[0].totalExVat * 1.18);');
+  await c.events.get('confirmOk:click')();
+  ok('תעודה שהשתנתה אינה נסגרת', c.writes.length === cw && c.run('returns[0].credited') === false);
+  ok('והמשתמש שומע על זה', c.run('testToasts2[testToasts2.length - 1].text').indexOf('השתנתה') > -1);
+
+  const html = fresh().run('retVerifyRowHtml(returns[0])');
+  const input = (html.match(/<input id="rvNote_ret_open"[^>]*>/) || [''])[0];
+  ok('שדה הסכום 16px — בלי זום באייפון', /\btext-base\b/.test(input) && !/\btext-sm\b/.test(input));
+}
+
 console.log('\n' + (fail ? '✗ נכשלו ' + fail : '✓ הכל עבר') + ' (' + pass + '/' + (pass + fail) + ')' +
   (backupArg ? ' · מול הגיבוי' : ' · מול fixture.json'));
 process.exit(fail ? 1 : 0);
