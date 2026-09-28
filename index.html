@@ -849,7 +849,7 @@ let sharedReceiptScanToken = null;
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '104'; // כמה חויב, כמה נסרק וכמה חסר — בכרטיס הראשי, בכרטיס המנתח, בסיכום ובהיסטוריה
+const APP_VERSION = '105'; // "קלוט ותטפל בהפרש" שומר בדיוק מה שהנייר חייב לכל מוצר, גם כשיש עליו כמה ממצאים
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -14246,21 +14246,44 @@ function aiMonthEndPendingRecord(ev) {
 // כאן נכתבות כמויות הנייר של הממצאים שהוצגו, ותו לא: המחירים לא נגעים,
 // שורות שאין להן ממצא לא נגעות, וההחלה המלאה (aiApplyInvoiceResult) נשארת
 // מסלול נפרד עם הבדיקות הטרנזקציוניות שלה.
+// v105: המקור הוא ההשוואה של המנוע בין הנייר לסריקה (כשהמנתח הוביל היא
+// שמורה ב-ev.engineFindings — ממצא כמות אחד לכל מוצר), ולא הטענות של המנתח.
+// עד עכשיו נכתב ממצא אחרי ממצא (שנסרק ± הממצא) מתוך הטענות, וכשהמנתח הוביל
+// היו על אותו מוצר כמה: החלפה מתפרקת לחוסר ולעודף, ולצידה טענת חוסר נוספת —
+// והאחרונה דרסה. ברמן אסלי: חויב 12, נסרק 4 (חסר 8) — ונשמר 6, "חסר 2", ו-6
+// יחידות בלי בעלים. טענות המנתח מסבירות את הפער ונשארות על המסך ובטקסט לספק,
+// אבל שני מוצרים באותו מחיר נראים לשער זהים, וטענה יכולה לשייך חוסר למוצר
+// שהנייר מראה שהגיע במלואו. הכמות נכתבת פעם אחת לכל מוצר; הסכימה לכל מוצר
+// היא רשת ביטחון למקור שיש בו כמה ממצאים על מוצר אחד (במנוע אין כזה).
+// כך "קלוט ותטפל בהפרש" שומר בדיוק מה שהנייר חייב — אותו מספר ש-apply כותב
+// (line.noteQty = a.qty), בלי תלות בסדר הטענות, וגם בלחיצה שנייה.
 function aiRecordFindingsAsPaperQty(ev) {
   if (!ev || !Array.isArray(reconcileData)) return 0;
-  const findings = (Array.isArray(ev.findings) ? ev.findings : [])
-    .filter(f => f && ['shortage', 'surplus'].includes(String(f.type)) && f.productId != null);
+  const source = ev.analyzerLed === true && Array.isArray(ev.engineFindings) ? ev.engineFindings
+    : (Array.isArray(ev.findings) ? ev.findings : []);
+  const netByProduct = new Map();
+  source.forEach(finding => {
+    if (!finding || !['shortage', 'surplus'].includes(String(finding.type)) || finding.productId == null) return;
+    const qty = Math.max(0, Number(finding.qty) || 0);
+    if (!qty) return;
+    const id = String(finding.productId);
+    const entry = netByProduct.get(id) || { delta: 0, shortage: null };
+    entry.delta += String(finding.type) === 'shortage' ? qty : -qty;
+    if (!entry.shortage && String(finding.type) === 'shortage') entry.shortage = finding;
+    netByProduct.set(id, entry);
+  });
   let written = 0;
-  findings.forEach(finding => {
-    let line = reconcileData.find(l => l && String(l.productId) === String(finding.productId));
+  netByProduct.forEach((entry, id) => {
+    let line = reconcileData.find(l => l && String(l.productId) === id);
     // v46: מוצר שלא נסרק כלל אינו קיים ב-reconcileData — היא נבנית מהרשימה
     // שנסרקה בקליטה. בדיוק המקרה של "פרנה — חסר 1": הנייר מכיר אותה, הסורק
     // מעולם לא ראה אותה, ולכן החוסר שהוצג במסך נעלם בשמירה. aiApplyInvoiceResult
     // כבר יוצר שורה כזאת; כאן נעשה אותו דבר, בכמות שנסרקה אפס ובלי לגעת בכסף
     // (סכום השורה יוצא אפס, החוסר בלבד נרשם).
     if (!line) {
-      if (String(finding.type) !== 'shortage') return;
-      const product = (products || []).find(item => item && String(item.id) === String(finding.productId));
+      if (!(entry.delta > 0) || !entry.shortage) return;
+      const finding = entry.shortage;
+      const product = (products || []).find(item => item && String(item.id) === id);
       const unitPrice = Number(finding.expectedPrice) > 0
         ? Number(finding.expectedPrice)
         : (product ? Number(product.price) || 0 : 0);
@@ -14273,9 +14296,7 @@ function aiRecordFindingsAsPaperQty(ev) {
       reconcileData.push(line);
     }
     const received = Number(line.received) || 0;
-    const qty = Math.max(0, Number(finding.qty) || 0);
-    if (!qty) return;
-    const paperQty = String(finding.type) === 'shortage' ? received + qty : Math.max(0, received - qty);
+    const paperQty = Math.max(0, received + entry.delta);
     if (paperQty === received) return;
     line.noteQty = paperQty;
     written++;
@@ -16251,8 +16272,9 @@ function saveReconciledReceipt(opts) {
 }
 // v104: הכותרת של "כמה חויב" בשורת הסיכום, או '' — ואז נשאר "התקבל 4".
 // כמות הנייר שבשורה אינה תמיד מה שמודפס: "קלוט ותטפל בהפרש אחר כך" גוזר
-// אותה מהממצאים (שנסרק + החוסר), ושתי טענות על אותו מוצר (החלפה) נותנות
-// מספר שאינו בנייר. לכן כשיש קריאה של הנייר, הכמות חייבת להיות בדיוק מה
+// אותה מהממצאים (שנסרק + החוסר). עד v105 שתי טענות על אותו מוצר (החלפה)
+// נתנו מספר שאינו בנייר; מאז הוא נסכם לכל מוצר מההשוואה מול הנייר, והבדיקה
+// כאן נשארת רשת ביטחון. לכן כשיש קריאה של הנייר, הכמות חייבת להיות בדיוק מה
 // שנקרא לאותו מוצר; סל חלקי מקבל את אותה הסתייגות כמו בכרטיס הראשי. זיכוי
 // באותו משלוח הופך את הנקרא לנטו (חיוב פחות זיכוי), שאינו המספר שבתעודת
 // החיוב — אז בלי הכותרת. בלי קריאה בכלל (הקלדה ידנית) — זו הכמות שהוקלדה
@@ -17574,11 +17596,12 @@ function manualOffsetSummary(entry) {
 // החשבון לא סוגר ונשארת השורה של היום. השלמת סחורה מעלה את הכמות בשורה
 // עצמה, ולכן "נסרק בפועל" כבר אינו מה שנסרק — גם אז בלי פירוט.
 // noteQty שנשמר אינו תמיד מה שמודפס: "קלוט ותטפל בהפרש אחר כך" גוזר אותו
-// מהממצאים (שתי טענות על מוצר אחד — החלפה — נותנות מספר שאינו בנייר), וסל
-// חלקי משאיר שורות נייר בלי מוצר. בשני המקרים כמויות הנייר שבשורות אינן
-// סוגרות את התעודה עצמה, ונשאר פער יחידות או פער סכום שטרם שויך — אז בלי
-// פירוט לאף שורה. זיכוי באותו משלוח: noteQty הוא נטו, לא המספר שבתעודת
-// החיוב — גם אז בלי פירוט. di = receiptDiscrepancyInfo(rc), אם כבר חושב.
+// מהממצאים (עד v105 שתי טענות על מוצר אחד — החלפה — נתנו מספר שאינו בנייר,
+// ותעודות שנשמרו כך נשארות בהיסטוריה), וסל חלקי משאיר שורות נייר בלי מוצר.
+// בשני המקרים כמויות הנייר שבשורות אינן סוגרות את התעודה עצמה, ונשאר פער
+// יחידות או פער סכום שטרם שויך — אז בלי פירוט לאף שורה. זיכוי באותו משלוח:
+// noteQty הוא נטו, לא המספר שבתעודת החיוב — גם אז בלי פירוט.
+// di = receiptDiscrepancyInfo(rc), אם כבר חושב.
 function receiptDiffPaperNumbers(rc, item, dir, di) {
   const pid = String(item && item.productId || '');
   if (!rc || !pid || pid.indexOf('deposit-') === 0) return null;
