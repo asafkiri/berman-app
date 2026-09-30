@@ -6155,9 +6155,6 @@ function receivingPhotoCardHtml() {
     '<div class="text-[11px] text-slate-500 font-bold text-center mt-1.5">הקריאה מהנייר תרוץ ברקע בזמן שאתה סורק את הסחורה. הכמויות שבתעודה לא יוצגו לך תוך כדי — הספירה נשארת עיוורת, וזה מה שתופס חוסר.</div>' +
     '<button data-role="rc-entry-manual" class="btn-tap w-full text-slate-400 py-2.5 font-black text-xs underline mt-1">אין רשת או שהנייר לא קריא — הקלד את שלושת המספרים</button>';
 }
-// v63: הדלת של מקרי הקיצון. היא יושבת מתחת לשני המסלולים הרגילים ולא
-// לצידם — קליטה בלי נייר היא קליטה שאין מי שיאמת אותה, וזו לא צריכה
-// להיות הדרך הקצרה בבוקר עמוס.
 // v107: קליטה שכבר נספרה וחזרה לשלב צילום התעודה.
 function receiptPhotoStepPending() {
   return !receiptOpened && receiptEntryMode === 'photo' && AI_SCAN_ENABLED;
@@ -6178,6 +6175,9 @@ function receiptNotesEscapeHtml() {
     (receiptNoDoc ? '<button data-role="rc-nodoc-back" class="btn-tap w-full bg-amber-50 border border-amber-300 text-amber-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-file-circle-xmark"></i> חזור לקליטה בלי תעודה</button>' : '') +
   '</div>';
 }
+// v63: הדלת של מקרי הקיצון. היא יושבת מתחת לשני המסלולים הרגילים ולא
+// לצידם — קליטה בלי נייר היא קליטה שאין מי שיאמת אותה, וזו לא צריכה
+// להיות הדרך הקצרה בבוקר עמוס.
 function receivingNoDocGateHtml() {
   if (receiptAttachTarget) return '';
   return '<div class="mt-4 pt-3 border-t border-slate-200">' +
