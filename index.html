@@ -849,7 +849,7 @@ let sharedReceiptScanToken = null;
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '106'; // קיזוז אוטומטי בין תעודות — מוצר, מחיר וכמות זהים, ב-9 התעודות האחרונות
+const APP_VERSION = '107'; // יציאה מ"מצאתי את התעודה" בקליטה בלי תעודה, וצילום התעודה באמצע ספירה
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -1345,7 +1345,8 @@ function restoreReceiptDraft() {
       receiptCountingMode = o.countingMode === 'manual' ? 'manual' : 'scan';
       receiptQuantityReview = o.quantityReview && Array.isArray(o.quantityReview.rows) ? o.quantityReview : null;
       receiptNotes = (Array.isArray(o.notes) ? o.notes : (o.noteTotal != null ? [o.noteTotal] : [])).map(normNote);
-      receiptOpened = !!o.opened || receiptList.length > 0;
+      // v107: שלב צילום של קליטה שכבר נספרה נשאר גם אחרי ריענון
+      receiptOpened = !!o.opened || (receiptList.length > 0 && !(o.opened === false && o.entryMode === 'photo'));
       receiptDocDate = o.docDate || null;
       receiptDraftId = o.draftId || null;
       receiptPromoOnPaper = (Array.isArray(o.promoOnPaper) ? o.promoOnPaper : []).map(String);
@@ -6154,6 +6155,26 @@ function receivingPhotoCardHtml() {
     '<div class="text-[11px] text-slate-500 font-bold text-center mt-1.5">הקריאה מהנייר תרוץ ברקע בזמן שאתה סורק את הסחורה. הכמויות שבתעודה לא יוצגו לך תוך כדי — הספירה נשארת עיוורת, וזה מה שתופס חוסר.</div>' +
     '<button data-role="rc-entry-manual" class="btn-tap w-full text-slate-400 py-2.5 font-black text-xs underline mt-1">אין רשת או שהנייר לא קריא — הקלד את שלושת המספרים</button>';
 }
+// v107: קליטה שכבר נספרה וחזרה לשלב צילום התעודה.
+function receiptPhotoStepPending() {
+  return !receiptOpened && receiptEntryMode === 'photo' && AI_SCAN_ENABLED;
+}
+function receivingCountedBannerHtml() {
+  if (receiptAttachTarget || !receiptList.length) return '';
+  const units = receiptList.reduce((a, l) => a + (Number(l.qty) || 0), 0);
+  return '<div class="rounded-2xl bg-blue-50 border-2 border-blue-200 p-3 mb-3 text-[11px] font-bold text-blue-900 leading-relaxed">' +
+    '<div class="font-black text-sm"><i class="fa-solid fa-list-check"></i> ' + receiptList.length + ' שורות · ' + units + ' יח׳ כבר נספרו ונשמרות</div>' +
+    'צלם את התעודה והבדיקה תרוץ מול הספירה הזאת. אם אין נייר בכל זאת — "אין תעודה בכלל" למטה ממשיך מאותה ספירה.</div>';
+}
+// v107: מתוך שדות העוגנים של קליטה שכבר נספרה ואין לה עדיין מספרים —
+// אפשר לצלם את התעודה במקום להקליד, ובקליטה בלי תעודה גם לחזור אליה.
+function receiptNotesEscapeHtml() {
+  if (receiptNotes.length || !receiptList.length || receiptAttachTarget) return '';
+  return '<div class="mt-2 space-y-1.5">' +
+    (AI_SCAN_ENABLED ? '<button data-role="rc-nodoc-photo" class="btn-tap w-full bg-violet-50 border-2 border-violet-200 text-violet-700 rounded-xl py-2.5 font-black text-sm"><i class="fa-solid fa-camera"></i> צלם את התעודה במקום להקליד</button>' : '') +
+    (receiptNoDoc ? '<button data-role="rc-nodoc-back" class="btn-tap w-full bg-amber-50 border border-amber-300 text-amber-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-file-circle-xmark"></i> חזור לקליטה בלי תעודה</button>' : '') +
+  '</div>';
+}
 // v63: הדלת של מקרי הקיצון. היא יושבת מתחת לשני המסלולים הרגילים ולא
 // לצידם — קליטה בלי נייר היא קליטה שאין מי שיאמת אותה, וזו לא צריכה
 // להיות הדרך הקצרה בבוקר עמוס.
@@ -6348,7 +6369,9 @@ function renderReceiving() {
   const t = receiptTotals();
   // v63: בזמן צירוף נייר השורות כבר בפנים, ולכן "יש שורות" אינו מעיד עוד
   // שהתעודה נפתחה — השער נמדד בעוגנים, בדיוק כמו בקליטה חדשה.
-  const opened = receiptAttachTarget ? receiptOpened : (receiptOpened || receiptList.length > 0);
+  // v107: גם אחרי "צלם את התעודה" מתוך קליטה שכבר נספרה — השורות נשמרות,
+  // ושלב הצילום מוצג שוב עד שהנייר נפתח.
+  const opened = receiptAttachTarget ? receiptOpened : (receiptOpened || (receiptList.length > 0 && !receiptPhotoStepPending()));
   const allOpenRecs = receipts.filter(r => receiptDiscrepancyInfo(r).open);
   const noDocRecs = allOpenRecs.filter(receiptAwaitingDoc);
   const openRecs = allOpenRecs.filter(r => !receiptAwaitingDoc(r));
@@ -6364,7 +6387,7 @@ function renderReceiving() {
     if (photoMode && !aiScanDocuments.length) bermanSeedPhotoFirstScan(1);
     const dateBox = '<details class="mt-3 bg-slate-50 border border-slate-200 rounded-xl"' + (receiptDocDate ? ' open' : '') + '><summary class="cursor-pointer px-3 py-2.5 text-sm font-black text-slate-600"><i class="fa-solid fa-calendar-day"></i> תעודה מתאריך אחר</summary><div class="px-3 pb-3"><input id="rcDocDate" type="date" value="' + htmlEscape(receiptDocDate || '') + '" class="w-full h-11 text-center text-sm font-black border-2 border-slate-200 rounded-xl outline-none focus:border-blue-500 bg-white"><button data-role="rc-date-clear" class="btn-tap w-full mt-1.5 py-2.5 rounded-xl font-black text-sm bg-white border-2 border-slate-200 text-slate-600"><i class="fa-solid fa-rotate-left"></i> נקה תאריך — חזרה להיום</button><div class="text-xs text-slate-500 font-bold mt-1">ריק = היום</div></div></details>';
     const steps = '<div class="grid grid-cols-3 gap-1 mb-4 text-center text-xs font-black"><div class="bg-blue-600 text-white rounded-lg py-2">1 · ' + (photoMode ? 'צילום התעודה' : 'נתוני תעודה') + '</div><div class="bg-slate-100 text-slate-400 rounded-lg py-2">2 · סריקה</div><div class="bg-slate-100 text-slate-400 rounded-lg py-2">3 · בדיקה</div></div>';
-    app.innerHTML = banner + pendingReturnsBannerHtml() + topButtons + receivingAttachBannerHtml() +
+    app.innerHTML = banner + pendingReturnsBannerHtml() + topButtons + receivingAttachBannerHtml() + receivingCountedBannerHtml() +
       '<div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm mt-2">' + steps +
         (photoMode
           ? '<div class="text-center mb-3"><i class="fa-solid fa-camera-retro text-violet-600 text-4xl mb-2"></i><div class="font-black text-slate-800 text-lg">צלם את התעודה</div><div class="text-sm text-slate-500">בזמן שהנייר עוד ביד. שלושת המספרים ייקראו ממנו לבד — אין מה להקליד.</div></div>' +
@@ -6387,6 +6410,7 @@ function renderReceiving() {
           '<div class="text-[11px] font-bold text-amber-800 leading-relaxed mt-0.5">הסכום מחושב מהמחירון לפי מה שתסרוק. התעודה תישמר פתוחה עד שהנייר יגיע.' + (receiptDocDate ? ' · ' + dDisp(receiptDocDate) : '') + '</div></div>' +
           '<button data-role="rc-cancel" class="btn-tap shrink-0 text-xs font-bold text-red-500 bg-white border border-red-200 px-2.5 py-2 rounded-lg"><i class="fa-solid fa-xmark"></i></button>' +
         '</div>' +
+        (AI_SCAN_ENABLED ? '<button data-role="rc-nodoc-photo" class="btn-tap w-full mt-2 bg-white border border-amber-300 text-amber-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-camera"></i> מצאתי את התעודה — צלם אותה</button>' : '') +
         '<button data-role="rc-nodoc-found" class="btn-tap w-full mt-2 bg-white border border-amber-300 text-amber-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-file-invoice"></i> מצאתי את התעודה — הזן את המספרים</button>' +
       '</div>'
     : editingNotes
@@ -6394,6 +6418,7 @@ function renderReceiving() {
         '<div class="flex items-center justify-between mb-2"><span class="font-black text-slate-800 text-sm"><i class="fa-solid fa-file-invoice text-blue-600"></i> תעודות ספק</span><button data-role="rc-notes-done" class="btn-tap text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg">סיום</button></div>' +
         noteEditorBodyHtml() +
         '<details class="mt-2 bg-slate-50 border border-slate-200 rounded-xl"' + (receiptDocDate ? ' open' : '') + '><summary class="cursor-pointer px-3 py-2 text-xs font-black text-slate-600"><i class="fa-solid fa-calendar-day"></i> תאריך התעודה</summary><div class="px-3 pb-3"><input id="rcDocDate" type="date" value="' + htmlEscape(receiptDocDate || '') + '" class="w-full h-11 text-center font-black border-2 border-slate-200 rounded-xl"><button data-role="rc-date-clear" class="btn-tap w-full mt-1.5 py-2.5 rounded-xl font-black text-sm bg-white border-2 border-slate-200 text-slate-600"><i class="fa-solid fa-rotate-left"></i> נקה תאריך — חזרה להיום</button><div class="text-xs text-slate-500 font-bold mt-1">ריק = היום</div></div></details>' +
+        receiptNotesEscapeHtml() +
       '</div>'
     : '<div class="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm mb-3 flex items-center justify-between gap-2">' +
         '<div class="flex items-center gap-2 min-w-0"><i class="fa-solid fa-file-invoice text-blue-600"></i><div class="min-w-0"><div class="text-[11px] text-slate-400 font-bold">' + (receiptHasCreditNote() ? 'נטו לחיוב אחרי זיכויים' : 'נטו לחיוב (ללא מע״מ)') + (receiptNotes.length > 1 ? ' · ' + receiptNotes.length + ' תעודות' : '') + (receiptNoteUnits != null ? ' · ' + receiptNoteUnits + ' יח׳' : '') + (receiptNoteLines != null ? ' · ' + receiptNoteLines + ' שורות' : '') + '</div><div class="font-black text-slate-800">' + (receiptNoteTotal != null ? '₪' + fmtMoney(receiptNoteTotal) : 'ללא אימות') + (receiptDocDate ? '<span class="text-xs text-blue-600 mr-2">· ' + dDisp(receiptDocDate) + '</span>' : '') + '</div>' +
@@ -22444,10 +22469,20 @@ app.addEventListener('click', (e) => {
   // v63: הנייר נמצא באמצע הסריקה — פותחים את שדות העוגנים, ומרגע שיש בהם
   // מספר הקליטה חוזרת להיות רגילה לכל דבר.
   else if (role === 'rc-nodoc-found') { editingNotes = true; saveReceiptDraft(); refreshReceipt(); }
+  // v107: חזרה מהשדות לקליטה בלי תעודה — הספירה נשארת כפי שהיא.
+  else if (role === 'rc-nodoc-back') { receiptNotes = []; recomputeNoteTotal(); editingNotes = false; saveReceiptDraft(); refreshReceipt(); }
+  // v107: צילום התעודה באמצע ספירה. השורות נשמרות; חוזרים לשלב הצילום,
+  // והקריאה תרוץ מול מה שכבר נספר — כמו בצירוף נייר לקליטה שמורה.
+  else if (role === 'rc-nodoc-photo') {
+    receiptNoDoc = false; editingNotes = false; receiptNotes = []; recomputeNoteTotal();
+    receiptEntryMode = 'photo'; receiptOpened = false; receiptAnchorSource = null;
+    receiptDupConfirmed = false; receiptLinesConfirmed = false;
+    bermanSeedPhotoFirstScan(1); saveReceiptDraft(); renderReceiving();
+  }
   else if (role === 'rc-attach-doc') { reopenReceiptForDoc(id); }
   else if (role === 'rc-attach-cancel') { cancelReceiptAttach(); }
   else if (role === 'rc-entry-photo') { receiptEntryMode = 'photo'; bermanSeedPhotoFirstScan(1); renderReceiving(); }
-  else if (role === 'rc-entry-manual') { receiptEntryMode = 'manual'; renderReceiving(); }
+  else if (role === 'rc-entry-manual') { receiptEntryMode = 'manual'; if (receiptList.length && !receiptAttachTarget && !receiptOpened) { receiptOpened = true; editingNotes = true; saveReceiptDraft(); } renderReceiving(); }
   else if (role === 'rc-photo-doc-add') { bermanPhotoFirstAddDoc(); }
   else if (role === 'rc-photo-doc-remove') { bermanPhotoFirstRemoveDoc(parseInt(t.dataset.doc, 10) || 0); }
   // צילום חוזר אחרי שהנייר לא אישר את עצמו — מוחק את הצילומים ומחזיר לשלב הצילום
@@ -22462,6 +22497,9 @@ app.addEventListener('click', (e) => {
   else if (role === 'rc-notes-edit') { editingNotes = true; refreshReceipt(); }
   else if (role === 'rc-notes-done') {
     const en = readNoteEntry(false); if (en === false) return;
+    // v107: קליטה בלי תעודה והשדות ריקים — "סיום" מחזיר לקליטה בלי תעודה
+    // במקום לחסום. עד עכשיו "מצאתי את התעודה" היה מבוי סתום.
+    if (!en && receiptNoDoc && !receiptNotes.length) { editingNotes = false; saveReceiptDraft(); refreshReceipt(); return; }
     if (en) receiptNotes.push(en);
     noteEntryKind = 'charge';
     recomputeNoteTotal();
