@@ -849,7 +849,7 @@ let sharedReceiptScanToken = null;
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '110'; // האחוז לפי הנייר נאמר בתנאי, עם תאריכי ההוכחות ואזהרה בתעודה מחודש חדש
+const APP_VERSION = '111'; // תעודה שכבר נקלטה (אותו מספר תעודה) מזוהה מיד ונעצרת לפני שמירה
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -5131,6 +5131,44 @@ async function hardDeleteSnapshotDocsWithBackup(name, docs, reason) {
 // ===== קליטת תעודות =====
 function todayStr() { return new Date().toLocaleDateString('en-CA'); }
 function activeReceiptDate() { return receiptDocDate || todayStr(); }
+// v111: אותו נייר פעמיים. המספר המודפס בתעודה הוא המזהה של הספק, ותעודה
+// שכבר נקלטה עם אותו מספר תיספר פעמיים במאזן ובתשלום. בדיקת הכפילות שבסיום
+// משווה רק לתעודות מאותו יום קליטה, ולכן תעודה של אתמול שצולמה היום עברה בלי
+// אזהרה (1.10.2026: תעודה 244723990 מ־30.9 נקלטה שוב, כתעודה של 1.10).
+function receiptPaperNumber(value) {
+  const s = String(value == null ? '' : value).replace(/\s+/g, '');
+  return /^[0-9A-Za-z-]{4,}$/.test(s) ? s : '';
+}
+function storedReceiptPaperNumbers(rc) {
+  const audit = (rc && rc.priceAudit && rc.priceAudit.documents) || [];
+  const scan = (rc && rc.paperScan && rc.paperScan.response && rc.paperScan.response.scan && rc.paperScan.response.scan.documents) || [];
+  return audit.map(d => d && d.number).concat(scan.map(d => d && (d.docNumber ?? d.invoiceNumber))).map(receiptPaperNumber).filter(Boolean);
+}
+function receiptAlreadyReceivedPapers() {
+  const docs = (aiScanResponse && aiScanResponse.scan && aiScanResponse.scan.documents) || [];
+  const exclude = new Set([receiptDraftId, pendingReceipt && pendingReceipt.operationId, receiptAttachTarget && receiptAttachTarget.id].filter(Boolean));
+  const found = [];
+  docs.forEach(d => {
+    const number = receiptPaperNumber(d && (d.docNumber ?? d.invoiceNumber ?? (d.__pricePaper && d.__pricePaper.docNumber)));
+    if (!number || found.some(x => x.number === number)) return;
+    const receipt = receipts.find(r => r && !exclude.has(r.id) && storedReceiptPaperNumbers(r).includes(number));
+    if (receipt) found.push({ number, receipt });
+  });
+  return found;
+}
+function receiptDuplicatePaperText(papers) {
+  return papers.map(x => {
+    const t = new Date(Number(x.receipt.timestamp) || 0), paper = x.receipt.noteTotalInc != null ? x.receipt.noteTotalInc : x.receipt.totalExVat;
+    return 'תעודה ' + x.number + ' כבר נקלטה ב־' + t.toLocaleDateString('he-IL') + ' ' + t.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }) + ' (₪' + fmtMoney(paper) + ').';
+  }).join(' ');
+}
+function receiptDuplicatePaperHtml() {
+  const papers = receiptAlreadyReceivedPapers();
+  if (!papers.length) return '';
+  return '<div data-duplicate-paper role="alert" class="bg-rose-50 border-2 border-rose-400 text-rose-900 rounded-2xl p-3 mb-3">' +
+    '<div class="font-black"><i class="fa-solid fa-copy"></i> הנייר הזה כבר נקלט</div>' +
+    '<div class="text-sm font-bold mt-1">' + htmlEscape(receiptDuplicatePaperText(papers)) + ' אם צולם אותו נייר בטעות, בטל את הקליטה הזו — אחרת התעודה תיספר פעמיים.</div></div>';
+}
 function storedReceiptDate(rc) { return (rc && (rc.docDate || rc.date)) || todayStr(); }
 function r2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 function fmtMoney(n) { return r2(n).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -6382,7 +6420,7 @@ function renderReceivingScreen() {
   const openRecs = allOpenRecs.filter(r => !receiptAwaitingDoc(r));
   const noDocBanner = noDocRecs.length ? '<button data-role="rc-history" class="btn-tap w-full bg-amber-50 border border-amber-300 text-amber-800 rounded-xl py-2.5 px-3 font-bold text-sm flex items-center justify-between gap-2 mb-3"><span><i class="fa-solid fa-file-circle-xmark"></i> ' + (noDocRecs.length === 1 ? 'קליטה אחת בלי תעודה — ממתינה לנייר' : noDocRecs.length + ' קליטות בלי תעודה — ממתינות לנייר') + '</span><span class="text-xs font-black bg-amber-100 px-2 py-0.5 rounded-lg">לצירוף ←</span></button>' : '';
   const openBanner = openRecs.length ? '<button data-role="rc-history" class="btn-tap w-full bg-rose-50 border border-rose-200 text-rose-700 rounded-xl py-2.5 px-3 font-bold text-sm flex items-center justify-between gap-2 mb-3"><span><i class="fa-solid fa-clipboard-question"></i> ' + openRecs.length + ' תעודות עם הפרש פתוח</span><span class="text-xs font-black bg-rose-100 px-2 py-0.5 rounded-lg">לטיפול ←</span></button>' : '';
-  const banner = noDocBanner + openBanner;
+  const banner = receiptDuplicatePaperHtml() + noDocBanner + openBanner;
   // v227: כלי הניהול עברו לטאב "ניהול" משלהם בשורת המצבים — מסך הקליטה נשאר נקי
   const topButtons = '';
   if (!opened) {
@@ -6628,6 +6666,15 @@ function finishReceipt() {
     return;
   }
   if (!receiptList.length) return;
+  // v111: אותו נייר שכבר נקלט — נעצר לפני כל מסלול סיום, כולל הנחה שנדחתה.
+  if (!receiptDupConfirmed) {
+    const papers = receiptAlreadyReceivedPapers();
+    if (papers.length) {
+      showConfirm('התעודה כבר נקלטה', receiptDuplicatePaperText(papers) + ' קליטה נוספת תספור אותה פעמיים. לקלוט בכל זאת?', 'כן, קלוט שוב',
+        function () { receiptDupConfirmed = true; finishReceipt(); });
+      return;
+    }
+  }
   if (bermanFinishDeferredReceipt()) return;
   // ברמן: שלושת העוגנים חובה — נטו לחיוב, סה"כ כללי (יחידות), סה"כ שורות.
   // גם טיוטה ישנה אינה יכולה לעקוף את הבלש או להיסגר כתקינה בלעדיהם.
