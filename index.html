@@ -849,7 +849,7 @@ let sharedReceiptScanToken = null;
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '112'; // אחוז שגוי בכרטיס מוצר: הקליטה אומרת איזה מוצר, ומציעה את האחוז לפי הנייר
+const APP_VERSION = '113'; // שלטים: "2 בדף (קטן)" — אותם שני שלטים, מוקטנים עם שוליים
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -20098,6 +20098,9 @@ function promoRowHtml(pr, state) {
 }
 // ===== הכנת שלטי מבצע (1/2/4 בדף, ייצוא PNG) =====
 const SIGN_MAX = 4;
+// v113: "2 בדף (קטן)" — הדף של "2 בדף (גדול)" מוקטן סביב מרכז ה-A4. לפי
+// הדוגמה מ־1.10.2026: השלט יוצא כ־17.3×12.3 ס״מ במקום 19.6×14 ס״מ.
+const SIGN_SMALL_SCALE = 0.88;
 function signMarginFactor() { return 1 + (Number(signMarginPct) || 0) / 100; }
 async function saveAppConfig() {
   const vEl = $('cfgVat'), mEl = $('cfgMargin'), sEl = $('cfgStore');
@@ -20545,15 +20548,19 @@ function signEditCard(s, idx) {
     '</div>' +
   '</div>';
 }
+function signSmallPage() { return !!(signMaker && signMaker.perPage === 2 && signMaker.small); }
+function signLayoutBtn(pp, small, label) {
+  const on = signMaker.perPage === pp && signSmallPage() === small;
+  return '<button data-role="sign-pp" data-pp="' + pp + '"' + (small ? ' data-small="1"' : '') + ' class="btn-tap px-1 py-1.5 rounded-lg text-[11px] font-black leading-tight ' + (on ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-600') + '">' + label + '</button>';
+}
 function renderSignPreview() {
   const cards = signMaker.signs.map(signEditCard).join('');
   app.innerHTML =
     '<div class="px-1 py-1 mb-2"><h2 class="font-black text-2xl text-slate-800">עריכת שלטים</h2><div class="text-xs text-slate-400 mt-0.5">מלא את הפרטים — התצוגה למטה מתעדכנת חי. המספרים לא נמשכים מהמבצע.</div></div>' +
     cards +
-    '<div class="px-1 mt-4 mb-1.5 flex items-center justify-between"><div class="text-xs font-black text-slate-500"><i class="fa-solid fa-eye"></i> תצוגה מקדימה של הדף</div>' +
-      '<div class="flex gap-1"><button data-role="sign-pp" data-pp="4" class="btn-tap px-3 py-1.5 rounded-lg text-[11px] font-black ' + (signMaker.perPage === 4 ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-600') + '">4 בדף</button>' +
-      '<button data-role="sign-pp" data-pp="2" class="btn-tap px-3 py-1.5 rounded-lg text-[11px] font-black ' + (signMaker.perPage === 2 ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-600') + '">2 בדף (גדול)</button>' +
-      '<button data-role="sign-pp" data-pp="1" class="btn-tap px-3 py-1.5 rounded-lg text-[11px] font-black ' + (signMaker.perPage === 1 ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-600') + '">1 בדף (רוחב)</button></div></div>' +
+    // v113: ארבעה כפתורים כבר לא נכנסים לצד הכותרת בטלפון — שורה משלהם
+    '<div class="px-1 mt-4 mb-1.5"><div class="text-xs font-black text-slate-500 mb-1.5"><i class="fa-solid fa-eye"></i> תצוגה מקדימה של הדף</div>' +
+      '<div class="grid grid-cols-4 gap-1">' + signLayoutBtn(4, false, '4 בדף') + signLayoutBtn(2, true, '2 בדף (קטן)') + signLayoutBtn(2, false, '2 בדף (גדול)') + signLayoutBtn(1, false, '1 בדף (רוחב)') + '</div></div>' +
     '<div class="bg-slate-200 rounded-2xl p-2.5 mb-3"><canvas id="signCanvas" class="w-full rounded-lg shadow"></canvas></div>' +
     '<div class="fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 p-3 flex gap-2 z-40">' +
       '<button data-role="sign-back" class="btn-tap px-4 py-3 rounded-xl font-black bg-slate-100 text-slate-600"><i class="fa-solid fa-arrow-right"></i></button>' +
@@ -20592,6 +20599,12 @@ function drawSignCanvas() {
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
   ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+  // v113: "2 בדף (קטן)" מצייר את "2 בדף (גדול)" בדיוק, בקנה מידה קטן סביב
+  // מרכז הדף — אותם פונטים, מרווחים ושבירת שורות, רק קטן יותר, עם שוליים לבנים
+  if (signSmallPage()) {
+    ctx.translate(Math.round(W * (1 - SIGN_SMALL_SCALE) / 2), Math.round(H * (1 - SIGN_SMALL_SCALE) / 2));
+    ctx.scale(SIGN_SMALL_SCALE, SIGN_SMALL_SCALE);
+  }
   ctx.textAlign = 'center'; ctx.direction = 'rtl';
   const pad = 40, gap = 24;
   const top0 = pad;
@@ -23189,7 +23202,7 @@ app.addEventListener('click', (e) => {
   else if (role === 'sign-kind') { if (signMaker) { const s = signMaker.signs[parseInt(id, 10)]; if (s) { s.kind = t.dataset.kind; renderSignMaker(); } } }
   else if (role === 'sign-download') downloadSignImage();
   else if (role === 'sign-apply-rec') { if (signMaker) { const s = signMaker.signs[parseInt(id, 10)]; if (s) { const rec = signRecommend(s); if (rec) { if (rec.type === 'pct') s.pct = String(rec.value); else s.price = String(rec.value); renderSignMaker(); } } } }
-  else if (role === 'sign-pp') { if (signMaker) { const pp = parseInt(t.dataset.pp, 10); if (signMaker.signs.length > pp) { showToast('בחרת ' + signMaker.signs.length + ' מבצעים — הסר כדי לעבור ל-' + pp + ' בדף', null, null, 2800); } else { signMaker.perPage = pp; renderSignMaker(); } } }
+  else if (role === 'sign-pp') { if (signMaker) { const pp = parseInt(t.dataset.pp, 10); if (signMaker.signs.length > pp) { showToast('בחרת ' + signMaker.signs.length + ' מבצעים — הסר כדי לעבור ל-' + pp + ' בדף', null, null, 2800); } else { signMaker.perPage = pp; signMaker.small = t.dataset.small === '1'; renderSignMaker(); } } }
   else if (role === 'cfg-save') saveAppConfig();
   else if (role === 'promo-open') openPromoEdit(id);
   else if (role === 'promo-info') openPromoPopup(id);
