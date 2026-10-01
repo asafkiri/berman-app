@@ -230,7 +230,7 @@ head('[11] מקצה לקצה — הכפתור, האישור, הרשימה והב
   const rt = runtime();
   rt.context.testDoc = JSON.parse(JSON.stringify(baseDoc()));
   rt.run(`returns = [testDoc]; returnsList = []; returnsSlots = { weekly: returnsList, daily: [] };
-    returnsSlot = 'weekly'; currentView = 'returnsHistory'; renderReturnsHistory();`);
+    returnsSlot = 'weekly'; receipts = []; receiptHistoryFilter = 'all'; currentView = 'receiptsHistory'; renderReceiptsHistory();`);
   const card = rt.node('app').innerHTML;
   ok('הכרטיס האדום מציע להחזיר את הפריטים', card.indexOf('החזר את הפריטים לרשימת החזרות') > -1);
   ok('עם התפקיד שהמאזין מכיר', card.indexOf('data-role="ret-carry" data-id="ret_8_9"') > -1);
@@ -256,7 +256,7 @@ head('[11] מקצה לקצה — הכפתור, האישור, הרשימה והב
   ok('מסומנת כתביעת פער — הניתוח לא יספור את היחידות פעמיים', sent[0].carried === true && sent[0].carriedFrom === 'ret_8_9');
   ok('ואין עליה שורת פיקדון נוספת', sent.filter(l => l.isDeposit).length === 0);
 
-  const after = rt.run('renderReturnsHistory(); document.getElementById("app").innerHTML');
+  const after = rt.run('renderReceiptsHistory(); document.getElementById("app").innerHTML');
   ok('התעודה נסגרה — אין יותר חוסר זיכוי פתוח', !rt.run('returnsDiscrepancyInfo(returns[0]).open') && after.indexOf('פתוח — חסר זיכוי') === -1);
   ok('ובמקומה הערה שקטה על מה שהוחזר', after.indexOf('הוחזר לרשימת החזרות הפתוחה') > -1);
   ok('הכפתור להחזרה כבר לא מוצע', after.indexOf('data-role="ret-carry" ') === -1);
@@ -267,7 +267,7 @@ head('[11] מקצה לקצה — הכפתור, האישור, הרשימה והב
   ok('הרישום נמחק מהתעודה', (rt.writes[rt.writes.length - 1].data.carriedNotes || []).length === 0);
   ok('והשורות ירדו מרשימת החזרות', rt.run('returnsList.length') === 0);
   ok('בלי להחליף את המערך שבסלוט', rt.run('returnsSlots.weekly === returnsList'));
-  ok('התעודה חזרה להיות אדומה', rt.run('returnsDiscrepancyInfo(returns[0]).open') && rt.run('renderReturnsHistory(); document.getElementById("app").innerHTML').indexOf('פתוח — חסר זיכוי') > -1);
+  ok('התעודה חזרה להיות אדומה', rt.run('returnsDiscrepancyInfo(returns[0]).open') && rt.run('renderReceiptsHistory(); document.getElementById("app").innerHTML').indexOf('פתוח — חסר זיכוי') > -1);
 }
 
 console.log('\n' + (fail ? '✗ נכשלו ' + fail : '✓ הכל עבר') + ' (' + pass + '/' + (pass + fail) + ')' +

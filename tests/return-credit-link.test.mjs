@@ -40,7 +40,7 @@ function setup(docs = [oldReturn(), newReturn()]) {
       commit: async () => { for (const { ref, data } of pending) db.set(ref, { ...db.get(ref), ...data }); commits.push(pending); } };
   };
   rt.context.testDocs = docs;
-  rt.run(`returns = structuredClone(testDocs); receipts = []; currentView = 'returnsHistory';
+  rt.run(`returns = structuredClone(testDocs); receipts = []; receiptHistoryFilter = 'all'; currentView = 'receiptsHistory';
     logCloudActionIfNeeded = () => {};`);
   const get = id => copy(rt.run(`returns.find(x => x.id === '${id}')`));
   const info = id => copy(rt.run(`returnsDiscrepancyInfo(returns.find(x => x.id === '${id}'))`));
@@ -80,7 +80,7 @@ test('entering the next note proposes the older missing credit; confirmation rec
   assert.equal(rt.info('old').shortItems.length, 0);
   assert.equal(rt.info('old').owed, -0.04, 'retain small original residual, never invent money');
   assert.equal(rt.run('returnsBalance().bal'), -0.04, 'the link is not counted twice');
-  const history = rt.run('renderReturnsHistory(); app.innerHTML');
+  const history = rt.run('renderReceiptsHistory(); app.innerHTML');
   assert.match(history, /השלמות זיכוי שהתקבלו/);
   assert.match(history, /new-note/);
   const card = rt.run('returnCardInReceipts(returns[0])');

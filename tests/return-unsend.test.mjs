@@ -172,7 +172,7 @@ head('[6] שורה ידנית ושורה שהוחזרה מפער — המחיר 
   ok('שורת קטלוג אינה מתאחדת עם ידנית באותו שם', retUnsendSameLine({ manual: true, name: PITA.name, unitPrice: pitaUnit }, { kind: 'catalog', productId: PITA.id, name: PITA.name }) === false);
 }
 
-head('[7] החיווט — כל תפקיד שנפלט חייב מטפל, ובשני המסכים');
+head('[7] החיווט — כל תפקיד שנפלט חייב מטפל, ובכרטיס החזרה שבמסך התעודות המאוחד');
 {
   const src = fs.readFileSync(APP_PATH, 'utf8');
   ['rv-approve', 'ret-unsend'].forEach(role => {
@@ -180,8 +180,9 @@ head('[7] החיווט — כל תפקיד שנפלט חייב מטפל, ובש�
     ok('ול-' + role + ' יש מטפל בקוד', new RegExp("role === '" + role + "'").test(src));
   });
   // הקריאה נספרת בשרשור בלבד — ההגדרה עצמה נראית זהה ואינה קריאה.
-  ok('שורת האימות משותפת לשני הכרטיסים', (src.match(/retVerifyRowHtml\(r\) \+/g) || []).length === 2);
-  ok('וכפתור ההחזרה יושב בשניהם', (src.match(/retUnsendBtnHtml\(r\) \+/g) || []).length === 2);
+  // v114: מסך היסטוריית החזרות אוחד לתוך מסך התעודות — נשאר כרטיס חזרה אחד, והוא חייב לשאת את שניהם.
+  ok('שורת האימות יושבת בכרטיס החזרה המאוחד (ורק בו)', (src.match(/retVerifyRowHtml\(r\) \+/g) || []).length === 1);
+  ok('וכפתור ההחזרה יושב בו גם', (src.match(/retUnsendBtnHtml\(r\) \+/g) || []).length === 1);
   ok('אין יותר שתי העתקות של שדה סכום הזיכוי', (src.match(/id="rvNote_/g) || []).length === 1);
   ok('המחיקה קודמת להוספה לרשימה', src.indexOf('const deleted = await hardDeleteDocWithBackup') < src.indexOf('const applied = applyReturnUnsend(plan)'));
   ok('שיוך זיכוי פתוח חוסם את ההחזרה', /returnHasCreditAllocations\(id\)\) return;\n  const plan = retUnsendPlan/.test(src));
@@ -205,7 +206,7 @@ head('[8] מקצה לקצה — "אישור" סוגר את התעודה בלי �
   const rt = stubbedRuntime();
   rt.context.testDoc = JSON.parse(JSON.stringify(openDoc()));
   rt.run(`returns = [testDoc]; returnsList = []; returnsSlots = { weekly: returnsList, daily: [] };
-    returnsSlot = 'weekly'; currentView = 'returnsHistory'; renderReturnsHistory();`);
+    returnsSlot = 'weekly'; receipts = []; receiptHistoryFilter = 'all'; currentView = 'receiptsHistory'; renderReceiptsHistory();`);
   const card = rt.node('app').innerHTML;
   ok('הכרטיס מציע אישור לצד ההקלדה', card.indexOf('data-role="rv-approve" data-id="ret_open"') > -1 && card.indexOf('data-role="rv-verify-inline" data-id="ret_open"') > -1);
 
@@ -217,7 +218,7 @@ head('[8] מקצה לקצה — "אישור" סוגר את התעודה בלי �
   const write = rt.writes[rt.writes.length - 1];
   ok('התעודה סומנה מאומתת', !!write && write.data.credited === true && write.data.creditStatus === 'ok');
   ok('עם סכום הנייר שהאפליקציה ידעה', near(write.data.creditNoteTotal, openEx), String(write.data.creditNoteTotal));
-  ok('הכרטיס הפך ירוק', rt.run('renderReturnsHistory(); document.getElementById("app").innerHTML').indexOf('הזיכוי אומת') > -1);
+  ok('הכרטיס הפך ירוק', rt.run('renderReceiptsHistory(); document.getElementById("app").innerHTML').indexOf('<i class="fa-solid fa-circle-check"></i> אומתה') > -1);
   ok('ואין יותר פער פתוח', rt.run('JSON.stringify(returnsDiscrepancyInfo(returns[0]).open)') === 'false');
 }
 
@@ -226,7 +227,7 @@ head('[9] מקצה לקצה — "החזר לרשימה" מוחק את התעוד
   const rt = stubbedRuntime();
   rt.context.testDoc = JSON.parse(JSON.stringify(openDoc()));
   rt.run(`returns = [testDoc]; returnsList = []; returnsSlots = { weekly: returnsList, daily: [] };
-    returnsSlot = 'weekly'; currentView = 'returnsHistory'; renderReturnsHistory();`);
+    returnsSlot = 'weekly'; receipts = []; receiptHistoryFilter = 'all'; currentView = 'receiptsHistory'; renderReceiptsHistory();`);
   ok('הכפתור מוצע על תעודה שלא אומתה', rt.node('app').innerHTML.indexOf('data-role="ret-unsend" data-id="ret_open"') > -1);
 
   rt.click('ret-unsend', 'ret_open');
@@ -263,7 +264,7 @@ head('[10] מקצה לקצה — תעודה מאומתת אינה מציעה א�
   const rt = stubbedRuntime();
   rt.context.testDoc = JSON.parse(JSON.stringify(openDoc({ credited: true, creditedAt: Date.UTC(2026, 8, 10, 6, 0), creditStatus: 'ok', creditNoteTotal: openEx })));
   rt.run(`returns = [testDoc]; returnsList = []; returnsSlots = { weekly: returnsList, daily: [] };
-    returnsSlot = 'weekly'; currentView = 'returnsHistory'; renderReturnsHistory();`);
+    returnsSlot = 'weekly'; receipts = []; receiptHistoryFilter = 'all'; currentView = 'receiptsHistory'; renderReceiptsHistory();`);
   const card = rt.node('app').innerHTML;
   ok('אין כפתור אישור', card.indexOf('data-role="rv-approve"') === -1);
   ok('ואין כפתור החזרה לרשימה', card.indexOf('data-role="ret-unsend"') === -1);
@@ -279,15 +280,15 @@ head('[11] v103 — כפתור "מחק תעודה" אחד בכל כרטיס, ל�
   const rt = stubbedRuntime();
   rt.context.testDoc = JSON.parse(JSON.stringify(openDoc()));
   rt.run(`returns = [testDoc]; returnsList = []; returnsSlots = { weekly: returnsList, daily: [] };
-    returnsSlot = 'weekly'; currentView = 'returnsHistory'; renderReturnsHistory();`);
+    returnsSlot = 'weekly'; receipts = []; receiptHistoryFilter = 'all'; currentView = 'receiptsHistory'; renderReceiptsHistory();`);
   const card = rt.node('app').innerHTML;
-  ok('היסטוריית חזרות: כפתור מחיקה אחד', deletes(card) === 1, String(deletes(card)));
+  ok('היסטוריית תעודות: כפתור מחיקה אחד', deletes(card) === 1, String(deletes(card)));
   ok('והוא אותו כפתור שבשאר הכרטיסים', card.indexOf('data-role="ret-delete" data-id="ret_open"') > -1 && card.indexOf('data-role="del-return"') === -1);
   ok('תעודות: כפתור מחיקה אחד', deletes(rt.run('returnCardInReceipts(returns[0])')) === 1);
   rt.context.testDoc2 = JSON.parse(JSON.stringify(openDoc({ credited: true, creditedAt: Date.UTC(2026, 8, 10, 6, 0), creditStatus: 'ok', creditNoteTotal: openEx })));
-  ok('ותעודה מאומתת — גם אחד', deletes(rt.run('returns = [testDoc2]; renderReturnsHistory(); document.getElementById("app").innerHTML')) === 1);
+  ok('ותעודה מאומתת — גם אחד', deletes(rt.run('returns = [testDoc2]; renderReceiptsHistory(); document.getElementById("app").innerHTML')) === 1);
 
-  rt.run('returns = [testDoc]; renderReturnsHistory();');
+  rt.run('returns = [testDoc]; renderReceiptsHistory();');
   rt.click('ret-delete', 'ret_open');
   ok('המחיקה שואלת לפני', rt.node('confirmMsg').textContent.indexOf('למחוק את תעודת החזרה') > -1);
   await rt.events.get('confirmOk:click')();
@@ -303,7 +304,7 @@ head('[12] v103 — "אישור" עם סכום שכבר הוקלד, ותעודה
     const rt = stubbedRuntime();
     rt.context.testDoc = JSON.parse(JSON.stringify(openDoc()));
     rt.run(`returns = [testDoc]; returnsList = []; returnsSlots = { weekly: returnsList, daily: [] };
-      returnsSlot = 'weekly'; currentView = 'returnsHistory'; renderReturnsHistory();`);
+      returnsSlot = 'weekly'; receipts = []; receiptHistoryFilter = 'all'; currentView = 'receiptsHistory'; renderReceiptsHistory();`);
     return rt;
   };
   const short = r2(openEx - 5);
