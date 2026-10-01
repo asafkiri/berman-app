@@ -531,3 +531,27 @@ test('a filter chip chosen earlier never hides the returns the entry points prom
   assert.equal(sent.run('currentView'), 'receiptsHistory');
   assert.equal(sent.run('receiptHistoryFilter'), 'all');
 });
+
+// v115: בכרטיס מאומת היו שני כפתורים לאותה פעולה — טקסט מלא, ולצד "ערוך אימות" גם
+// אייקון חץ בודד. נשאר הטקסט (הוא אומר מה יקרה), מתחת לפעולה הראשית.
+test('v115: a verified card has exactly one "בטל אימות" button — the labelled one, below the main action', async () => {
+  const rt = open([pendingReturn(), verifiedReturn(), openGapReturn()]);
+  rt.run("currentView = 'receiptsHistory'; renderReceiptsHistory();");
+  const page = html(rt);
+  for (const id of ['ret_ok', 'ret_gap']) {
+    const card = cardOf(page, id);
+    assert.equal(roleCount(card, 'uncredit'), 1, id + ': one uncredit button');
+    assert.match(card, /<i class="fa-solid fa-rotate-left"><\/i> בטל אימות — פתח מחדש לתיקון/, id + ': the labelled one');
+    assert.doesNotMatch(card, /title="בטל אימות"/, id + ': the icon-only one is gone');
+    assert.ok(card.indexOf(roleFor('rv-open', id)) < card.indexOf(roleFor('uncredit', id)), id + ': below the main action');
+    assert.ok(card.indexOf(roleFor('uncredit', id)) < card.indexOf(roleFor('ret-edit-items', id)), id + ': above the edit buttons');
+  }
+  assert.equal(roleCount(cardOf(page, 'ret_pending'), 'uncredit'), 0, 'a pending card has nothing to un-verify');
+  // the remaining button still works: confirmation first, then the card reopens
+  await rt.click('uncredit', 'ret_ok');
+  assert.equal(rt.node('confirmTitle').textContent, 'ביטול אימות');
+  await rt.events.get('confirmOk:click')();
+  await rt.run('Promise.resolve()');
+  assert.equal(rt.run("returns.find(x => x.id === 'ret_ok').credited"), false);
+  assert.match(cardOf(html(rt), 'ret_ok'), /ממתינה לאימות זיכוי/);
+});
