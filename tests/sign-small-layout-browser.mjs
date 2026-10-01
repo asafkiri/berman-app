@@ -70,7 +70,7 @@ products=testData.products;promos=testData.promos;
 aiRunAnalyzer=async()=>{};
 window.fetch=async(url)=>{throw new Error('External network is forbidden in local replay: '+url)};
 window.t={
-  state:()=>({view:currentView,step:signMaker&&signMaker.step,perPage:signMaker&&signMaker.perPage,small:!!(signMaker&&signMaker.small),smallPage:signSmallPage(),
+  state:()=>({view:currentView,step:signMaker&&signMaker.step,perPage:signMaker&&signMaker.perPage,small:!!(signMaker&&signMaker.small),smallPage:typeof signSmallPage==='function'&&signSmallPage(),
     signs:signMaker?signMaker.signs.map(s=>({title:s.title,kind:s.kind,price:s.price,validUntil:s.validUntil})):[]}),
   store:()=>storeName
 };
@@ -159,14 +159,15 @@ async function installPixelTools() {
         const ref = document.createElement('canvas'); ref.width = s.width; ref.height = s.height;
         const ctx = ref.getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, ref.width, ref.height);
         ctx.translate(ox, oy); ctx.scale(k, k); ctx.drawImage(b, 0, 0);
-        const a = pixels(s), r = pixels(ref); let sum = 0, ink = 0, inkSum = 0, max = 0;
+        // mean: ממוצע הפרש לערוץ על כל הדף; inkMean: רק על פיקסלים שאינם לבנים באחד מהשניים
+        const a = pixels(s), r = pixels(ref); let sum = 0, ink = 0, inkSum = 0;
         for (let i = 0; i < a.length; i += 4) {
           const diff = Math.abs(a[i] - r[i]) + Math.abs(a[i + 1] - r[i + 1]) + Math.abs(a[i + 2] - r[i + 2]);
-          sum += diff; if (diff / 3 > max) max = diff / 3;
+          sum += diff;
           const blank = a[i] + a[i + 1] + a[i + 2] === 765 && r[i] + r[i + 1] + r[i + 2] === 765;
           if (!blank) { ink++; inkSum += diff; }
         }
-        return { mean: sum / (a.length / 4 * 3), inkMean: inkSum / (ink * 3), ink, max };
+        return { mean: sum / (a.length / 4 * 3), inkMean: inkSum / (ink * 3), ink };
       }
     };
   });
@@ -176,7 +177,7 @@ const live = () => page.evaluate(() => px.live());
 const grab = name => page.evaluate(n => px.grab(n), name);
 const outside = (name, box) => page.evaluate(([n, b]) => px.outside(n, b), [name, box]);
 const tolBox = { x0: BOX.x0 - TOL, y0: BOX.y0 - TOL, x1: BOX.x1 + TOL, y1: BOX.y1 + TOL };
-// הדף הקטן: מחוץ למלבן 88% (פחות 2px) — לבן מלא, ובפנים יש שלטים
+// הדף הקטן: מחוץ למלבן 88% (עם 2px סבילות) — לבן מלא, ובפנים יש שלטים
 async function assertSmallPage(name, why) {
   const g = await grab(name);
   assert.deepEqual(g, { w: W, h: H }, why + ': small page stays A4 portrait');

@@ -20096,7 +20096,7 @@ function promoRowHtml(pr, state) {
     (promoMinUnitsP(pr) > 1 ? '<div class="text-[11px] text-slate-500 font-bold mt-1"><i class="fa-solid fa-layer-group"></i> מינימום ' + promoMinLabelP(pr) + ' מהסל</div>' : '') +
   '</button>';
 }
-// ===== הכנת שלטי מבצע (1/2/4 בדף, ייצוא PNG) =====
+// ===== הכנת שלטי מבצע (1/2/2 קטן/4 בדף, ייצוא PNG) =====
 const SIGN_MAX = 4;
 // v113: "2 בדף (קטן)" — הדף של "2 בדף (גדול)" מוקטן סביב מרכז ה-A4. לפי
 // הדוגמה מ־1.10.2026: השלט יוצא כ־17.3×12.3 ס״מ במקום 19.6×14 ס״מ.
@@ -20551,7 +20551,7 @@ function signEditCard(s, idx) {
 function signSmallPage() { return !!(signMaker && signMaker.perPage === 2 && signMaker.small); }
 function signLayoutBtn(pp, small, label) {
   const on = signMaker.perPage === pp && signSmallPage() === small;
-  return '<button data-role="sign-pp" data-pp="' + pp + '"' + (small ? ' data-small="1"' : '') + ' class="btn-tap px-1 py-1.5 rounded-lg text-[11px] font-black leading-tight ' + (on ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-600') + '">' + label + '</button>';
+  return '<button data-role="sign-pp" data-pp="' + pp + '"' + (small ? ' data-small="1"' : '') + ' class="btn-tap px-1 py-1.5 rounded-lg text-[11px] font-black ' + (on ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-600') + '">' + label + '</button>';
 }
 function renderSignPreview() {
   const cards = signMaker.signs.map(signEditCard).join('');
