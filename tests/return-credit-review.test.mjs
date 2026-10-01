@@ -15,7 +15,7 @@ function sampleReturn() {
 function open(doc = sampleReturn()) {
   const rt = runtime();
   rt.context.testReturn = structuredClone(doc);
-  rt.run(`returns = [testReturn]; currentView = 'returnsHistory'; openReturnVerify('test-return');`);
+  rt.run(`returns = [testReturn]; receipts = []; receiptHistoryFilter = 'all'; currentView = 'receiptsHistory'; openReturnVerify('test-return');`);
   return rt;
 }
 const state = rt => JSON.parse(rt.run('JSON.stringify(returnVerify)'));
@@ -68,7 +68,7 @@ test('explicit not-credited action preserves the return and explains the missing
   assert.match(rt.run('rvRowHtml(returnVerify.items[5], 5)'), /bg-rose-50/);
 });
 
-test('save keeps the known credit shortage open in both histories and when reopened', async () => {
+test('save keeps the known credit shortage open in the unified history, on its card and when reopened', async () => {
   const rt = open();
   await markOthers(rt);
   await rt.click('rv-not-credited', '5');
@@ -92,9 +92,12 @@ test('save keeps the known credit shortage open in both histories and when reope
   assert.equal(rt.run('returnsDiscrepancyInfo(returns[0]).owed'), 12.27);
   assert.match(rt.node('app').innerHTML, /פתוח — חסר זיכוי/);
   assert.match(rt.node('app').innerHTML, /חסר זיכוי: לחם מקמח כוסמין E-FREE/);
+  assert.match(rt.node('app').innerHTML, /תעודת חזרה אחת עם פער פתוח בזיכוי/);
   assert.doesNotMatch(rt.node('app').innerHTML, /כל הזיכויים אומתו/);
   assert.match(rt.run('returnCardInReceipts(returns[0])'), /פתוח — חסר זיכוי/);
-  assert.match(rt.run('returnCardInReceipts(returns[0])'), /חסר זיכוי על:/);
+  assert.match(rt.run('returnCardInReceipts(returns[0])'), /פירוט הפער/);
+  assert.match(rt.run('returnCardInReceipts(returns[0])'), /חסר זיכוי: לחם מקמח כוסמין E-FREE/);
+  assert.doesNotMatch(rt.run('returnCardInReceipts(returns[0])'), /חסר זיכוי על:/);
   rt.run(`openReturnVerify('test-return');`);
   assert.equal(state(rt).items[5].qty, 1);
   assert.equal(state(rt).items[5].noteQty, 0);
