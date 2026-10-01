@@ -373,9 +373,10 @@ for (const [name, fields] of [
 });
 test('v108: the receipt itself cannot prove its own rows', async () => {
   const c = await savedReceipt();
-  c.run("receipts[0].status='ok'");
-  assert.equal(c.run("bermanUnitPriceProven('known', 8, receipts[0].id)"), false);
-  assert.equal(c.run("bermanUnitPriceProven('known', 8, '')"), false);
+  c.run("Object.assign(receipts[0], { status: 'ok', date: '2026-09-14', docDate: '2026-09-14', discountReview: { ...receipts[0].discountReview, status: 'resolved' } })");
+  assert.equal(c.run("bermanUnitPriceProven('known', 8, '', '2026-09-14')"), true, 'the same receipt would prove the row if it were not excluded');
+  assert.equal(c.run("bermanUnitPriceProven('known', 8, receipts[0].id, '2026-09-14')"), false);
+  assert.equal(c.run("bermanUnitPriceProven('known', 8, '', '')"), false, 'no paper date, no proof');
 });
 test('v108: saving the same rate again explains the gap and writes nothing', async () => {
   const c = await savedReceipt(); proveKnown(c);
@@ -398,13 +399,15 @@ test('v108: a re-save of the stored rate goes through when a rebuild today alrea
 });
 test('v108: two products that were missing a discount are never attributed from the remainder', async () => {
   const data = fixture(); data.products[1].discountSet = false;
-  const c = await savedReceipt({ data });
-  await saveRate(c, '8'); await saveRate(c, '25', 'known');
+  const c = await savedReceipt({ data }); proveKnown(c);
+  await saveRate(c, '5'); await saveRate(c, '20', 'known');
   assert.equal(c.run('receipts[0].discountReview.status'), 'price_check');
-  assert.match(card(c), /הפרש ₪2\.50 — בתעודה יותר מהחישוב/);
-  assert.match(card(c), /נשמר כרגע: 8%/);
-  assert.match(card(c), /נשמר כרגע: 25%/);
+  assert.match(card(c), /הפרש ₪5\.62 — בתעודה פחות מהחישוב/);
+  assert.match(card(c), /נשמר כרגע: 5%/);
+  assert.match(card(c), /נשמר כרגע: 20%/);
   assert.doesNotMatch(card(c), /data-discount-implied/);
+  assert.equal(c.run('bermanImpliedDiscount({ ...receipts[0].discountReview, missing: receipts[0].discountReview.missing.slice(0, 1) }, receipts[0].id).pct'), 8,
+    'the same paper with one missing product would be attributed — only the count blocks it');
 });
 test('v108: a promotion on the missing product itself prevents a guess', async () => {
   const data = fixture();
@@ -540,4 +543,27 @@ test('v108: the receiving panel is not redrawn under a focused discount field, a
   c.run('refreshPriceAuditViews()');
   assert.match(host.innerHTML, /נשמר כרגע: 5%/);
   assert.equal(fresh.value, '8');
+});
+
+test('v108: a typed rate is dropped when the receipt changed underneath it, and kept when it did not', async () => {
+  const c = await savedReceipt(), id = c.run('receipts[0].id'), app = c.node('app');
+  const field = (fp, value, initial) => {
+    const save = { dataset: { fingerprint: fp } }, box = { querySelector: s => s === '[data-role="berman-known-discount-save"]' ? save : null };
+    return { dataset: { key: id + '|missing', initial }, value, closest: s => s === '[data-known-discount]' ? box : null };
+  };
+  const run = (before, after) => { let n = 0; app.querySelectorAll = s => s === '[data-role="berman-known-discount"]' ? (n++ ? [after] : [before]) : []; c.run('renderReceiptsHistory()'); };
+  let fresh = field('A', '', ''); run(field('A', '7', ''), fresh);
+  assert.equal(fresh.value, '7');
+  fresh = field('B', '5', '5'); run(field('A', '7', ''), fresh);
+  assert.equal(fresh.value, '5', 'another device changed the receipt; the stale typing is not restored');
+});
+test('v108: a promotion price printed on the paper proves its own row without any earlier receipt', async () => {
+  const data = fixture(), d = data.paper.scan.documents[0];
+  data.promos = [{ id: 'promo', productIds: ['known'], fixedPrice: 7, type: 'receipt', minQty: 1, minUnit: 'unit', start: '2026-09-01', end: '2026-09-30' }];
+  d.rows[1].unitPriceExVat = 7; d.netToChargeExVat = 172.22 + 7 * 5;
+  const c = await savedReceipt({ data });
+  assert.equal(c.run('receipts.length'), 1, 'no earlier receipt');
+  c.run('renderReceiptsHistory()');
+  assert.match(card(c), /המוצר האחר בתעודה כבר מאומת/);
+  assert.match(card(c), /קבע 8% לפי התעודה/);
 });

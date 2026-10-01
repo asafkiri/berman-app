@@ -849,7 +849,7 @@ let sharedReceiptScanToken = null;
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '108'; // האחוז לפי הנייר בלחיצה אחת, והסבר כשהנחה שהוזנה אינה סוגרת את הנייר
+const APP_VERSION = '109'; // אחוז שהוקלד אינו חוזר לשדה אם התעודה השתנתה בינתיים ממכשיר אחר
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10972,14 +10972,26 @@ function bermanStoredDiscountHtml(rc) {
 // v108: אחוז שהוקלד בשדה ההנחה ועוד לא נשמר שורד ציור מחדש — בהיסטוריה,
 // בקליטה ובפאנל הבדיקה. אחרת עדכון מהענן החזיר לשדה את האחוז השמור, והשמירה
 // הבאה נעצרה כ"אותו אחוז".
+// ההקלדה חוזרת לשדה רק אם הטופס עדיין מתאר אותה תעודה בדיוק (אותה טביעת
+// אצבע בכפתור השמירה). אם התעודה השתנתה בינתיים — למשל אחוז שנקבע ממכשיר
+// אחר — הטופס החדש מגיע נקי, כדי שאחוז ישן לא יישמר מעל השינוי.
+function bermanDiscountFieldFingerprint(input) {
+  const card = input.closest ? input.closest('[data-known-discount]') : null;
+  const save = card && card.querySelector('[data-role="berman-known-discount-save"]');
+  return save ? save.dataset.fingerprint || '' : '';
+}
 function bermanTypedDiscounts(root) {
   return Array.from(root.querySelectorAll('[data-role="berman-known-discount"]'))
-    .filter(input => input.dataset.key && input.value !== (input.dataset.initial || '')).map(input => [input.dataset.key, input.value]);
+    .filter(input => input.dataset.key && input.value !== (input.dataset.initial || ''))
+    .map(input => [input.dataset.key, input.value, bermanDiscountFieldFingerprint(input)]);
 }
 function bermanRestoreTypedDiscounts(root, typed) {
   if (!typed.length) return;
   const inputs = Array.from(root.querySelectorAll('[data-role="berman-known-discount"]'));
-  typed.forEach(([key, value]) => { const input = inputs.find(x => x.dataset.key === key); if (input) input.value = value; });
+  typed.forEach(([key, value, fingerprint]) => {
+    const input = inputs.find(x => x.dataset.key === key);
+    if (input && bermanDiscountFieldFingerprint(input) === fingerprint) input.value = value;
+  });
 }
 // v108: טביעת האצבע של טופס ההנחה בתעודה שמורה. JSON.stringify תלוי בסדר
 // השדות, והענן מחזיר את אותה תעודה בסדר אחר מזה שנבנה במכשיר — ולכן טופס
