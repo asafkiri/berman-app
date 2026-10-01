@@ -1,8 +1,8 @@
 // v108 — הנחה שנשמרה ואינה סוגרת את הנייר, בדפדפן אמיתי.
 // תעודה שמורה בבדיקת מחיר: הכרטיס מראה מה נשמר, כמה הפער, ואיזו הנחה הנייר
-// גוזר. לחיצה חוזרת על אותו אחוז אינה כותבת; "מלא" מכניס את האחוז לשדה;
-// השמירה סוגרת את התעודה — והכרטיס נשאר פתוח גם כשעדכון הענן מצייר את
-// הרשימה מחדש באמצע השמירה (עד v107 הוא נסגר, והשדה התרוקן).
+// גוזר. לחיצה חוזרת על אותו אחוז אינה כותבת; "קבע לפי התעודה" שומר בלחיצה
+// אחת וסוגר את התעודה — והכרטיס נשאר פתוח גם כשעדכון הענן מצייר את הרשימה
+// מחדש באמצע השמירה (עד v107 הוא נסגר, והשדה התרוקן).
 // Run: node tests/discount-price-check-browser.mjs (Playwright + Chromium; BERMAN_CHROMIUM optional)
 // Private replay: BERMAN_PRICE_CHECK_BACKUP=/path/to/backup.json — the first receipt under price check.
 // Screenshots: BERMAN_SCREENSHOT_DIR (default: the OS temp directory).
@@ -90,7 +90,8 @@ const toastText = showToast; window.__toasts = [];
 showToast = (msg, ...rest) => { window.__toasts.push(msg); return toastText(msg, ...rest); };
 setView('receiptsHistory');
 window.t = { loaded: true, redraw: () => renderReceiptsHistory(),
-  status: id => { const r = receipts.find(x => x.id === id); return [r.status, r.discountReview.status, r.unresolvedAmountGap]; } };
+  status: id => { const r = receipts.find(x => x.id === id), p = products.find(x => x.id === r.discountReview.missing[0].productId);
+    return [r.status, r.discountReview.status, r.unresolvedAmountGap, p.discountPct, p.discountSource && p.discountSource.basis]; } };
 `;
 const css = `.hidden{display:none!important}.flex{display:flex}.block{display:block}.w-full{width:100%}.rounded-xl{border-radius:.75rem}.rounded-2xl{border-radius:1rem}.p-3{padding:.75rem}.p-4{padding:1rem}.px-4{padding-left:1rem;padding-right:1rem}.py-2{padding-top:.5rem;padding-bottom:.5rem}.mt-1{margin-top:.25rem}.mt-2{margin-top:.5rem}.mt-3{margin-top:.75rem}.my-3{margin:.75rem 0}.font-black{font-weight:900}.font-bold{font-weight:700}.text-sm{font-size:.875rem}.text-lg{font-size:1.125rem}.justify-between{justify-content:space-between}.items-center{align-items:center}.gap-2{gap:.5rem}.border{border:1px solid #cbd5e1}.border-2{border:2px solid #cbd5e1}.border-purple-200,.border-purple-300{border-color:#c4b5fd}.bg-white{background:#fff}.bg-purple-50{background:#faf5ff}.bg-purple-700{background:#7e22ce}.bg-emerald-500{background:#10b981}.bg-rose-50{background:#fff1f2}.text-white{color:#fff}.text-purple-900{color:#581c87}.text-purple-800{color:#6b21a8}.text-rose-700{color:#be123c}body{margin:0;font:16px Arial;background:#f1f5f9}main,#app{padding:12px}button,input{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}button{cursor:pointer}details{margin-bottom:10px}summary{list-style:none}`;
 const pageHtml = html.replace(/<script\s+src="https:[^"]+"><\/script>/g, '').replace(/<link[^>]+(?:href="https:[^"]+"|rel="manifest")[^>]*>/g, '')
@@ -126,9 +127,10 @@ try {
   assert.ok(text.includes(seed.gap), text);
   const input = section.locator('[data-role="berman-known-discount"]');
   assert.equal(await input.inputValue(), seed.saved);
-  const fill = section.locator('[data-role="berman-known-discount-fill"]');
-  assert.equal(await fill.count(), 1, 'the paper-implied rate is offered');
-  const implied = await fill.getAttribute('data-value');
+  const adopt = section.locator('[data-role="berman-known-discount-adopt"]');
+  assert.equal(await adopt.count(), 1, 'the paper-implied rate is offered');
+  const implied = await adopt.getAttribute('data-value');
+  assert.equal(await adopt.innerText(), 'קבע ' + implied + '% לפי התעודה');
   if (seed.implied) assert.equal(implied, seed.implied);
   await section.scrollIntoViewIfNeeded();
   await card.screenshot({ path: path.join(shots, 'berman-v108-price-check.png') });
@@ -147,25 +149,22 @@ try {
   assert.equal(await isOpen(), true);
   assert.equal(await card.locator('[data-role="berman-known-discount"]').inputValue(), '12');
 
-  // [4] "מלא" מכניס את האחוז שהנייר גוזר; שום דבר לא נכתב עד השמירה
-  await card.locator('[data-role="berman-known-discount-fill"]').click();
-  assert.equal(await card.locator('[data-role="berman-known-discount"]').inputValue(), implied);
   assert.equal(await writes(), 0);
 
-  // [5] השמירה: עדכון הענן מגיע באמצע, בסדר שדות אחר — הכרטיס נשאר פתוח,
-  // והתעודה נסגרת ירוקה
+  // [4] "קבע לפי התעודה": עדכון הענן מגיע באמצע השמירה, בסדר שדות אחר —
+  // הכרטיס נשאר פתוח, והתעודה נסגרת ירוקה
   const toastsBefore = await page.evaluate(() => window.__toasts.length);
-  await card.locator('[data-role="berman-known-discount-save"]').click();
+  await card.locator('[data-role="berman-known-discount-adopt"]').click();
   await page.waitForFunction(() => (window.__echoes || 0) >= 1);
   assert.equal(await isOpen(), true, 'open while the cloud echo re-renders mid-save');
   await page.waitForFunction(s => !document.querySelector(s + ' section[data-receipt-discount]'), cardSel);
   await page.waitForFunction(n => window.__toasts.length > n, toastsBefore);
   assert.equal(await writes(), 1);
   assert.equal(await isOpen(), true, 'still open after the save');
-  assert.equal(await lastToast(), 'ההנחה שאושרה מול הספק נשמרה.');
+  assert.equal(await lastToast(), 'ההנחה ' + implied + '% נקבעה לפי התעודה.');
   assert.match(await card.locator('summary').innerText(), /אומתה/);
   const status = await page.evaluate(id => window.t.status(id), seed.id);
-  assert.deepEqual(status, ['ok', 'resolved', 0]);
+  assert.deepEqual(status, ['ok', 'resolved', 0, Number(implied), 'paper_total']);
   await card.screenshot({ path: path.join(shots, 'berman-v108-resolved.png') });
 
   assert.deepEqual(errors, []); assert.deepEqual(external, []);

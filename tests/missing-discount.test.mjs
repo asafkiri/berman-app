@@ -285,24 +285,80 @@ test('v108: a saved rate that misses the paper shows the saved rate and the mone
   assert.match(html, /הפרש ₪5\.62 — בתעודה פחות מהחישוב/);
   assert.doesNotMatch(html, /data-discount-implied|berman-known-discount-fill/);
 });
-test('v108: the paper-implied rate is offered when every other row is proven, fills on click, and closes when saved', async () => {
+const adoptButton = (c, html = card(c)) => {
+  const tag = html.match(/<button data-role="berman-known-discount-adopt"[^>]*>/)?.[0];
+  if (!tag) return null;
+  const attr = name => tag.match(new RegExp(name + '="([^"]*)"'))[1].replace(/&quot;/g, '"').replace(/&#039;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  const button = { dataset: { value: attr('data-value'), product: attr('data-product'), receipt: attr('data-receipt'), fingerprint: attr('data-fingerprint') },
+    closest: s => s === '[data-role="berman-known-discount-adopt"]' ? button : null };
+  return button;
+};
+test('v108: the paper-implied rate is offered when every other row is proven, and one tap sets it', async () => {
   const c = await savedReceipt(); proveKnown(c);
   assert.equal(await saveRate(c, '5'), true);
   assert.match(c.toasts.at(-1), /הפרש ₪5\.62\. לפי הנייר ההנחה היא 8%\.$/);
   const html = card(c);
   assert.match(html, /לפי סכום התעודה, ההנחה על לחם בדיקה היא <b dir="ltr">8%<\/b>\. המוצר האחר בתעודה כבר מאומת\./);
-  assert.match(html, /data-role="berman-known-discount-fill" data-value="8"[^>]*>מלא 8% בשדה</);
-  const writes = c.writes.length, input = { value: '5' }, box = { querySelector: () => input };
-  const fill = { dataset: { value: '8' }, closest: s => s === '[data-role="berman-known-discount-fill"]' ? fill : s === '[data-known-discount]' ? box : null };
-  assert.equal(c.events.get('app:click')({ target: fill }), true);
-  assert.equal(input.value, '8');
-  assert.equal(c.writes.length, writes);
-  assert.equal(c.run('receipts[0].discountReview.status'), 'price_check');
-  assert.equal(await saveRate(c, input.value), true);
+  assert.match(html, /data-role="berman-known-discount-adopt" data-value="8"[^>]*>קבע 8% לפי התעודה</);
+  const writes = c.writes.length;
+  assert.equal(await c.events.get('app:click')({ target: adoptButton(c) }), true);
+  assert.equal(c.writes.length, writes + 1);
   assert.equal(c.run('receipts[0].discountReview.status'), 'resolved');
   assert.equal(c.run('receipts[0].status'), 'ok');
   assert.equal(c.run('products[0].discountPct'), 8);
+  assert.equal(c.run('products[0].discountSource.basis'), 'paper_total');
+  assert.equal(c.toasts.at(-1), 'ההנחה 8% נקבעה לפי התעודה.');
   assert.equal(card(c), '');
+});
+test('v108: before any rate is typed, a stored receipt already offers the paper rate', async () => {
+  const c = await savedReceipt(); proveKnown(c); c.run('renderReceiptsHistory()');
+  const html = card(c);
+  assert.match(html, /התעודה פתוחה — חסר אחוז הנחה/);
+  assert.doesNotMatch(html, /נשמר כרגע|data-discount-gap/);
+  assert.match(html, /קבע 8% לפי התעודה/);
+  assert.equal(await c.events.get('app:click')({ target: adoptButton(c) }), true);
+  assert.equal(c.run('receipts[0].status'), 'ok');
+  assert.equal(c.run('products[0].discountSource.basis'), 'paper_total');
+});
+test('v108: without proven neighbours nothing is offered before typing either', async () => {
+  const c = await savedReceipt();
+  assert.doesNotMatch(card(c), /data-discount-implied|berman-known-discount-adopt/);
+});
+test('v108: a paper that charges the full list price offers an explicit 0%', async () => {
+  const data = fixture(); data.paper.scan.documents[0].netToChargeExVat = 227.2;
+  const c = await savedReceipt({ data }); proveKnown(c); c.run('renderReceiptsHistory()');
+  assert.match(card(c), /היא <b dir="ltr">0%<\/b>/);
+  assert.equal(await c.events.get('app:click')({ target: adoptButton(c) }), true);
+  assert.equal(c.run('products[0].discountSet'), true);
+  assert.equal(c.run('products[0].discountPct'), 0);
+  assert.equal(c.run('receipts[0].status'), 'ok');
+});
+test('v108: a set button whose rate no longer follows from the paper does not save', async () => {
+  const c = await savedReceipt(); proveKnown(c); c.run('renderReceiptsHistory()');
+  const button = adoptButton(c), writes = c.writes.length;
+  button.dataset.value = '7';
+  assert.equal(await c.events.get('app:click')({ target: button }), false);
+  assert.equal(c.toasts.at(-1), 'ההצעה לפי התעודה השתנתה — בדוק שוב לפני השמירה.');
+  c.run("receipts.splice(1, 1)");
+  button.dataset.value = '8';
+  assert.equal(await c.events.get('app:click')({ target: button }), false, 'the neighbouring proof is gone');
+  assert.equal(c.writes.length, writes);
+  assert.equal(c.run('receipts[0].status'), 'open');
+});
+test('v108: receiving offers the paper rate before deferral, and one tap closes the paper check', async () => {
+  const c = await scanned();
+  assert.doesNotMatch(c.node('app').innerHTML, /berman-known-discount-adopt/);
+  proveKnown(c); c.run('renderReceiving()');
+  const html = c.node('app').innerHTML.match(/<section data-missing-discount[\s\S]*?<\/section>/)[0];
+  assert.match(html, /חסר אחוז הנחה — לבירור מול הספק/);
+  assert.match(html, /קבע 8% לפי התעודה/);
+  assert.match(html, /data-role="berman-discount-later"/);
+  assert.equal(c.run('bermanDeferredReview()'), null, 'showing the offer does not defer');
+  assert.equal(await c.events.get('app:click')({ target: adoptButton(c, html) }), true);
+  assert.equal(c.run('products[0].discountPct'), 8);
+  assert.equal(c.run('products[0].discountSource.basis'), 'paper_total');
+  assert.equal(c.run('receiptPaperScanState'), 'ok');
+  assert.equal(c.requests.length, 1);
 });
 for (const [name, fields] of [
   ['another unit price', { items: [{ productId: 'known', qty: 5, unitPrice: 8.5 }] }],
@@ -408,11 +464,11 @@ test('v108: private backup — every receipt under price check explains its gap,
   assert.ok(ids.length);
   for (const id of ids) {
     c.context.rid = id;
-    const info = JSON.parse(c.run('JSON.stringify(bermanPriceCheckInfo(receipts.find(r => r.id === rid).discountReview, rid))'));
+    const info = JSON.parse(c.run('JSON.stringify(bermanDiscountCheckInfo(receipts.find(r => r.id === rid).discountReview, rid))'));
     assert.notEqual(info.gap, 0, id);
     if (!info.implied) continue;
     const token = c.run('bermanReceiptDiscountFingerprint(receipts.find(r => r.id === rid))');
-    assert.equal(await c.run('bermanSaveKnownDiscount(' + JSON.stringify(info.implied.productId) + ',' + JSON.stringify(String(info.implied.pct)) + ',rid,' + JSON.stringify(token) + ')'), true);
+    assert.equal(await c.run('bermanSaveKnownDiscount(' + JSON.stringify(info.implied.productId) + ',' + JSON.stringify(String(info.implied.pct)) + ',rid,' + JSON.stringify(token) + ",'paper_total')"), true);
     assert.equal(c.run('receipts.find(r => r.id === rid).discountReview.status'), 'resolved', id);
     assert.equal(c.run('receipts.find(r => r.id === rid).unresolvedAmountGap'), 0, id);
   }

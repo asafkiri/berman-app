@@ -849,7 +849,7 @@ let sharedReceiptScanToken = null;
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '108'; // הנחה שנשמרה ואינה סוגרת את הנייר: מה נשמר, כמה הפער, ואיזו הנחה הנייר גוזר
+const APP_VERSION = '108'; // האחוז לפי הנייר בלחיצה אחת, והסבר כשהנחה שהוזנה אינה סוגרת את הנייר
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10679,19 +10679,23 @@ function bermanSetDeferredAnchors(state) {
   aiScanDocuments = aiScanDocuments.map((d, i) => ({ ...d, ...state.notes[i] }));
   aiScanBasis = { notes: aiScanNoteSignature(), lines: null };
 }
+// v108: אותה תמונת מצב משמשת גם להצעת ההנחה במסך הקליטה, לפני שבחרו לדחות.
+function bermanNewDeferredReview(state, missing) {
+  const ids = new Set(state.rows.map(r => r.productId));
+  return cloneSafe({
+    schemaVersion: 1, status: 'pending', sourceKey: bermanDeferredSourceKey(), deferredAt: Date.now(),
+    missing: missing.map(p => ({ productId: p.id, name: p.name })), rates: {},
+    catalog: products.filter(p => ids.has(p.id)), promos,
+    documents: aiScanResponse.scan.documents, notes: state.notes
+  });
+}
 function bermanDeferDiscount() {
   const state = bermanQuantityPaperState(), missing = bermanMissingDiscountProducts();
   if (!state || !missing.length || receiptPriceSaveFailed) { showToast('צריך להשלים את זיהוי המוצרים והכמויות ולשמור את הפענוח לפני ההמשך.'); return false; }
   if (!bermanDeferredReview()) {
-    const ids = new Set(state.rows.map(r => r.productId));
     const days = new Set(aiScanResponse.scan.documents.map(d => priceAuditDate(d.__priceConfirmedDate || d.__pricePaper.docDate || receiptDocDate)));
     if (days.size === 1) receiptDocDate = days.values().next().value;
-    aiScanResponse.__bermanDiscountReview = cloneSafe({
-      schemaVersion: 1, status: 'pending', sourceKey: bermanDeferredSourceKey(), deferredAt: Date.now(),
-      missing: missing.map(p => ({ productId: p.id, name: p.name })), rates: {},
-      catalog: products.filter(p => ids.has(p.id)), promos,
-      documents: aiScanResponse.scan.documents, notes: state.notes
-    });
+    aiScanResponse.__bermanDiscountReview = bermanNewDeferredReview(state, missing);
   }
   bermanSetDeferredAnchors(state);
   if (!saveReceiptDraft()) return false;
@@ -10710,7 +10714,8 @@ function bermanDiscountQuantityText(items) {
 }
 // v108: בבדיקת מחיר (ההנחה הוזנה והסכום לא נסגר) השדה מציג את האחוז שכבר
 // נשמר. עד כאן הוא חזר ריק אחרי כל שמירה, והמשתמש ראה תעודה פתוחה "בלי
-// אחוז" — והקליד שוב את אותו מספר, שוב ושוב, בלי שדבר ישתנה.
+// אחוז" — והקליד שוב את אותו מספר, שוב ושוב, בלי שדבר ישתנה. כשהנייר מוכיח
+// את ההנחה, כפתור אחד קובע אותה; השדה נשאר לאחוז אחר שהספק מסר.
 function bermanKnownDiscountHtml(p, receiptId, fingerprint, check) {
   const id = p.productId || p.id, rates = check && check.rates || {};
   const saved = Object.prototype.hasOwnProperty.call(rates, id) ? String(rates[id]) : '';
@@ -10721,7 +10726,8 @@ function bermanKnownDiscountHtml(p, receiptId, fingerprint, check) {
     '<input data-role="berman-known-discount" data-key="' + htmlEscape((receiptId || '') + '|' + id) + '" data-initial="' + htmlEscape(saved) + '" value="' + htmlEscape(saved) + '" type="text" inputmode="decimal" dir="ltr" placeholder="אחוז שאושר מול הספק" class="block w-full border-2 border-slate-200 rounded-xl p-3 mt-2 text-lg"></label>' +
     (implied ? '<div data-discount-implied class="rounded-xl border border-purple-300 bg-purple-50 p-3 mt-2 text-sm font-bold text-purple-900">לפי סכום התעודה, ההנחה על ' + htmlEscape(p.name) + ' היא <b dir="ltr">' + implied.pct + '%</b>. ' +
       (implied.proven > 1 ? 'שאר ' + implied.proven + ' המוצרים בתעודה כבר מאומתים.' : implied.proven === 1 ? 'המוצר האחר בתעודה כבר מאומת.' : 'זה המוצר היחיד בתעודה.') +
-      '<button data-role="berman-known-discount-fill" data-value="' + implied.pct + '" class="btn-tap w-full rounded-xl border-2 border-purple-400 bg-white text-purple-900 p-2 mt-2 font-black">מלא ' + implied.pct + '% בשדה</button></div>' : '') +
+      '<button data-role="berman-known-discount-adopt" data-value="' + implied.pct + '" data-product="' + htmlEscape(id) + '" data-receipt="' + htmlEscape(receiptId || '') +
+      '" data-fingerprint="' + htmlEscape(fingerprint) + '" class="btn-tap w-full rounded-xl bg-purple-700 text-white p-3 mt-2 font-black"' + (bermanDiscountSaveBusy ? ' disabled' : '') + '>קבע ' + implied.pct + '% לפי התעודה</button></div>' : '') +
     '<button data-role="berman-known-discount-save" data-product="' + htmlEscape(id) + '" data-receipt="' + htmlEscape(receiptId || '') +
     '" data-fingerprint="' + htmlEscape(fingerprint) + '" class="btn-tap w-full bg-purple-700 text-white rounded-xl p-3 mt-2 font-black"' + (bermanDiscountSaveBusy ? ' disabled' : '') + '>שמור הנחה שאושרה מול הספק</button></div>';
 }
@@ -10736,7 +10742,11 @@ function bermanMissingDiscountHtml() {
   const missing = bermanMissingDiscountProducts();
   if (!missing.length) return '';
   const deferred = bermanDeferredReview(), priceCheck = deferred && deferred.status === 'price_check';
-  const check = priceCheck ? bermanPriceCheckInfo(deferred, '') : null;
+  // לפני שבחרו "אשלים בהמשך" אין עדיין תמונת מצב שמורה; ההצעה נבנית מאותה
+  // תמונה שהדחייה הייתה שומרת, בלי לשמור אותה.
+  const state = deferred || receiptPriceSaveFailed ? null : bermanQuantityPaperState();
+  const review = deferred || (state ? bermanNewDeferredReview(state, missing) : null);
+  const check = review ? bermanDiscountCheckInfo(review, '') : null;
   return '<section data-missing-discount class="rounded-2xl border-2 border-purple-300 bg-purple-50 p-3 mt-3">' +
     '<div class="font-black text-lg text-purple-900">' + (priceCheck ? 'הסכום עדיין לא תואם — בדוק את ההנחה שנמסרה' : 'חסר אחוז הנחה — לבירור מול הספק') + '</div>' +
     bermanPriceCheckGapHtml(check) +
@@ -10814,19 +10824,23 @@ function bermanBuildDeferredReceipt(review, counted, inspect) {
     ex: r2(Math.max(0, noteTotal - shortageValue)), calculatedEx: r2(lines.reduce((n, l) => n + l.lineTotal, 0)),
     unresolvedAmountGap: pending || moneyVerified ? 0 : r2(amountGap / 100), unresolvedUnitsGap: 0, status: 'open' };
 }
-// v108: בדיקת מחיר אחרי שההנחה הוזנה — מה נשמר, מה הסכום לפיו מול "נטו
-// לחיוב", ואם אפשר, איזו הנחה הנייר עצמו גוזר. הכסף אינו תלוי בכמויות
-// שנספרו, ולכן החישוב רץ בלי הספירה ואינו נופל על מוצר שנסרק מעבר לנייר.
-function bermanPriceCheckInfo(review, receiptId) {
-  if (!review || review.status !== 'price_check') return null;
+// v108: מה ידוע על ההנחה החסרה — מה נשמר, ובבדיקת מחיר גם הסכום לפיו מול
+// "נטו לחיוב". ואם הנייר מוכיח אותה, איזו הנחה הוא גוזר. הכסף אינו תלוי
+// בכמויות שנספרו, ולכן החישוב רץ בלי הספירה ואינו נופל על מוצר שנסרק מעבר
+// לנייר. לעולם אינו זורק — הוא רץ בתוך הציור.
+function bermanDiscountCheckInfo(review, receiptId) {
+  if (!review || !['pending', 'price_check'].includes(review.status)) return null;
   const info = { rates: { ...(review.rates || {}) }, paper: 0, calculated: 0, gap: 0, implied: null };
   try {
-    const built = bermanBuildDeferredReceipt(review, []);
-    if (built.discountReview.status !== 'price_check') return info;
-    info.gap = r2(Number(built.unresolvedAmountGap) || 0);
-    info.paper = built.noteTotal; info.calculated = r2(built.noteTotal - info.gap);
-    if (info.gap) info.implied = bermanImpliedDiscount(review, receiptId, info.gap);
-  } catch (e) { console.error('price check info', e); }
+    if (review.status === 'price_check') {
+      const built = bermanBuildDeferredReceipt(review, []);
+      if (built.discountReview.status === 'price_check') {
+        info.gap = r2(Number(built.unresolvedAmountGap) || 0);
+        info.paper = built.noteTotal; info.calculated = r2(built.noteTotal - info.gap);
+      }
+    }
+    info.implied = bermanImpliedDiscount(review, receiptId);
+  } catch (e) { console.error('discount check info', e); }
   return info;
 }
 // מחיר יחידה שכבר נסגר מול נייר: אותו מוצר, אותו מחיר (עד חצי אגורה, כמו
@@ -10838,18 +10852,22 @@ function bermanUnitPriceProven(productId, unitPrice, excludeReceiptId) {
 }
 // v108: ההנחה שהנייר גוזר למוצר היחיד שחסרה לו הנחה — רק כשכל שאר השורות
 // כבר מוכחות: מחיר מבצע מודפס בשורה, או מחיר יחידה שכבר נסגר מול נייר.
-// מוצעת רק אם בנייה מחדש איתה מאמתת את כל התעודה, ונכנסת לשדה רק בלחיצה;
-// השמירה נשארת בידי המשתמש. מבצע על המוצר עצמו, או שורה שחויבה במחירון
-// מלא, מכריעים אחרת את הכסף — ואז אין הצעה.
-function bermanImpliedDiscount(review, receiptId, gap) {
-  const missing = review.missing || [];
-  if (missing.length !== 1) return null;
+// מוצעת רק אם בנייה מחדש איתה מאמתת את כל התעודה, ונקבעת רק בלחיצה. מבצע
+// על המוצר עצמו, או שורה שחויבה במחירון מלא, מכריעים אחרת את הכסף — ואז
+// אין הצעה. לפני שהוזן אחוז החישוב יוצא מ־0% (מחירון מלא), אחרי — מהאחוז
+// שנשמר; בשני המקרים השארית שהנייר משאיר למוצר היא שקובעת.
+function bermanImpliedDiscount(review, receiptId) {
+  const missing = review && review.missing || [];
+  if (missing.length !== 1 || !['pending', 'price_check'].includes(review.status)) return null;
   const productId = missing[0].productId, rates = review.rates || {};
-  if (!Object.prototype.hasOwnProperty.call(rates, productId)) return null;
+  const saved = Object.prototype.hasOwnProperty.call(rates, productId) ? Number(rates[productId]) : null;
   const p = (review.catalog || []).find(x => x.id === productId), list = Number(p && p.listPrice);
   if (!p || !(list > 0)) return null;
-  const inspect = {};
-  bermanBuildDeferredReceipt(review, [], inspect);
+  const base = cloneSafe(review); base.rates = { ...rates, [productId]: saved ?? 0 };
+  const inspect = {}, built = bermanBuildDeferredReceipt(base, [], inspect), status = built.discountReview.status;
+  if (status !== 'resolved' && status !== 'price_check') return null;
+  const gap = status === 'resolved' ? 0 : r2(Number(built.unresolvedAmountGap) || 0);
+  if (status === 'price_check' && !gap) return null;
   let qty = 0, current = 0;
   const proven = new Set();
   for (const d of inspect.documents || []) {
@@ -10868,7 +10886,7 @@ function bermanImpliedDiscount(review, receiptId, gap) {
   }
   if (!(qty > 0)) return null;
   const pct = r2((1 - (current + gap) / qty / list) * 100);
-  if (!Number.isFinite(pct) || pct < 0 || pct >= 100 || pct === Number(rates[productId])) return null;
+  if (!Number.isFinite(pct) || pct < 0 || pct >= 100 || pct === saved) return null;
   const probe = cloneSafe(review); probe.rates = { ...rates, [productId]: pct };
   if (bermanBuildDeferredReceipt(probe, []).discountReview.status !== 'resolved') return null;
   return { productId, pct, proven: proven.size };
@@ -10898,7 +10916,7 @@ function bermanFinishDeferredReceipt() {
     '<div class="font-bold mt-3">' + htmlEscape(bermanDiscountQuantityText(built.lines)) + '</div>' +
     (built.discountReview.status === 'pending' ? '<div class="mt-3 text-sm">חסרה הנחה עבור: ' + review.missing.filter(p => !Object.prototype.hasOwnProperty.call(review.rates, p.productId)).map(p => htmlEscape(p.name)).join(', ') + '</div>' : '') +
     '<div class="mt-2 text-sm">סכום מודפס בתעודה: ₪' + fmtMoney(built.noteTotal) + '. התשלום ייבדק אחרי השלמת ההנחה.</div>' +
-    bermanPriceCheckGapHtml(bermanPriceCheckInfo(built.discountReview, '')) + '</div>' +
+    (built.discountReview.status === 'price_check' ? bermanPriceCheckGapHtml(bermanDiscountCheckInfo(built.discountReview, '')) : '') + '</div>' +
     built.lines.map(l => '<div class="border-b py-3"><b>' + htmlEscape(l.name) + '</b><div>בתעודה: ' + l.noteQty + ' · התקבלו: ' + l.qty + '</div></div>').join('');
   const modal = $('receiptSummaryModal'); modal.classList.remove('hidden'); modal.classList.add('flex');
   return true;
@@ -10908,12 +10926,12 @@ function bermanStoredDiscountHtml(rc) {
   if (!review || review.status === 'resolved') return '';
   const missing = review.missing.filter(p => !Object.prototype.hasOwnProperty.call(review.rates || {}, p.productId));
   const editable = missing.length ? missing : review.missing;
-  const check = missing.length ? null : bermanPriceCheckInfo(review, rc.id);
+  const check = bermanDiscountCheckInfo(review, rc.id);
   return '<section data-receipt-discount class="rounded-xl border-2 border-purple-300 bg-purple-50 p-3 my-3">' +
     '<div class="font-black text-purple-900">' + (missing.length ? 'התעודה פתוחה — חסר אחוז הנחה' : 'ההנחה הושלמה — נדרשת בדיקת המחיר והסכום') + '</div>' +
     '<div class="font-bold text-sm mt-2">' + htmlEscape(bermanDiscountQuantityText(rc.items)) + '</div>' +
     (missing.length ? '<p class="text-sm mt-2">ברר מול הספק והזן את ההנחה. הכמויות שכבר נבדקו נשמרות.</p>'
-      : check ? '<p class="text-sm mt-2">ההנחה נשמרה, אבל הסכום לפיה לא תואם לתעודה. התעודה תיסגר כשהאחוז יתאים לנייר.</p>' + bermanPriceCheckGapHtml(check) : '') +
+      : '<p class="text-sm mt-2">ההנחה נשמרה, אבל הסכום לפיה לא תואם לתעודה. התעודה תיסגר כשהאחוז יתאים לנייר.</p>' + bermanPriceCheckGapHtml(check)) +
     editable.map(p => bermanKnownDiscountHtml(p, rc.id, bermanReceiptDiscountFingerprint(rc), check)).join('') + '</section>';
 }
 // v108: טביעת האצבע של טופס ההנחה בתעודה שמורה. JSON.stringify תלוי בסדר
@@ -10928,7 +10946,10 @@ function bermanStableJson(value) {
 function bermanReceiptDiscountFingerprint(rc) {
   return bermanStableJson([rc.items, rc.discountReview]);
 }
-async function bermanSaveKnownDiscount(productId, value, receiptId, fingerprint) {
+// basis 'paper_total' (v108): האחוז נקבע בכפתור "קבע לפי התעודה". הוא נבדק
+// שוב כאן מול אותה תעודה, ונרשם בכרטיס המוצר כנגזר מסכום הנייר ולא כמסירה
+// מהספק. המסלול אחרי זה זהה להזנה ידנית.
+async function bermanSaveKnownDiscount(productId, value, receiptId, fingerprint, basis) {
   if (bermanDiscountSaveBusy || aiScanBusy) return false;
   const text = String(value ?? '').trim().replace(',', '.');
   const pct = /^\d{1,2}(?:\.\d{1,2})?$/.test(text) ? Number(text) : NaN;
@@ -10949,11 +10970,17 @@ async function bermanSaveKnownDiscount(productId, value, receiptId, fingerprint)
   const current = rc ? rc.discountReview : bermanDeferredReview();
   if (current && current.status === 'price_check' && Object.prototype.hasOwnProperty.call(current.rates || {}, productId)
     && Number(current.rates[productId]) === pct && p.discountSet && Number(p.discountPct) === pct) {
-    showToast(bermanPriceCheckMessage(bermanPriceCheckInfo(current, receiptId || ''), 'ההנחה ' + pct + '% כבר שמורה'), null, null, 6500);
+    showToast(bermanPriceCheckMessage(bermanDiscountCheckInfo(current, receiptId || ''), 'ההנחה ' + pct + '% כבר שמורה'), null, null, 6500);
     return false;
   }
+  if (basis === 'paper_total') {
+    let implied = null;
+    try { implied = bermanImpliedDiscount(current, receiptId || ''); } catch (e) { console.error('implied discount', e); }
+    if (!implied || implied.productId !== productId || implied.pct !== pct) { showToast('ההצעה לפי התעודה השתנתה — בדוק שוב לפני השמירה.'); return false; }
+  }
   const productData = { discountSet: true, discountPct: pct, price: finalUnitPrice(p.listPrice, pct),
-    discountSource: { method: 'supplier_confirmation', approvedPct: pct, approvedAt: Date.now(), receiptId: receiptId || receiptDraftId } };
+    discountSource: { method: 'supplier_confirmation', approvedPct: pct, approvedAt: Date.now(), receiptId: receiptId || receiptDraftId,
+      ...(basis === 'paper_total' ? { basis: 'paper_total' } : {}) } };
   let update = null;
   if (rc) {
     const review = cloneSafe(rc.discountReview); review.rates = { ...(review.rates || {}), [productId]: pct };
@@ -10989,14 +11016,15 @@ async function bermanSaveKnownDiscount(productId, value, receiptId, fingerprint)
       aiRefreshScanEvaluation(); renderReceiving();
     }
     const after = rc ? update.discountReview : bermanDeferredReview();
-    if (after && after.status === 'price_check') showToast(bermanPriceCheckMessage(bermanPriceCheckInfo(after, receiptId || ''), 'ההנחה נשמרה'), null, null, 6500);
-    else showToast(rc && update.status === 'open' ? 'ההנחה נשמרה. התעודה עדיין פתוחה לטיפול ביתר הפערים.' : 'ההנחה שאושרה מול הספק נשמרה.');
+    if (after && after.status === 'price_check') showToast(bermanPriceCheckMessage(bermanDiscountCheckInfo(after, receiptId || ''), 'ההנחה נשמרה'), null, null, 6500);
+    else if (rc && update.status === 'open') showToast('ההנחה נשמרה. התעודה עדיין פתוחה לטיפול ביתר הפערים.');
+    else showToast(basis === 'paper_total' ? 'ההנחה ' + pct + '% נקבעה לפי התעודה.' : 'ההנחה שאושרה מול הספק נשמרה.');
     return true;
   } catch (error) {
     showToast(saved ? 'ההנחה נשמרה. פתח שוב את התעודה כדי לרענן את התצוגה.' : 'לא ניתן להשלים את השמירה. התעודה נשארת לבירור.'); return saved;
   } finally {
     bermanDiscountSaveBusy = false;
-    document.querySelectorAll('[data-role="berman-known-discount-save"]').forEach(button => { button.disabled = false; });
+    document.querySelectorAll('[data-role="berman-known-discount-save"],[data-role="berman-known-discount-adopt"]').forEach(button => { button.disabled = false; });
   }
 }
 // Reprice only the approved product, using a temporary copy of the original
@@ -11056,13 +11084,9 @@ function bermanSyncApprovedDiscounts() {
 }
 var bermanDiscountSaveBusy = false;
 function bermanDiscountAction(target) {
-  // v108: "מלא" רק מכניס את האחוז שהנייר גוזר לשדה; השמירה היא לחיצה נפרדת.
-  const fill = target && target.closest('[data-role="berman-known-discount-fill"]');
-  if (fill) {
-    const card = fill.closest('[data-known-discount]'), input = card && card.querySelector('[data-role="berman-known-discount"]');
-    if (input) input.value = fill.dataset.value || '';
-    return true;
-  }
+  // v108: "קבע לפי התעודה" שומר את האחוז שהנייר גוזר, בלחיצה אחת.
+  const adopt = target && target.closest('[data-role="berman-known-discount-adopt"]');
+  if (adopt) return bermanSaveKnownDiscount(adopt.dataset.product, adopt.dataset.value, adopt.dataset.receipt, adopt.dataset.fingerprint, 'paper_total');
   const known = target && target.closest('[data-role="berman-known-discount-save"]');
   if (known) {
     const card = known.closest('[data-known-discount]'), input = card && card.querySelector('[data-role="berman-known-discount"]');
