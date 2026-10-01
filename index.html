@@ -849,7 +849,7 @@ let sharedReceiptScanToken = null;
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '109'; // אחוז שהוקלד אינו חוזר לשדה אם התעודה השתנתה בינתיים ממכשיר אחר
+const APP_VERSION = '110'; // האחוז לפי הנייר נאמר בתנאי, עם תאריכי ההוכחות ואזהרה בתעודה מחודש חדש
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -10729,12 +10729,26 @@ function bermanKnownDiscountHtml(p, receiptId, fingerprint, check) {
     '<label class="block font-black text-slate-900">' + htmlEscape(p.name) + ' — כמה אחוז הנחה יש?' +
     (saved ? '<span data-discount-saved class="block text-sm font-bold text-purple-800 mt-1">נשמר כרגע: ' + htmlEscape(saved) + '%</span>' : '') +
     '<input data-role="berman-known-discount" data-key="' + htmlEscape((receiptId || '') + '|' + id) + '" data-initial="' + htmlEscape(saved) + '" value="' + htmlEscape(saved) + '" type="text" inputmode="decimal" dir="ltr" placeholder="אחוז שאושר מול הספק" class="block w-full border-2 border-slate-200 rounded-xl p-3 mt-2 text-lg"></label>' +
-    (implied ? '<div data-discount-implied class="rounded-xl border border-purple-300 bg-purple-50 p-3 mt-2 text-sm font-bold text-purple-900">לפי סכום התעודה, ההנחה על ' + htmlEscape(p.name) + ' היא <b dir="ltr">' + implied.pct + '%</b>. ' +
-      (implied.proven > 1 ? 'שאר ' + implied.proven + ' המוצרים בתעודה כבר מאומתים.' : implied.proven === 1 ? 'המוצר האחר בתעודה כבר מאומת.' : 'זה המוצר היחיד בתעודה.') +
+    (implied ? '<div data-discount-implied class="rounded-xl border border-purple-300 bg-purple-50 p-3 mt-2 text-sm font-bold text-purple-900">' + bermanImpliedText(implied, p.name) +
       '<button data-role="berman-known-discount-adopt" data-value="' + implied.pct + '" data-product="' + htmlEscape(id) + '" data-receipt="' + htmlEscape(receiptId || '') +
       '" data-fingerprint="' + htmlEscape(fingerprint) + '" class="btn-tap w-full rounded-xl bg-purple-700 text-white p-3 mt-2 font-black"' + (bermanDiscountSaveBusy ? ' disabled' : '') + '>קבע ' + implied.pct + '% לפי התעודה</button></div>' : '') +
     '<button data-role="berman-known-discount-save" data-product="' + htmlEscape(id) + '" data-receipt="' + htmlEscape(receiptId || '') +
     '" data-fingerprint="' + htmlEscape(fingerprint) + '" class="btn-tap w-full bg-purple-700 text-white rounded-xl p-3 mt-2 font-black"' + (bermanDiscountSaveBusy ? ' disabled' : '') + '>שמור הנחה שאושרה מול הספק</button></div>';
+}
+// v110: מה הנייר באמת אומר. כשיש בתעודה מוצרים נוספים, האחוז נכון רק אם
+// ההנחות שלהם לא השתנו מאז שאומתו — וזה נאמר, עם תאריכי ההוכחות. תעודה
+// מחודש חדש מול הוכחות מהחודש הקודם מקבלת אזהרה גלויה.
+function bermanImpliedText(implied, name) {
+  const day = d => Number(d.slice(8, 10)) + '.' + Number(d.slice(5, 7));
+  const pct = '<b dir="ltr">' + implied.pct + '%</b>';
+  if (!implied.proven) return 'זה המוצר היחיד בתעודה, ולפי סכום התעודה ההנחה עליו היא ' + pct + '.';
+  const when = !implied.provenTo ? ''
+    : implied.provenFrom === implied.provenTo ? ' ב־' + day(implied.provenTo) : ', האחרונות בין ' + day(implied.provenFrom) + ' ל־' + day(implied.provenTo);
+  const others = implied.proven === 1
+    ? 'המוצר האחר בתעודה ' + (implied.provenTo ? 'חויב באותו מחיר בתעודה שאומתה מול נייר' + when : 'במחיר מבצע שמודפס בנייר') + '.'
+    : 'שאר ' + implied.proven + ' המוצרים ' + (implied.provenTo ? 'חויבו באותם מחירים בתעודות שאומתו מול נייר' + when : 'במחיר מבצע שמודפס בנייר') + '.';
+  return 'אם ההנחות של שאר המוצרים לא השתנו, ההנחה על ' + htmlEscape(name) + ' לפי סכום התעודה היא ' + pct + '. ' + others +
+    (implied.newMonth ? '<div data-discount-new-month class="text-rose-700 mt-1">התעודה מחודש חדש. אם הספק שינה החודש הנחה של מוצר אחר, האחוז הזה שגוי — כדאי לוודא מולו.</div>' : '');
 }
 // v108: הפער עצמו, בשקלים — הסכום לפי ההנחה שנשמרה מול "נטו לחיוב" בנייר.
 // כשמחיר מחירון שמודפס בשורה שונה מזה שבאפליקציה, שום אחוז לא יסגור את
@@ -10773,6 +10787,7 @@ function bermanMissingDiscountHtml() {
 // v108: inspect (רשות) מקבל את עותק המסמכים אחרי ההכרעה — צורת המחיר של כל
 // שורה — כדי שהסקת ההנחה מהנייר תקרא מאותה הכרעה ולא תשכפל אותה.
 function bermanBuildDeferredReceipt(review, counted, inspect) {
+  if (inspect) { inspect.checks = []; inspect.rowIssues = []; }
   const catalog = cloneSafe(review.catalog), updated = cloneSafe(review), rates = review.rates || {};
   catalog.forEach(p => { if (Object.prototype.hasOwnProperty.call(rates, p.id)) {
     p.discountPct = rates[p.id]; p.discountSet = true; p.price = finalUnitPrice(p.listPrice, p.discountPct);
@@ -10799,7 +10814,7 @@ function bermanBuildDeferredReceipt(review, counted, inspect) {
       if (fixed.length > 1 || !(Number(p.listPrice) > 0) || (!onPaper && Math.abs(aiMoneyCents(printed) - aiMoneyCents(p.listPrice)) > 2
         && (!pr || Math.abs(aiMoneyCents(printed) - aiMoneyCents(unit)) > 2))) {
         moneyVerified = false;
-        if (inspect) (inspect.rowIssues = inspect.rowIssues || []).push({ productId: p.id, name: p.name, printed, list: Number(p.listPrice) || 0 });
+        if (inspect) inspect.rowIssues.push({ productId: p.id, name: p.name, printed, list: Number(p.listPrice) || 0 });
       }
     });
     const check = bermanPaperAnchorCheck(d, catalog);
@@ -10807,6 +10822,7 @@ function bermanBuildDeferredReceipt(review, counted, inspect) {
     // v108: רק מסמך שלא נסגר תורם לפער. מסמך שנסגר — בעיגול, או בשורות
     // שחויבו במחירון מלא — כבר הוסבר, ו־gapCents שלו הוא הפער הגולמי.
     if (check.money === false) amountGap += check.gapCents || 0;
+    if (inspect) inspect.checks.push({ amount: check.amount, gapCents: check.gapCents, money: check.money });
     d.rows.forEach(row => {
       const i = d.rows.indexOf(row), p = catalog.find(p => p.id === row.__tnuvaProductId);
       const full = (d.__bermanFullListRowIndexes || []).includes(i);
@@ -10848,15 +10864,18 @@ function bermanBuildDeferredReceipt(review, counted, inspect) {
 // לנייר. לעולם אינו זורק — הוא רץ בתוך הציור.
 function bermanDiscountCheckInfo(review, receiptId) {
   if (!review || !['pending', 'price_check'].includes(review.status)) return null;
-  const info = { rates: { ...(review.rates || {}) }, paper: 0, calculated: 0, gap: 0, issues: [], implied: null };
+  const info = { rates: { ...(review.rates || {}) }, paper: 0, calculated: 0, gap: 0, issues: [], implied: null, resolvable: false };
   try {
     if (review.status === 'price_check') {
       const inspect = {}, built = bermanBuildDeferredReceipt(review, [], inspect);
       if (built.discountReview.status === 'price_check') {
-        (inspect.rowIssues || []).forEach(x => { if (!info.issues.some(y => y.productId === x.productId)) info.issues.push(x); });
+        inspect.rowIssues.forEach(x => { if (!info.issues.some(y => y.productId === x.productId)) info.issues.push(x); });
         info.gap = r2(Number(built.unresolvedAmountGap) || 0);
-        info.paper = built.noteTotal; info.calculated = r2(built.noteTotal - info.gap);
-      }
+        // שני הסכומים נאמרים על המסמכים שלא נסגרו בלבד, כמו הפער עצמו. מסמך
+        // שנסגר בעיגול היה מזיז את "לפי ההנחה" באגורות שאינן חלק מהפער.
+        info.paper = r2(inspect.checks.filter(x => x.money === false).reduce((n, x) => n + (Number(x.amount) || 0), 0));
+        info.calculated = r2(info.paper - info.gap);
+      } else if (built.discountReview.status === 'resolved') info.resolvable = true;
     }
     info.implied = bermanImpliedDiscount(review, receiptId);
   } catch (e) { console.error('discount check info', e); }
@@ -10868,7 +10887,11 @@ function bermanDiscountCheckInfo(review, receiptId) {
 // מחיר ישן שהתחלף מאז אינו הוכחה: פער של הנחה שהתיישנה במוצר אחר היה
 // מיוחס אחרת למוצר החסר.
 function bermanUnitPriceProven(productId, unitPrice, excludeReceiptId, day) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day || ''))) return false;
+  return !!bermanUnitPriceProof(productId, unitPrice, excludeReceiptId, day);
+}
+// תאריך התעודה המאומתת האחרונה שמוכיחה את המחיר, או '' כשאין הוכחה.
+function bermanUnitPriceProof(productId, unitPrice, excludeReceiptId, day) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day || ''))) return '';
   let latest = null;
   receipts.forEach(r => {
     if (!r || r.id === excludeReceiptId || r.status !== 'ok' || r.noteTotalInc == null
@@ -10877,8 +10900,8 @@ function bermanUnitPriceProven(productId, unitPrice, excludeReceiptId, day) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d > day || !(r.items || []).some(l => l.productId === productId)) return;
     if (!latest || d > latest.d || (d === latest.d && (Number(r.timestamp) || 0) > (Number(latest.r.timestamp) || 0))) latest = { r, d };
   });
-  if (!latest || (new Date(day + 'T12:00:00') - new Date(latest.d + 'T12:00:00')) / 864e5 > 31) return false;
-  return latest.r.items.some(l => l.productId === productId && Math.abs(Number(l.unitPrice) - Number(unitPrice)) < .005);
+  if (!latest || (new Date(day + 'T12:00:00') - new Date(latest.d + 'T12:00:00')) / 864e5 > 31) return '';
+  return latest.r.items.some(l => l.productId === productId && Math.abs(Number(l.unitPrice) - Number(unitPrice)) < .005) ? latest.d : '';
 }
 // v108: ההנחה שהנייר גוזר למוצר היחיד שחסרה לו הנחה — רק כשכל שאר השורות
 // כבר מוכחות: מחיר מבצע מודפס בשורה, או מחיר יחידה שכבר נסגר מול נייר.
@@ -10900,7 +10923,7 @@ function bermanImpliedDiscount(review, receiptId) {
   const gap = status === 'resolved' ? 0 : r2(Number(built.unresolvedAmountGap) || 0);
   if (status === 'price_check' && !gap) return null;
   let qty = 0, current = 0;
-  const proven = new Set();
+  const proven = new Set(), proofDates = [];
   for (const d of inspect.documents || []) {
     for (let i = 0; i < d.rows.length; i++) {
       const row = d.rows[i], n = Number(row.quantity);
@@ -10909,10 +10932,12 @@ function bermanImpliedDiscount(review, receiptId) {
         if (row.__bermanPriceForm !== BERMAN_FORM_REGULAR
           || Math.abs(aiMoneyCents(d.__pricePaper.rows[i].unitPriceExVat) - aiMoneyCents(list)) > 2) return null;
         qty += n; current += lineTotalFromUnit(row.unitPriceExVat, n);
-      } else if (row.__bermanPriceForm === BERMAN_FORM_PROMO_ON_PAPER
-        || (row.__bermanPriceForm === BERMAN_FORM_REGULAR && bermanUnitPriceProven(row.__tnuvaProductId, row.unitPriceExVat, receiptId, day))) {
-        proven.add(row.__tnuvaProductId);
-      } else return null;
+      } else if (row.__bermanPriceForm === BERMAN_FORM_PROMO_ON_PAPER) proven.add(row.__tnuvaProductId);
+      else {
+        const proof = row.__bermanPriceForm === BERMAN_FORM_REGULAR ? bermanUnitPriceProof(row.__tnuvaProductId, row.unitPriceExVat, receiptId, day) : '';
+        if (!proof) return null;
+        proven.add(row.__tnuvaProductId); proofDates.push(proof);
+      }
     }
   }
   // סיבולת העיגול של התעודה (עד 30 אג׳) נבלעת כולה בשורה של המוצר החסר.
@@ -10923,7 +10948,12 @@ function bermanImpliedDiscount(review, receiptId) {
   if (!Number.isFinite(pct) || pct < 0 || pct >= 100 || pct === saved) return null;
   const probe = cloneSafe(review); probe.rates = { ...rates, [productId]: pct };
   if (bermanBuildDeferredReceipt(probe, []).discountReview.status !== 'resolved') return null;
-  return { productId, pct, proven: proven.size };
+  // ההוכחה היא היסטוריה: הנייר עצמו אינו מבחין בין ההנחה הזו לבין הנחה
+  // של מוצר אחר שהשתנתה היום. לכן נאמר מאיזה תאריך ההוכחות, ותעודה מחודש
+  // חדש מול הוכחות מחודש קודם מסומנת במפורש.
+  proofDates.sort();
+  return { productId, pct, proven: proven.size, provenFrom: proofDates[0] || '', provenTo: proofDates[proofDates.length - 1] || '',
+    newMonth: proofDates.some(d => d.slice(0, 7) !== String(day).slice(0, 7)) };
 }
 // v108: הודעה אחת לשני המקרים — אחרי שמירה שלא סגרה את הנייר, ולחיצה
 // חוזרת על אחוז שכבר שמור. אומרת מה נשמר, כמה הפער, ומה הצעד הבא.
@@ -10931,7 +10961,7 @@ function bermanPriceCheckMessage(check, prefix) {
   if (check && check.issues && check.issues.length) return prefix + ', אבל מחיר המחירון בתעודה שונה מזה שבאפליקציה — ' + bermanPriceCheckIssuesText(check) + '. אחוז ההנחה לא יסגור את זה.';
   if (!check || !check.gap) return prefix + ', אבל המחיר עדיין לא תואם לתעודה. בדוק את ההנחה מול הספק.';
   return prefix + ', אבל לפיה התעודה יוצאת ₪' + fmtMoney(check.calculated) + ' ובנייר ₪' + fmtMoney(check.paper) + ' — הפרש ₪' + fmtMoney(Math.abs(check.gap)) + '. ' +
-    (check.implied ? 'לפי הנייר ההנחה היא ' + check.implied.pct + '%.' : 'בדוק את ההנחה מול הספק.');
+    (check.implied ? (check.implied.proven ? 'אם שאר ההנחות לא השתנו, ' : '') + 'לפי הנייר ההנחה היא ' + check.implied.pct + '%.' : 'בדוק את ההנחה מול הספק.');
 }
 function bermanFinishDeferredReceipt() {
   const review = bermanDeferredReview(); if (!review) return false;
@@ -10966,6 +10996,7 @@ function bermanStoredDiscountHtml(rc) {
     '<div class="font-black text-purple-900">' + (missing.length ? 'התעודה פתוחה — חסר אחוז הנחה' : 'ההנחה הושלמה — נדרשת בדיקת המחיר והסכום') + '</div>' +
     '<div class="font-bold text-sm mt-2">' + htmlEscape(bermanDiscountQuantityText(rc.items)) + '</div>' +
     (missing.length ? '<p class="text-sm mt-2">ברר מול הספק והזן את ההנחה. הכמויות שכבר נבדקו נשמרות.</p>'
+      : check && check.resolvable ? '<p class="text-sm mt-2">לפי החישוב היום, ההנחה שנשמרה כבר סוגרת את התעודה. לחץ "שמור" כדי לעדכן אותה.</p>'
       : (check && check.issues.length ? '' : '<p class="text-sm mt-2">ההנחה נשמרה, אבל הסכום לפיה לא תואם לתעודה. התעודה תיסגר כשהאחוז יתאים לנייר.</p>') + bermanPriceCheckGapHtml(check)) +
     editable.map(p => bermanKnownDiscountHtml(p, rc.id, bermanReceiptDiscountFingerprint(rc), check)).join('') + '</section>';
 }

@@ -296,9 +296,10 @@ const adoptButton = (c, html = card(c)) => {
 test('v108: the paper-implied rate is offered when every other row is proven, and one tap sets it', async () => {
   const c = await savedReceipt(); proveKnown(c);
   assert.equal(await saveRate(c, '5'), true);
-  assert.match(c.toasts.at(-1), /הפרש ₪5\.62\. לפי הנייר ההנחה היא 8%\.$/);
+  assert.match(c.toasts.at(-1), /הפרש ₪5\.62\. אם שאר ההנחות לא השתנו, לפי הנייר ההנחה היא 8%\.$/);
   const html = card(c);
-  assert.match(html, /לפי סכום התעודה, ההנחה על לחם בדיקה היא <b dir="ltr">8%<\/b>\. המוצר האחר בתעודה כבר מאומת\./);
+  assert.match(html, /אם ההנחות של שאר המוצרים לא השתנו, ההנחה על לחם בדיקה לפי סכום התעודה היא <b dir="ltr">8%<\/b>\. המוצר האחר בתעודה חויב באותו מחיר בתעודה שאומתה מול נייר ב־1\.9\./);
+  assert.doesNotMatch(html, /data-discount-new-month/, 'the proof is from the same month as the paper');
   assert.match(html, /data-role="berman-known-discount-adopt" data-value="8"[^>]*>קבע 8% לפי התעודה</);
   const writes = c.writes.length;
   assert.equal(await c.events.get('app:click')({ target: adoptButton(c) }), true);
@@ -384,7 +385,7 @@ test('v108: saving the same rate again explains the gap and writes nothing', asy
   const writes = c.writes.length;
   assert.equal(await saveRate(c, '5'), false);
   assert.equal(c.writes.length, writes);
-  assert.equal(c.toasts.at(-1), 'ההנחה 5% כבר שמורה, אבל לפיה התעודה יוצאת ₪217.84 ובנייר ₪212.22 — הפרש ₪5.62. לפי הנייר ההנחה היא 8%.');
+  assert.equal(c.toasts.at(-1), 'ההנחה 5% כבר שמורה, אבל לפיה התעודה יוצאת ₪217.84 ובנייר ₪212.22 — הפרש ₪5.62. אם שאר ההנחות לא השתנו, לפי הנייר ההנחה היא 8%.');
   c.run('products[0].discountPct=8;products[0].price=5.7408');
   assert.equal(await saveRate(c, '5'), false, 'a rate this receipt already disproved never overwrites the catalog');
   assert.equal(c.writes.length, writes);
@@ -530,6 +531,8 @@ test('v108: only a document that does not close contributes to the unresolved ga
     r.documents.unshift(a); r.notes.unshift({ amount: 40.2, units: 5, lines: 1, kind: 'charge' }); globalThis.twoDocs = r;`);
   assert.equal(c.run('bermanBuildDeferredReceipt(twoDocs, []).unresolvedAmountGap'), -5.62, 'a 20 agorot rounding document adds nothing');
   assert.equal(c.run('bermanBuildDeferredReceipt(twoDocs, []).discountReview.status'), 'price_check');
+  const info = JSON.parse(c.run('JSON.stringify(bermanDiscountCheckInfo(twoDocs, receipts[0].id))'));
+  assert.deepEqual([info.paper, info.calculated, info.gap], [212.22, 217.84, -5.62], 'both amounts describe only the document that did not close');
 });
 test('v108: the receiving panel is not redrawn under a focused discount field, and keeps a typed rate otherwise', async () => {
   const c = await deferred(); assert.equal(await c.run("bermanSaveKnownDiscount('missing','5','',bermanDeferredSourceKey())"), true);
@@ -564,6 +567,35 @@ test('v108: a promotion price printed on the paper proves its own row without an
   const c = await savedReceipt({ data });
   assert.equal(c.run('receipts.length'), 1, 'no earlier receipt');
   c.run('renderReceiptsHistory()');
-  assert.match(card(c), /המוצר האחר בתעודה כבר מאומת/);
+  assert.match(card(c), /המוצר האחר בתעודה במחיר מבצע שמודפס בנייר\./);
   assert.match(card(c), /קבע 8% לפי התעודה/);
+});
+
+test('v110: a paper from a new month, proven only by last month, is offered with an explicit warning', async () => {
+  const data = fixture(); data.paper.scan.documents[0].docDate = '01/10/2026';
+  const c = await savedReceipt({ data }); proveKnown(c, { date: '2026-09-20', docDate: '2026-09-20' }); c.run('renderReceiptsHistory()');
+  const html = card(c);
+  assert.match(html, /אם ההנחות של שאר המוצרים לא השתנו/);
+  assert.match(html, /ב־20\.9\./);
+  assert.match(html, /data-discount-new-month[^>]*>התעודה מחודש חדש\. אם הספק שינה החודש הנחה של מוצר אחר, האחוז הזה שגוי — כדאי לוודא מולו\./);
+  assert.match(html, /קבע 8% לפי התעודה/);
+});
+test('v110: with several proving receipts the card names the range of their dates', async () => {
+  const data = fixture();
+  data.products.push({ id: 'third', code: '8003', barcode: '7290000008003', name: 'פיתות בדיקה', listPrice: 4, price: 3, discountPct: 25, discountSet: true });
+  const d = data.paper.scan.documents[0];
+  d.rows.push({ itemCode: '8003', barcode: '7290000008003', description: 'פיתות בדיקה', quantity: 10, unitPriceExVat: 4, sourcePage: 1, lineNumber: 3 });
+  d.totalUnits = 45; d.printedLines = 3; d.netToChargeExVat = 242.22;
+  const c = await savedReceipt({ data }); proveKnown(c);
+  c.run("receipts.push({ id: 'prior2', timestamp: 3, date: '2026-09-10', docDate: '2026-09-10', status: 'ok', noteTotalInc: 30, items: [{ productId: 'third', name: 'פיתות בדיקה', qty: 10, unitPrice: 3 }] }); renderReceiptsHistory()");
+  assert.match(card(c), /שאר 2 המוצרים חויבו באותם מחירים בתעודות שאומתו מול נייר, האחרונות בין 1\.9 ל־10\.9\./);
+});
+test('v110: a stored price check that a rebuild today already closes says so instead of claiming a mismatch', async () => {
+  const c = await savedReceipt();
+  assert.equal(await saveRate(c, '8'), true);
+  c.run("receipts[0].discountReview.status='price_check';receipts[0].status='open';renderReceiptsHistory()");
+  assert.match(card(c), /לפי החישוב היום, ההנחה שנשמרה כבר סוגרת את התעודה\. לחץ "שמור" כדי לעדכן אותה\./);
+  assert.doesNotMatch(card(c), /התעודה תיסגר כשהאחוז יתאים לנייר/);
+  assert.equal(await saveRate(c, '8'), true);
+  assert.equal(c.run('receipts[0].status'), 'ok');
 });
