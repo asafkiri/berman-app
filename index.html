@@ -3730,6 +3730,8 @@ async function markReturnVerified(id, noteTotal, signature) {
   // את התעודה טרי ומאשרת רק אם היא עדיין לא אומתה ושורותיה הן אלה שאושרו — כך גם ניסיון
   // חוזר מהתור אינו דורס שורות שנערכו ממכשיר אחר. הכתיבה קודמת לשינוי המקומי.
   const at = Date.now();
+  // השורות שהועברו מהתעודה נספרות לפני הכתיבה — הטרנזקציה עצמה כבר מורידה אותן מהרשימה
+  const hadCarriedRows = returnsList.some(it => it && it.carriedFrom === id);
   const data = { credited: true, creditedAt: at, creditStatus: 'ok' };
   if (noteTotal != null) data.creditNoteTotal = noteTotal;
   if ((r.items || []).some(l => l && l.noteQty != null)) data.items = (r.items || []).map(l => { const c = { ...l }; delete c.noteQty; return c; });
@@ -3740,7 +3742,7 @@ async function markReturnVerified(id, noteTotal, signature) {
   Object.assign(r, data);
   buzz(18);
   // v78: הספק זיכה הכל — פריטים שהועברו מהתעודה הזאת לרשימה יורדים ממנה (הרישום נמחק באותה כתיבה)
-  const undone = dropCarriedRowsFrom(id) > 0;
+  const undone = (dropCarriedRowsFrom(id) > 0) || hadCarriedRows;
   if (currentView === 'receiptsHistory') renderReceiptsHistory();
   if (undone) updateCart();
   showToast(undone ? 'הזיכוי אושר ✓ הפריטים ירדו מרשימת החזרות' : 'הזיכוי אושר — כל היחידות זוכו ✓', null, null, undone ? 3200 : 2200);
@@ -3807,7 +3809,8 @@ async function saveReturnVerify(opts) {
     showToast('הזיכוי נשמר. לא נמצא חוסר פתוח (14 יום) במוצר שזוכה בלי שהוחזר — לא נרשם קישור', null, null, 4200);
     return;
   }
-  showToast(open ? 'נשמר — נותר פער בזיכוי' : (undone ? 'הזיכוי אומת ✓ הפריטים ירדו מרשימת החזרות' : 'הזיכוי אומת ✓'), null, null, undone ? 3200 : 2000);
+  showToast(undone ? (open ? 'נשמר — נותר זיכוי ביתר · הפריטים שהועברו ירדו מרשימת החזרות' : 'הזיכוי אומת ✓ הפריטים ירדו מרשימת החזרות')
+    : (open ? 'נשמר — נותר פער בזיכוי' : 'הזיכוי אומת ✓'), null, null, undone ? 3400 : 2000);
 }
 // ===== v199: עריכת פריטים בתעודת חזרות/זיכוי =====
 // התעודה נשלחה כבר, אבל הרישום אצלנו יכול להיות שגוי מול מה שהספק זיכה בפועל
@@ -4065,7 +4068,8 @@ async function saveReturnItemsEdit(opts) {
   const undone = (r && r.credited && !stillShort) ? await undoReturnCarry(id, { silent: true }) : false;
   setView(origin);
   if (undone) updateCart();
-  showToast((r && r.credited && open) ? 'הפריטים עודכנו — נותר פער בזיכוי' : (undone ? 'הפריטים עודכנו ✓ הפריטים שהועברו ירדו מרשימת החזרות' : 'הפריטים עודכנו ✓'), null, null, 2800);
+  showToast(undone ? (open ? 'הפריטים עודכנו — נותר זיכוי ביתר · הפריטים שהועברו ירדו מרשימת החזרות' : 'הפריטים עודכנו ✓ הפריטים שהועברו ירדו מרשימת החזרות')
+    : ((r && r.credited && open) ? 'הפריטים עודכנו — נותר פער בזיכוי' : 'הפריטים עודכנו ✓'), null, null, 3200);
 }
 async function pruneCollection(name, keep, minAgeDays) {
   if (!db) return;
@@ -14736,11 +14740,10 @@ function priceHistoryWith(p, from, price, source) {
   list.sort((a, b) => String(a.from).localeCompare(String(b.from)));
   return list;
 }
-// חוסר שזוכה, ביחידות לכל מוצר. v123: קודם הרישום ביחידות (shortCreditUnits —
-// זיכוי חוסר ביחידות, או קישור לתעודת חזרות), ואחריו כלל הירושה על מה שנשאר:
-// זיכוי כספי ישן (shortCreditNotes) מכסה את שורות החוסר לפי הסדר, במחיר השורה,
-// עם סיבולת עיגול של 5 אג׳ ליחידה — הספק מעגל שורה-שורה, וזיכוי שנופל באגורות
-// הוא זיכוי מלא (v66).
+// חוסר שזוכה, ביחידות לכל מוצר — אותו כלל כמו receiptDiscrepancyInfo: קודם הרישום
+// ביחידות (shortCreditUnits), ואחריו זיכוי כספי ישן (shortCreditNotes, לפני v123) על
+// מה שנשאר, לפי שורה ובסדר השורות, במחיר השורה, עם סיבולת עיגול של 5 אג׳ ליחידה על
+// החוסר המקורי של השורה — הספק מעגל שורה-שורה, וזיכוי שנופל באגורות הוא זיכוי מלא (v66).
 function receiptCreditedShortUnits(rc, day) {
   const out = {};
   const lines = [];
@@ -14749,6 +14752,7 @@ function receiptCreditedShortUnits(rc, day) {
     const short = (Number(l.noteQty) || 0) - (Number(l.qty) || 0);
     if (short > 0) lines.push({ l, left: short, orig: short });
   });
+  // קודם הזיכוי ביחידות — מפורש לפי מוצר
   (Array.isArray(rc && rc.shortCreditUnits) ? rc.shortCreditUnits : []).forEach(x => {
     if (!x || !x.productId || !(Number(x.qty) > 0)) return;
     let left = Number(x.qty) || 0;
@@ -14758,19 +14762,17 @@ function receiptCreditedShortUnits(rc, day) {
       out[x.productId] = (out[x.productId] || 0) + take;
     });
   });
+  // אחריו הזיכוי הכספי הישן על מה שנשאר: לפי שורה, בסדר השורות, 5 אג׳ ליחידה על החוסר המקורי
   let money = (Array.isArray(rc && rc.shortCreditNotes) ? rc.shortCreditNotes : []).reduce((a, x) => a + (Number(x && x.amount) || 0), 0);
-  if (!(money > 0)) return out;
-  lines.forEach(s => {
-    if (!(s.left > 0)) return;
+  if (money > 0) lines.forEach(s => {
     const l = s.l;
     // תעודת הזיכוי יוצאת מאותו מסופון ובאותו מחיר כמו תעודת המשלוח, ולכן הזיכוי
     // הכספי נמדד במחיר שנשמר על השורה; מחיר הלקוח רק כנפילה לאחור
     const p = (l.productId && products.find(x => x.id === l.productId)) || null;
     const unit = Number(l.unitPrice) || priceAt(p, day) || 0;
-    if (!(unit > 0)) return;
-    // הסיבולת לפי החוסר המקורי של השורה — הכסף קדם לזיכוי ביחידות
+    if (!(unit > 0) || !(money > 0) || !(s.left > 0)) return;
     const covered = Math.min(s.left, Math.floor((money + 0.05 * s.orig) / unit + 1e-9));
-    if (covered > 0) { out[l.productId] = (out[l.productId] || 0) + covered; money -= covered * unit; }
+    if (covered > 0) { out[l.productId] = (out[l.productId] || 0) + covered; money -= covered * unit; s.left -= covered; }
   });
   return out;
 }
@@ -15161,11 +15163,14 @@ function receiptDiscrepancyInfo(rc, opts) {
   // קיזוז בין תעודות נשמר ברמת מוצר וכמות. הוא צורך רק את ההפרש שאושר,
   // ולעולם אינו מסתיר חוסר/עודף אחר שנשאר באותה תעודה.
   const externalOffsets = opts.skipExternal ? [] : consumeStoredReceiptOffsets(rc, shortItems, overItems);
-  // v123: חוסר שזוכה ביחידות (shortCreditUnits) — זיכוי חוסר שסומן ביחידות, או
-  // קישור לתעודת חזרות. החוסר לפני היחידות נשמר על השורה (n0): הזיכוי הכספי הישן
-  // שלמטה קודם להן בזמן, והסיבולת שלו נמדדת על החוסר כפי שהיה.
+  // v123: זיכוי החוסר — כלל אחד לסגירת התעודה, להצעה בחלון "התקבל בזיכוי" ולמרכזת
+  // (receiptCreditedShortUnits). קודם הזיכוי ביחידות (shortCreditUnits — סומן ביחידות,
+  // או קישור לתעודת חזרות): הוא מפורש לפי מוצר. אחריו הזיכוי הכספי הישן (לפני v123)
+  // על מה שנשאר, לפי שורה ובסדר השורות, בסיבולת של 5 אג׳ ליחידה על החוסר המקורי של
+  // השורה (n0) — הספק מעגל שורה-שורה (v66), והכסף כיסה את החוסר כפי שהיה. השורה
+  // נשארת ברשימת החוסר (n) גם כשהכסף כיסה אותה — כך נראה החוסר המקורי בהיסטוריה;
+  // מה שעדיין פתוח בשורה הוא it.open.
   shortItems.forEach(it => { it.n0 = Number(it.n) || 0; });
-  const shortUnitsBeforeUnitCredit = shortItems.reduce((a, x) => a + (Number(x.n0) || 0), 0);
   const creditedUnits = [];
   (Array.isArray(rc && rc.shortCreditUnits) ? rc.shortCreditUnits : []).forEach(x => {
     if (!x || !x.productId || !(Number(x.qty) > 0)) return;
@@ -15178,7 +15183,21 @@ function receiptDiscrepancyInfo(rc, opts) {
         fromReturnsId: x.fromReturnsId || null, returnsDate: x.returnsDate || '', noteNumber: x.noteNumber || '' });
     });
   });
+  const shortCreditNotes = (Array.isArray(rc && rc.shortCreditNotes) ? rc.shortCreditNotes : []).filter(x => x && (Number(x.amount) || 0) > 0);
+  const shortCreditEx = r2(shortCreditNotes.reduce((a, x) => a + (Number(x.amount) || 0), 0));
+  const shortValRaw = r2(shortItems.reduce((a, x) => a + lineTotalFromUnit(x.price, x.n), 0));
+  let moneyLeft = shortCreditEx, moneyUnits = 0;
+  shortItems.forEach(it => {
+    const n = Number(it.n) || 0, price = Number(it.price) || 0;
+    it.money = 0;
+    if (moneyLeft > 0 && price > 0 && n > 0) {
+      it.money = Math.min(n, Math.floor((moneyLeft + 0.05 * (Number(it.n0) || n)) / price + 1e-9));
+      moneyLeft = r2(moneyLeft - it.money * price); moneyUnits += it.money;
+    }
+    it.open = n - it.money;
+  });
   const finalShort = shortItems.filter(x => (Number(x.n) || 0) > 0);
+  const openShort = finalShort.filter(x => (Number(x.open) || 0) > 0);
   const finalOver = overItems.filter(x => (Number(x.n) || 0) > 0);
   let shortVal = finalShort.reduce((a, x) => a + lineTotalFromUnit(x.price, x.n), 0);
   const overVal = r2(finalOver.reduce((a, x) => a + lineTotalFromUnit(x.price, x.n), 0));
@@ -15193,22 +15212,18 @@ function receiptDiscrepancyInfo(rc, opts) {
   const unresolvedUnitsGap = paperUnits == null ? storedUnitsGap : derivedUnitsGap;
   const paperLines = notesAnchor(notePartsForUnits, 'lines');
   const linesVerified = paperLines != null && paperLines === receiptPaperLineCount(rc.items);
-  // v203: חוסר יכול להיסגר גם בזיכוי כספי מהספק. הזיכויים נערמים; שורות החוסר
-  // המקוריות לעולם לא נמחקות — רק שכבת כסף מעליהן. v66: הספק מעגל שורה-שורה,
-  // ולכן זיכוי שנופל בכמה אגורות מהערך לפי מחיר התעודה הוא זיכוי מלא.
-  const shortCreditNotes = (Array.isArray(rc && rc.shortCreditNotes) ? rc.shortCreditNotes : []).filter(x => x && (Number(x.amount) || 0) > 0);
-  const shortCreditEx = r2(shortCreditNotes.reduce((a, x) => a + (Number(x.amount) || 0), 0));
-  const shortValRaw = r2(shortVal);
-  const shortUnitsLeft = (finalShort || []).reduce((a, x) => a + (Number(x.n) || 0), 0);
+  // v203: חוסר יכול להיסגר גם בזיכוי כספי מהספק (רישום ישן). שורות החוסר המקוריות
+  // לעולם לא נמחקות — רק שכבת כסף מעליהן (it.money למעלה).
+  const shortUnitsLeft = openShort.reduce((a, x) => a + (Number(x.open) || 0), 0);
   const shortCreditGapCents = Math.max(0, Math.round(shortValRaw * 100) - Math.round(shortCreditEx * 100));
-  const shortFullyCredited = finalShort.length > 0 && (shortCreditFullyCovers(shortValRaw, shortCreditEx, creditedUnits.length ? (shortUnitsBeforeUnitCredit || shortUnitsLeft) : shortUnitsLeft));
-  if (shortFullyCredited) shortVal = 0;
-  else if (shortCreditEx > 0) shortVal = Math.max(0, r2(shortVal - shortCreditEx));
+  // הכסף סגר את מה שנשאר מהחוסר (אולי יחד עם זיכוי ביחידות)
+  const shortFullyCredited = finalShort.length > 0 && moneyUnits > 0 && !openShort.length;
+  shortVal = shortFullyCredited ? 0 : Math.max(0, r2(openShort.reduce((a, x) => a + lineTotalFromUnit(x.price, x.open), 0) - (moneyLeft > 0 ? moneyLeft : 0)));
   // ממצאי כמות של הסריקה נשמרים בהיסטוריה; הם אינם פותחים תעודה בעצמם —
   // החוסר והעודף שהם מתארים כבר יושבים בשורות (noteQty).
-  const shortSideOpen = finalShort.length > 0 && !shortFullyCredited;
+  const shortSideOpen = openShort.length > 0;
   const overSideOpen = finalOver.length > 0;
-  const shortUnits = finalShort.reduce((a, x) => a + (Number(x.n) || 0), 0);
+  const shortUnits = shortUnitsLeft;
   const overUnits = finalOver.reduce((a, x) => a + (Number(x.n) || 0), 0);
   return { open: !!(awaitingDoc || shortSideOpen || overSideOpen || unresolvedUnitsGap !== 0), awaitingDoc,
     // שדות כסף שנותרו לתאימות עם קוראים ישנים — תמיד "לא פתוח" מאז v120
@@ -15233,22 +15248,12 @@ function ymdDayDiff(a, b) {
   if (!Number.isFinite(pa) || !Number.isFinite(pb)) return null;
   return Math.round((pa - pb) / 86400000);
 }
-// v123: כמה יחידות פתוחות לכל מוצר בתעודת קליטה — אחרי זיכוי ביחידות, ואחרי זיכוי
-// כספי ישן (לפני v123) שכיסה חלק מהחוסר, באותו כלל עיגול כמו במרכזת (5 אג׳ ליחידה).
+// v123: כמה יחידות פתוחות לכל מוצר בתעודת קליטה — אחרי זיכוי כספי ישן ואחרי זיכוי ביחידות.
 function receiptOpenShortUnits(rc, di) {
   di = di || receiptDiscrepancyInfo(rc);
   const out = {};
-  if (di.shortFullyCredited) return out;
-  let money = Number(di.shortCreditEx) || 0;
-  (di.shortItems || []).forEach(x => {
-    let n = Number(x.n) || 0;
-    const price = Number(x.price) || 0, n0 = Number(x.n0) || n;
-    if (money > 0 && price > 0 && n > 0) { const covered = Math.min(n, Math.floor((money + 0.05 * n0) / price + 1e-9)); n -= covered; money -= covered * price; }
-    if (n > 0 && x.productId) out[x.productId] = (out[x.productId] || 0) + n;
-  });
-  // התעודה פתוחה (הזיכוי הכספי לא סגר אותה בכלל הכללי) אבל הכלל לפי שורה מכסה הכל:
-  // מציעים את מה שנשאר בשורות — אחרת אין דרך לסגור אותה
-  if (!Object.keys(out).length) (di.shortItems || []).forEach(x => { const n = Number(x.n) || 0; if (n > 0 && x.productId) out[x.productId] = (out[x.productId] || 0) + n; });
+  // אותו כלל כמו סגירת התעודה והמרכזת: מה שעדיין פתוח בכל שורה (it.open)
+  (di.shortItems || []).forEach(x => { const n = Number(x.open != null ? x.open : x.n) || 0; if (n > 0 && x.productId) out[x.productId] = (out[x.productId] || 0) + n; });
   return out;
 }
 function receiptOpenShortTotal(rc, di) { const o = receiptOpenShortUnits(rc, di); return Object.keys(o).reduce((a, k) => a + o[k], 0); }

@@ -1,6 +1,7 @@
 // v123 — מקרי קצה מהסקירה השנייה של שלב 5 (על התיקונים עצמם).
 // • זיכוי כספי ישן (לפני v123) לצד זיכוי ביחידות: כלל אחד לסגירת התעודה, להצעה בחלון
-//   "התקבל בזיכוי" ולמרכזת — הכסף קודם בזמן, והסיבולת שלו לפי החוסר המקורי של השורה.
+//   "התקבל בזיכוי" ולמרכזת — קודם היחידות (מפורשות לפי מוצר), ואז הכסף לפי סדר השורות
+//   על מה שנשאר, בסיבולת של 5 אגורות ליחידה מהחוסר המקורי של השורה.
 // • קישור חזרות→חזרות במרכזת: רק רישום ביחידות; קישור ישן (עם סכום) כמו לפני v123.
 // • זהות מוצר: שורה מועברת נושאת קוד מהקטלוג; ברקוד משותף לכמה מוצרים אינו מזהה לבדו.
 // • עורך: פיצול מארז בתעודה מאומתת שומר את הזיכוי של כל שורה; שורה בכמות 0 עם זיכוי
@@ -20,9 +21,18 @@ function receiptRt(rc) {
 }
 const line = (pid, name, short, price) => ({ productId: pid, name, qty: 0, noteQty: short, unitPrice: price });
 
-test('legacy money a few agorot short on one unit: the receipt is open, the button offers that unit, and crediting it closes it', async () => {
+test('legacy money up to 5 agorot short per unit covers it: the receipt is closed and the month counts it, by the same rule', () => {
   const rt = receiptRt({ id: 'rc1', date: '2026-09-02', docDate: '2026-09-02', status: 'open', items: [line('pA', 'מוצר א', 1, 10)], shortCreditNotes: [{ amount: 9.96, at: 1 }] });
+  assert.equal(rt.run('receiptDiscrepancyInfo(receipts[0]).open'), false);
+  assert.deepEqual(j(rt, 'receiptOpenShortUnits(receipts[0])'), {});
+  assert.equal(rt.run("receiptCreditedShortUnits(receipts[0], '2026-09-02').pA"), 1);
+  assert.equal(rt.run("rangeProductMatrixData({ recs: receipts, rets: [] }).list.find(r => r.pid === 'pA').openUnits"), 0);
+});
+
+test('legacy money 10 agorot short on one unit: the receipt is open, the button offers that unit, and crediting it closes it', async () => {
+  const rt = receiptRt({ id: 'rc1', date: '2026-09-02', docDate: '2026-09-02', status: 'open', items: [line('pA', 'מוצר א', 1, 10)], shortCreditNotes: [{ amount: 9.90, at: 1 }] });
   assert.equal(rt.run('receiptDiscrepancyInfo(receipts[0]).open'), true);
+  assert.equal(rt.run("rangeProductMatrixData({ recs: receipts, rets: [] }).list.find(r => r.pid === 'pA').openUnits"), 1, 'the month agrees: still open');
   assert.deepEqual(j(rt, 'receiptOpenShortUnits(receipts[0])'), { pA: 1 }, 'never an open receipt with nothing to credit');
   rt.run('renderReceiptsHistory()');
   assert.match(rt.node('app').innerHTML, /התקבל בזיכוי \(1 יח׳\)/);
