@@ -12,7 +12,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 const headPath = 'artifacts/test/public/data/drafts/receiving';
 function server() {
   const data = new Map(), listeners = new Set(), writes = [], reads = [];
-  let queue = Promise.resolve(), gate = null, readGate = null, transactionGate = null;
+  let queue = Promise.resolve(), gate = null, readGate = null, transactionGate = null, gateWaiters = 0;
   const snapshot = (path, value = data.get(path), metadata = { fromCache: false, hasPendingWrites: false }) => ({
     exists: () => value !== undefined, data: () => copy(value), metadata
   });
@@ -47,7 +47,9 @@ function server() {
       writeBatch: () => {
         const updates = [];
         return { set: (path, value) => updates.push([path, copy(value)]), commit: async () => {
-          if (gate) await gate.promise;
+          // gateWaiting() tells a test that an upload has really reached the gate, so the
+          // test can order the other device's write after it without guessing with a tick.
+          if (gate) { gateWaiters++; try { await gate.promise; } finally { gateWaiters--; } }
           if (!connected) throw Object.assign(new Error('offline'), { code: 'offline' });
           updates.forEach(([path, value]) => { data.set(path, value); writes.push({ name, path, value }); });
         } };
@@ -60,7 +62,7 @@ function server() {
       offline() { connected = false; }, online() { connected = true; } };
   }
   return { data, writes, reads, client, publish, snapshot,
-    setGate(value) { gate = value; }, setReadGate(value) { readGate = value; },
+    setGate(value) { gate = value; }, gateWaiting: () => gateWaiters, setReadGate(value) { readGate = value; },
     setTransactionGate(value) { transactionGate = value; },
     deliver(value, metadata) { for (const callback of listeners) callback(snapshot(headPath, value, metadata)); }
   };
@@ -117,7 +119,7 @@ test('typing before the debounce fires is merged when a remote snapshot arrives'
 test('coalesced local edits during an upload survive a concurrent remote edit', async()=>{
   const s=server(),a=s.client('a'),b=s.client('b');await Promise.all([a.engine.start(),b.engine.start()]);
   await a.engine.save({left:1,right:1});await a.engine.flush();await until(()=>!!b.engine.payload);
-  const gate=deferred();s.setGate(gate);const first=a.engine.save({left:2,right:1});await tick();
+  const gate=deferred();s.setGate(gate);const first=a.engine.save({left:2,right:1});await until(()=>s.gateWaiting()>0);
   const second=a.engine.save({left:3,right:1}),other=b.engine.save({left:1,right:4});
   s.setGate(null);gate.resolve();await Promise.all([first,second,other]);await Promise.all([a.engine.flush(),b.engine.flush()]);
   await until(()=>a.engine.payload.right===4&&b.engine.payload.left===3);
@@ -156,8 +158,10 @@ test('a closed receipt cannot be resurrected by an old device pending upload',as
 test('finalization rejects a receipt changed after the summary was reviewed',async()=>{
   const s=server(),a=s.client('a'),b=s.client('b');await Promise.all([a.engine.start(),b.engine.start()]);
   await a.engine.save({qty:1});await a.engine.flush();await until(()=>!!b.engine.payload);
-  const gate=deferred();s.setGate(gate);const finishing=a.engine.finish('one',{qty:1},{qty:0});finishing.catch(()=>{});await tick();
-  // Let B publish before A's empty manifest is ready.
+  const gate=deferred();s.setGate(gate);const finishing=a.engine.finish('one',{qty:1},{qty:0});finishing.catch(()=>{});
+  // Wait until A's empty-manifest upload is really blocked at the gate (a bare tick was not
+  // enough under load: encodeText runs on the thread pool), then let B publish first.
+  await until(()=>s.gateWaiting()>0);
   s.setGate(null);await b.engine.save({qty:2});await b.engine.flush();gate.resolve();
   await assert.rejects(finishing,{code:'revision-changed'});assert.equal(s.data.has('artifacts/test/public/data/receipts/one'),false);
 });
@@ -203,7 +207,7 @@ test('a content upload preserves a scan lease acquired while that upload was pen
   const s=server(),a=s.client('a'),b=s.client('b');await Promise.all([a.engine.start(),b.engine.start()]);
   await a.engine.save({state:{receiptDraftId:'one',qty:1}});await a.engine.flush();await until(()=>!!b.engine.payload);
   const gate=deferred();s.setGate(gate);
-  const saving=a.engine.save({state:{receiptDraftId:'one',qty:2}});await tick();
+  const saving=a.engine.save({state:{receiptDraftId:'one',qty:2}});await until(()=>s.gateWaiting()>0);
   const token=await b.engine.acquireScan();
   s.setGate(null);gate.resolve();await saving;await a.engine.flush();
   assert.equal(s.data.get(headPath).scanLock.id,token.id);
