@@ -273,3 +273,84 @@ test('the intake-shortage route appears alongside return-credit candidates and w
   assert.equal(rt.run('receiptDiscrepancyInfo(receipts[0]).open'), true);
   assert.equal(rt.db.get('receipts/intake').shortCreditUnits.length, 0);
 });
+
+test('a credited unit matched to a carried line is used up: no second offer, one allocation', async () => {
+  // הסקירה: שורת היעד מועברת (carry_), והיתרה חושבה לפי מזהה — אותה יחידה הוצעה שוב
+  const mid = { id: 'mid', date: '2026-09-10', docDate: '2026-09-10', timestamp: 1, credited: true, creditStatus: 'open',
+    items: [{ productId: 'carry_1', name: 'לחם מקמח כוסמין E-FREE', barcode: 'spelt', code: '344', qty: 1, noteQty: 0, carried: true, carriedFrom: 'x' }] };
+  const other = { id: 'other', date: '2026-09-11', docDate: '2026-09-11', timestamp: 1, credited: true, creditStatus: 'open',
+    items: [{ productId: 'p_spelt', name: 'לחם מקמח כוסמין E-FREE', barcode: 'spelt', code: '344', qty: 1, noteQty: 0 }] };
+  const rt = setup([mid, other, newReturn()]);
+  const ctx = await rt.prompt(1);
+  const idx = ctx.candidates.findIndex(c => c.returnId === 'mid');
+  assert.ok(idx > -1 && ctx.candidates.length === 2);
+  await rt.run(`confirmCreditSplitPick('${idx}')`);
+  assert.equal(rt.run('creditSplit'), null, 'the prompt does not reopen');
+  assert.doesNotMatch(rt.toasts.at(-1), /נשארו עוד יחידות/);
+  assert.equal(rt.get('new').creditAllocations.length, 1);
+  assert.equal(rt.info('mid').open, false);
+  assert.equal(rt.info('other').open, true, 'the other shortage stays open');
+});
+
+test('re-verifying a note never links the same credited-only unit twice', async () => {
+  // קישור לחוסר בקליטה אינו נועל את התעודה — אפשר לפתוח שוב את האימות
+  const short = (id, day) => ({ id, date: day, docDate: day, status: 'open', items: [{ name: 'לחם מקמח כוסמין E-FREE', productId: 'p_spelt', qty: 0, noteQty: 1 }] });
+  const rt = setup([newReturn()], [short('r1', '2026-09-13'), short('r2', '2026-09-12')]);
+  const ctx = await rt.prompt(1);
+  assert.equal(ctx.candidates.length, 2);
+  await rt.run(`confirmCreditSplitPick('${ctx.candidates.findIndex(c => c.receiptId === 'r1')}')`);
+  assert.equal(rt.get('new').creditAllocations.length, 1);
+  // "ערוך אימות" — מה שכבר שויך מוצג, והזנה חוזרת של אותה יחידה אינה מקשרת שוב
+  await rt.click('rv-open', 'new');
+  assert.match(rt.run('rvExtraHtml()'), /כבר שויך מהתעודה הזאת:/);
+  assert.match(rt.run('rvExtraHtml()'), /לחם מקמח כוסמין E-FREE × 1 · קליטת/);
+  rt.run(`rvExtraAdd('p_spelt'); returnVerify.items.forEach(l => l.checked = true);`);
+  await rt.run('saveReturnVerify()');
+  assert.equal(rt.run('creditSplit'), null, 'nothing new to link');
+  assert.match(rt.toasts.at(-1), /כבר משויך מהתעודה הזאת/);
+  assert.equal(rt.get('new').creditAllocations.length, 1);
+  assert.equal(rt.run("receiptDiscrepancyInfo(receipts.find(x => x.id === 'r2')).open"), true, 'the second shortage is not closed by the same unit');
+  // יחידה שנייה שזוכתה מעבר לזה — מוצעת, ורק היא
+  await rt.click('rv-open', 'new');
+  rt.run(`rvExtraAdd('p_spelt'); returnVerify.extra[0].qty = 2; returnVerify.items.forEach(l => l.checked = true);`);
+  await rt.run('saveReturnVerify()');
+  assert.deepEqual(copy(rt.run('creditSplit.lines')).map(x => x.qty), [1]);
+  assert.deepEqual(copy(rt.run('creditSplit.candidates')).map(c => c.receiptId), ['r2']);
+});
+
+const flush = async () => { for (let i = 0; i < 30; i++) await new Promise(r => setImmediate(r)); };
+test('approve is a transaction: it closes the fresh document, and refuses one that changed or was verified elsewhere', async () => {
+  const pending = { id: 'p1', date: '2026-09-20', docDate: '2026-09-20', timestamp: 3, credited: false, schemaVersion: 2,
+    items: [{ name: 'א', productId: 'p_a', qty: 3 }, { name: 'ב', productId: 'p_b', qty: 2, noteQty: 1 }] };
+  const rt = setup([pending]);
+  await rt.click('rv-approve', 'p1');
+  await rt.events.get('confirmOk:click')(); await flush();
+  const d = rt.get('p1');
+  assert.equal(d.credited, true);
+  assert.equal(d.creditStatus, 'ok');
+  assert.equal(d.items[1].noteQty, undefined, 'a stale credited count is stripped');
+  assert.equal(rt.commits.length, 1);
+  // מכשיר אחר הוסיף שורה בזמן שחלון האישור היה פתוח
+  const rt2 = setup([{ ...pending, id: 'p2' }]);
+  await rt2.click('rv-approve', 'p2');
+  rt2.db.get('returns/p2').items.push({ name: 'ג', productId: 'p_c', qty: 4 });
+  await rt2.events.get('confirmOk:click')(); await flush();
+  assert.equal(rt2.commits.length, 0);
+  assert.equal(rt2.db.get('returns/p2').credited, false);
+  assert.equal(rt2.db.get('returns/p2').items.length, 3, 'the other device’s line survives');
+  assert.equal(rt2.run('cloudFailedWrites.length'), 0, 'a stale approve is not queued for blind replay');
+  assert.match(rt2.toasts.at(-1), /כבר אומתה או השתנתה/);
+  // אישור שנכשל ברשת ונכנס לתור — ובינתיים נערך במכשיר אחר: הניסיון החוזר נדחה
+  const rt3 = setup([{ ...pending, id: 'p3' }]);
+  rt3.fail(true);
+  await rt3.click('rv-approve', 'p3');
+  await rt3.events.get('confirmOk:click')(); await flush();
+  assert.equal(rt3.run('cloudFailedWrites.length'), 1);
+  assert.equal(rt3.run("returns.find(x => x.id === 'p3').credited"), false, 'nothing changes locally before the write');
+  rt3.fail(false);
+  rt3.db.get('returns/p3').items[0].qty = 9;
+  await rt3.run('retryCloudFailedWrites()'); await flush();
+  assert.equal(rt3.commits.length, 0);
+  assert.equal(rt3.db.get('returns/p3').credited, false);
+  assert.equal(rt3.run('cloudFailedWrites.length'), 0);
+});

@@ -486,8 +486,8 @@ test('approving, checking and un-verifying on the unified screen redraw it in pl
   assert.equal(roleCount(page, 'ret-resend'), 0);
   assert.ok(page.includes(roleFor('uncredit', 'ret_pending')));
   const write = rt.writes[rt.writes.length - 1];
-  assert.equal(write.op, 'update');
-  assert.equal(write.path.slice(-1)[0], 'ret_pending');
+  assert.equal(write.op, 'return-approve', 'approve is a transaction on the fresh document');
+  assert.equal(write.returnsId, 'ret_pending');
   assert.deepEqual([write.data.credited, write.data.creditNoteTotal, write.data.creditStatus], [true, undefined, 'ok']);
 
   // ביטול אימות (uncredit → חלון אישור → clearReturnVerification): הכרטיס חוזר להיות כתום, עם כל הפעולות

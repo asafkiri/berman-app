@@ -4,7 +4,7 @@
 
 ```sh
 node --test tests/returns-regression.test.mjs
-node --test tests/returns-regression.test.mjs -- --backup ~/backup.json
+node tests/returns-regression.test.mjs --backup ~/backup.json   # ישירות: node --test אינו מעביר --backup
 node --test tests/returns-quantities.test.mjs tests/returns-edit-merge.test.mjs tests/listener-ids.test.mjs
 node --test tests/return-credit-review.test.mjs tests/return-credit-link.test.mjs tests/returns-history-unified.test.mjs
 node tests/credit-split.test.mjs && node tests/returns-carry.test.mjs && node tests/return-unsend.test.mjs
@@ -44,7 +44,7 @@ node --test tests/receiving-quantities.test.mjs
 
 ```sh
 node --test tests/receipt-status-regression.test.mjs
-node --test tests/receipt-status-regression.test.mjs -- --backup ~/backup.json
+node tests/receipt-status-regression.test.mjs --backup ~/backup.json
 ```
 
 `receipt-status-regression.test.mjs` רץ על מודול האפליקציה המלא מול `receipts-2026-08-10.json` — צמצום מנוקה של 38 תעודות הקליטה האמיתיות (אוגוסט–אוקטובר 2026) והקטלוג, רק השדות שהסטטוס נגזר מהם. הבדיקה מצמידה: תעודה אחת בלבד פתוחה (4.10: עודף 2, חוסר 1); תעודות שהיו פתוחות רק בגלל כסף (17.9, 28.9, 1.9) סגורות; שש תעודות עם חוסר שזוכה בכסף סגורות בכלל הירושה, ופתוחות בלעדיו; שדות הכסף של v119 תמיד "לא פתוח"; ההיסטוריה מצוירת ביחידות בלי שורות כסף; מסך התיקון כותב רק כמויות וסטטוס.

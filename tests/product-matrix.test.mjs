@@ -232,6 +232,26 @@ head('[6ד] v123 — זיכוי חוסר ביחידות, וקישור זיכוי
   const carryNoFlag = rangeProductMatrixData({ recs: [], rets: [{ docDate: '2026-09-10', credited: true,
     items: [{ productId: 'carry_77', name: P.b101.name, barcode: P.b101.barcode, qty: 2 }] }] });
   ok('carry_ בלי דגל: זוכה 2, נשלח 0', carryNoFlag.list[0].credited === 2 && carryNoFlag.list[0].sent === 0);
+  // (ה) קישור בין שתי תעודות חזרות: היחידה שזוכתה בנייר החדש נספרת פעם אחת, ביום שלו
+  const older = { docDate: '2026-09-08', credited: true, creditStatus: 'open', items: [line(P.b101, 2, 5.7408, { noteQty: 0 })],
+    returnCreditNotes: [{ id: 'l1', fromReturnsId: 'n', items: [{ rowIndex: 0, productId: P.b101.id, name: P.b101.name, barcode: P.b101.barcode, qty: 1 }] }] };
+  const newer = { docDate: '2026-09-12', credited: true, creditStatus: 'ok', items: [line(P.b349, 3, 9.884)],
+    creditAllocations: [{ id: 'l1', targetType: 'return', returnId: 'o', items: [{ rowIndex: 0, productId: P.b101.id, name: P.b101.name, barcode: P.b101.barcode, qty: 1 }] }] };
+  const rr = rangeProductMatrixData({ recs: [], rets: [older, newer] });
+  const r101 = rr.list.find(r => r.pid === P.b101.id);
+  ok('קישור חזרות→חזרות: 101 נשלח 2, זוכה 1 — פעם אחת', r101.sent === 2 && r101.credited === 1);
+  ok('והזיכוי בתא של יום תעודת הזיכוי', r101.days['2026-09-12'] && r101.days['2026-09-12'].r === 1 && !(r101.days['2026-09-08'] && r101.days['2026-09-08'].r));
+  ok('תעודה שטרם אומתה אינה מזכה דרך קישור', rangeProductMatrixData({ recs: [], rets: [{ ...newer, credited: false }] }).list.every(r => r.credited === 0));
+  // (ו) שורה מועברת בלי מוצר קטלוג — לפי קוד הפריט לפני ברקוד (ברקוד משותף לכמה מוצרים)
+  const shared = { id: 'shared_bc', code: '9001', name: 'מוצר א', barcode: '777', price: 4 };
+  const shared2 = { id: 'shared_bc2', code: '9002', name: 'מוצר ב', barcode: '777', price: 6 };
+  products.push(shared, shared2);
+  const byCodeRow = rangeProductMatrixData({ recs: [], rets: [{ docDate: '2026-09-10', credited: true, items: [{ productId: 'carry_5', code: '9002', name: 'מוצר ב', barcode: '777', qty: 1, carried: true }] }] });
+  ok('carry_ עם קוד 9002 נספר על 9002 ולא על הראשון עם אותו ברקוד', byCodeRow.list.length === 1 && byCodeRow.list[0].pid === 'shared_bc2');
+  products.splice(products.indexOf(shared), 1); products.splice(products.indexOf(shared2), 1);
+  // (ז) מוצר ידני בלי מחיר במאגר — מסומן "ללא מחיר" ולא נעלם בשקט
+  const manual = rangeProductMatrixData({ recs: [], rets: [{ docDate: '2026-09-10', credited: true, items: [{ productId: 'manual_1', name: 'לחמניה משקית', qty: 4, manual: true }] }] });
+  ok('שורה ידנית: זוכה 4, מסומנת ללא מחיר', manual.list[0].credited === 4 && manual.list[0].unpriced === true);
 }
 
 head('[7] תקופה ריקה אינה מפילה');

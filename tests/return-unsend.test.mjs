@@ -173,6 +173,10 @@ head('[6] שורה ידנית ושורה שהוחזרה מפער — הסימו�
   ok('שורת פער מתעודה אחרת — לא', retUnsendSameLine({ manual: true, carried: true, carriedFrom: 'ret_x', name: PITA.name, barcode: 'b' }, { kind: 'carried', carriedFrom: 'ret_8_9', name: PITA.name, barcode: 'b' }) === false);
   ok('שורת פער מאותה תעודה — מתאחדת', retUnsendSameLine({ manual: true, carried: true, carriedFrom: 'ret_8_9', name: PITA.name, barcode: 'b', unitPrice: 4.5 }, { kind: 'carried', carriedFrom: 'ret_8_9', name: PITA.name, barcode: 'b' }) === true);
   ok('שורת קטלוג אינה מתאחדת עם ידנית באותו שם', retUnsendSameLine({ manual: true, name: PITA.name }, { kind: 'catalog', productId: PITA.id, name: PITA.name }) === false);
+  // מוצר שנמחק מהקטלוג חוזר כידני — עם קוד הפריט, כדי שהשליחה הבאה תאמר אותו
+  returnsList = [];
+  applyReturnUnsend(retUnsendPlan(openDoc({ items: [{ name: 'מוצר שנמחק', barcode: '7290001', productId: 'code_555_gone', code: '555', qty: 2 }] })));
+  ok('שורה של מוצר שנמחק שומרת את הקוד', returnsList.length === 1 && returnsList[0].manual === true && returnsList[0].code === '555');
   // ported from credit-price-forms: a carried unsend merges into the identical carried row (2 + 13 = 15)
   returnsList = [{ productId: 'carry_1', name: LOAF.name, barcode: 'bc-l', qty: 2, manual: true, carried: true, carriedFrom: 'older' }];
   applyReturnUnsend(retUnsendPlan(openDoc({ items: [{ productId: 'carry_2', name: LOAF.name, barcode: 'bc-l', qty: 13, carried: true, carriedFrom: 'older' }] })));
@@ -225,7 +229,8 @@ head('[8] מקצה לקצה — "אישור" סוגר את התעודה בלי �
   const write = rt.writes[rt.writes.length - 1];
   ok('התעודה סומנה מאומתת', !!write && write.data.credited === true && write.data.creditStatus === 'ok');
   ok('בלי סכום שהאפליקציה "יודעת"', !('creditNoteTotal' in write.data), JSON.stringify(write.data.creditNoteTotal));
-  ok('והשורות נכתבות בלי כמות זיכוי ישנה', Array.isArray(write.data.items) && write.data.items.every(l => !('noteQty' in l)));
+  ok('האישור הוא טרנזקציה על התעודה הטרייה, עם חתימת השורות שאושרו', write.op === 'return-approve' && write.returnsId === 'ret_open' && typeof write.signature === 'string' && write.signature.length > 2);
+  ok('בתעודה בלי כמויות זיכוי ישנות — השורות כלל אינן נכתבות', !('items' in write.data));
   ok('הכרטיס הפך ירוק', rt.run('renderReceiptsHistory(); document.getElementById("app").innerHTML').indexOf('<i class="fa-solid fa-circle-check"></i> אומתה') > -1);
   ok('ואין יותר פער פתוח', rt.run('JSON.stringify(returnsDiscrepancyInfo(returns[0]).open)') === 'false');
 }

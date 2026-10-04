@@ -8,7 +8,8 @@
 //   • חודשים לפי תאריך התעודה: אוגוסט 56/56, ספטמבר 152/152, אוקטובר 97 נשלחו / 94 זוכו.
 //   • כל הפסיקות זהות כשמוחקים מכל תעודה את שדות הכסף — הקוראים לא נוגעים בכסף.
 // הרצה:            node --test tests/returns-regression.test.mjs
-// מול גיבוי אמיתי: node --test tests/returns-regression.test.mjs -- --backup ~/backup.json
+// מול גיבוי אמיתי: node tests/returns-regression.test.mjs --backup ~/backup.json
+// (ישירות ולא דרך node --test: הוא אינו מעביר ארגומנטים לקובץ הבדיקה)
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
@@ -106,8 +107,8 @@ test('המאזן בבאנר: 3 יח׳ חסרות בתעודה אחת, בלי ₪
   assert.doesNotMatch(html, /₪/);
 });
 
-test('חודשים לפי תאריך התעודה: אוגוסט 56/56, ספטמבר 152/152, אוקטובר 97/94', () => {
-  if (backupArg) return;
+const FIXTURE_ONLY = { skip: backupArg ? 'מספרים של ה-fixture בלבד' : false };
+test('חודשים לפי תאריך התעודה: אוגוסט 56/56, ספטמבר 152/152, אוקטובר 97/94', FIXTURE_ONLY, () => {
   const r = create();
   const month = (from, to) => JSON.parse(r.run(`(() => {
     const rets = returns.filter(rt => { const d = String(rt.docDate || rt.date).slice(0, 10); return d >= ${JSON.stringify(from)} && d <= ${JSON.stringify(to)}; });
@@ -119,8 +120,7 @@ test('חודשים לפי תאריך התעודה: אוגוסט 56/56, ספטמ�
   assert.deepEqual(month('2026-10-01', '2026-10-31'), { sent: 97, credited: 94 });
 });
 
-test('תעודה מ-30.9 עם תאריך נייר 1.10 נספרת באוקטובר', () => {
-  if (backupArg) return;
+test('תעודה מ-30.9 עם תאריך נייר 1.10 נספרת באוקטובר', FIXTURE_ONLY, () => {
   const all = verdicts(create());
   const doc = all.find(x => x.id === 'returns_2c14e178-331b-485b-a72b-b09ab789415a');
   assert.equal(doc.day, '2026-10-01');
@@ -143,8 +143,7 @@ test('ההעברה קדימה של 4.10: 238×1 ו-344×2, בלי מחיר', () 
   assert.ok(plan.items.every(x => x.price === undefined && x.amountOnly === undefined), JSON.stringify(plan));
 });
 
-test('הקישור הישן 5.9 → קליטת 6.9 נשמר: חוסם מחיקה, ו-401 זוכה פעמיים בדיוק', () => {
-  if (backupArg) return;
+test('הקישור הישן 5.9 → קליטת 6.9 נשמר: חוסם מחיקה, ו-401 זוכה פעמיים בדיוק', FIXTURE_ONLY, () => {
   const r = create();
   const out = JSON.parse(r.run(`(() => {
     const rt = returns.find(x => x.id === ${JSON.stringify(SEP5)});

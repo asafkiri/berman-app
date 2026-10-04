@@ -41,7 +41,7 @@ const FNS = ['r2', 'moneyDiffCents', 'lineTotalFromUnit', 'todayStr', 'storedRec
   'promoTriggered', 'promoFixedPrice', 'promoPctOf', 'basketQty', 'promoMinUnitsP',
   'discountedUnitPrice', 'receiptDiscrepancyInfo', 'productListPrice', 'priceAt', 'receiptPaperLineCount',
   // v66 / v123
-  'shortCreditToleranceCents', 'shortCreditFullyCovers', 'ymdDayDiff',
+  'shortCreditToleranceCents', 'shortCreditFullyCovers', 'ymdDayDiff', 'receiptOpenShortUnits', 'creditLineSameProduct',
   'shortageCreditCandidates', 'returnsCreditSourcesForShortage', 'creditAllocationList', 'returnsBalance',
   'buildCreditSplitRecords', 'creditSplitPairId', 'vatRateForDoc', 'amountIncForDoc', 'returnTotals',
   'receiptCreditedShortUnits',
@@ -167,6 +167,12 @@ ok('מחוץ לחלון 14 הימים — אין מועמד', shortageCreditCand
 ok('חלון מפורש רחב מספיק כן מוצא', shortageCreditCandidates(PITA2, receipts, { anchorDate: '2026-06-01', windowDays: 200 }).length === 1);
 ok('חוסר שכבר זוכה ביחידות — אין מועמד', shortageCreditCandidates(PITA2, [rcUnits], { anchorDate: '2026-09-05' }).length === 0);
 ok('חוסר שזוכה בכסף לפני v123 — אין מועמד', shortageCreditCandidates(PITA2, [rcCredited], { anchorDate: '2026-09-05' }).length === 0);
+// זיכוי כספי ישן שכיסה יחידה אחת מתוך שתיים — מוצעת רק היחידה שנשארה
+const rcHalfMoney = makeReceipt({ shortCreditNotes: [{ amount: r2(PITA.price), at: 1 }] });
+ok('זיכוי כספי ישן חלקי — היחידה שכוסתה יורדת מהפתוח', JSON.stringify(api.receiptOpenShortUnits(rcHalfMoney)) === JSON.stringify({ [PITA.id]: 1 }));
+const halfCands = shortageCreditCandidates(PITA2, [rcHalfMoney], { anchorDate: '2026-09-05' });
+ok('ומוצעת רק יחידה אחת', halfCands.length === 1 && halfCands[0].items[0].qty === 1 && halfCands[0].remainingUnits === 1);
+ok('המועמד אומר איזו שורה נצרכה ובכמה', JSON.stringify(halfCands[0].used) === JSON.stringify([{ i: 0, qty: 1 }]));
 const near = makeReceipt({ id: 'near', date: '2026-09-06', docDate: '2026-09-06' });
 const far = makeReceipt({ id: 'far', date: '2026-09-15', docDate: '2026-09-15' });
 ok('הקרובה בתאריך קודם', shortageCreditCandidates(PITA2, [far, near], { anchorDate: '2026-09-05' }).map(c => c.receiptId).join() === 'near,far');

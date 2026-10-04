@@ -3173,6 +3173,18 @@ function consumeReturnLinkedCredit(r, shortItems) {
 // ומשייכים אותו לחוסר פתוח באותו מוצר. creditAllocations על תעודת החזרות
 // והתאום (shortCreditUnits) על תעודת הקליטה נושאים מוצר וכמות עם אותו מזהה.
 // השורות של החזרות לא זזות, וסכום הנייר נשאר לזיהוי בלבד.
+// v123: האם שתי שורות הן אותו מוצר, לצורך זיכוי. מזהה קטלוג קודם; שורה מועברת או
+// ידנית (carry_/manual_) — לפי קוד הפריט, ואז ברקוד, ואז שם. ברקוד לבדו אינו מספיק
+// כשיש קוד: בקטלוג של ברמן כמה מוצרים חולקים ברקוד אחד (4033569: 209, 3601, 3604, 3703).
+function creditLineSameProduct(w, s) {
+  const cat = x => { const id = String((x && x.productId) || ''); return (id && id.indexOf('carry_') !== 0 && id.indexOf('manual_') !== 0) ? id : ''; };
+  const a = cat(w), b = cat(s);
+  if (a && b) return a === b;
+  const ca = String((w && w.code) || ''), cb = String((s && s.code) || '');
+  if (ca && cb) return ca === cb;
+  if (w && s && w.barcode && s.barcode) return String(w.barcode) === String(s.barcode);
+  return !!(w && s && w.name) && w.name === s.name;
+}
 function creditAllocationList(r) {
   // v123: שיוך חדש נושא מוצר וכמות (items) בלי סכום; שיוך ישן (v66) נושא גם סכום
   return (Array.isArray(r && r.creditAllocations) ? r.creditAllocations : []).filter(x => x && ((Number(x.amount) || 0) > 0 || (x.items || []).some(i => Number(i && i.qty) > 0)));
@@ -3329,7 +3341,7 @@ function openReturnApproveConfirm(id) {
       const cur = returns.find(x => x.id === id);
       if (!cur || cur.credited) { showToast('התעודה כבר אומתה או הוסרה במכשיר אחר', null, null, 2600); return; }
       if (returnItemsSignature(cur) !== sig) { showToast('התעודה השתנתה בזמן האישור — בדוק שוב מול הנייר', null, null, 3200); return; }
-      markReturnVerified(id, typed);
+      markReturnVerified(id, typed, sig);
     });
 }
 // ===== v80: ביטול שליחה — החזרת תעודה שלא אומתה לרשימת החזרות הפתוחה =====
@@ -3399,8 +3411,8 @@ function applyReturnUnsend(plan) {
       return;
     }
     const row = { productId: retUnsendNewId(item), name: item.name, barcode: item.barcode, qty: item.qty };
-    if (item.kind !== 'catalog') row.manual = true;
-    if (item.kind === 'carried') { row.carried = true; if (item.carriedFrom) row.carriedFrom = item.carriedFrom; if (item.code) row.code = item.code; }
+    if (item.kind !== 'catalog') { row.manual = true; if (item.code) row.code = item.code; }
+    if (item.kind === 'carried') { row.carried = true; if (item.carriedFrom) row.carriedFrom = item.carriedFrom; }
     returnsList.push(row);
     applied.push({ productId: row.productId, qty: item.qty, created: true });
   });
@@ -3520,6 +3532,9 @@ function openReturnVerify(id, presetNoteTotal) {
     id: r.id,
     noteTotal: presetNoteTotal != null ? r2(Number(presetNoteTotal) || 0) : (r.creditNoteTotal != null ? Number(r.creditNoteTotal) : null),
     extra: [], extraQuery: '',
+    // v123: מה שכבר שויך מהתעודה הזאת לחוסר אחר — מוצג, ואינו מוצע לשיוך שוב
+    allocated: [].concat(...creditAllocationList(r).map(a => (a.items || []).filter(i => Number(i && i.qty) > 0).map(i => ({ productId: i.productId || '', code: i.code || '', name: i.name || '', barcode: i.barcode || '', qty: Number(i.qty) || 0,
+      target: a.targetType === 'return' ? 'חזרות מ־' + dDisp(a.returnDate || '') : 'קליטת ' + dDisp(a.receiptDate || '') })))),
     items: (r.items || []).map(l => ({ ...l, qty: Number(l.qty) || 0, noteQty: (l.noteQty != null ? Number(l.noteQty) : (Number(l.qty) || 0)), checked: false }))
   };
   setView('returnReconcile');
@@ -3660,6 +3675,8 @@ function rvExtraHtml() {
   return '<div class="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm">' +
     '<div class="font-black text-slate-700 text-sm mb-1"><i class="fa-solid fa-plus text-emerald-600"></i> זוכה גם על מוצר שלא הוחזר?</div>' +
     '<div class="text-[11px] text-slate-400 font-bold mb-2">למשל חוסר מקליטה שהספק סגר באותה תעודת זיכוי. אחרי השמירה נחפש לו חוסר פתוח באותו מוצר.</div>' +
+    (((returnVerify && returnVerify.allocated) || []).length ? '<div class="bg-indigo-50 border border-indigo-200 rounded-xl p-2 mb-2 text-[11px] font-bold text-indigo-800"><div class="font-black mb-0.5">כבר שויך מהתעודה הזאת:</div>' +
+      returnVerify.allocated.map(a => '<div>' + htmlEscape(a.name) + ' × ' + a.qty + ' · ' + htmlEscape(a.target) + '</div>').join('') + '<div class="mt-0.5 text-indigo-700/80">אל תוסיף אותם שוב — רק מה שזוכה מעבר לזה.</div></div>' : '') +
     list.map((x, i) => '<div class="flex items-center justify-between gap-2 py-1.5 border-b border-slate-100 last:border-0"><div class="min-w-0 font-bold text-sm text-slate-700 truncate">' + htmlEscape(x.name) + '</div><div class="flex items-center gap-1 shrink-0">' +
       '<button data-role="rv-extra-minus" data-id="' + i + '" aria-label="הפחת" class="btn-tap w-11 h-11 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center"><i class="fa-solid fa-minus text-xs"></i></button>' +
       '<span class="w-8 text-center font-black text-slate-800">' + (Number(x.qty) || 0) + '</span>' +
@@ -3684,7 +3701,7 @@ function rvExtraAdd(pid) {
   returnVerify.extra = returnVerify.extra || [];
   const ex = returnVerify.extra.find(x => x.productId === pid);
   if (ex) ex.qty = (Number(ex.qty) || 0) + 1;
-  else returnVerify.extra.push({ productId: p.id, name: p.name, barcode: p.barcode || '', qty: 1 });
+  else returnVerify.extra.push({ productId: p.id, code: productCode(p), name: p.name, barcode: p.barcode || '', qty: 1 });
   returnVerify.extraQuery = '';
   buzz(18);
   rvRefreshExtra();
@@ -3692,16 +3709,20 @@ function rvExtraAdd(pid) {
 function rvExtraStep(i, d) { const x = ((returnVerify && returnVerify.extra) || [])[i]; if (!x) return; x.qty = Math.max(1, (Number(x.qty) || 0) + d); rvRefreshExtra(); }
 function rvExtraRemove(i) { if (!returnVerify || !returnVerify.extra || !returnVerify.extra[i]) return; returnVerify.extra.splice(i, 1); rvRefreshExtra(); }
 function refreshReturnReconcile() { if (currentView === 'returnReconcile') renderReturnReconcile(); }
-async function markReturnVerified(id, noteTotal) {
+async function markReturnVerified(id, noteTotal, signature) {
   if (returnHasLinkedReturnCredit(id)) return false;
   const r = returns.find(x => x.id === id); if (!r) return false;
   // v123: "אישור" = כל היחידות שהוחזרו זוכו. כמויות זיכוי ישנות (למשל אחרי ביטול
-  // אימות) יורדות מהשורות — אחרת המרכזת הייתה סופרת אותן כלא-זוכו בתעודה ירוקה.
-  // הכתיבה קודמת לשינוי המקומי: כתיבה שנכשלה לא משאירה "אומתה" על המסך.
-  const items = (r.items || []).map(l => { const c = { ...l }; delete c.noteQty; return c; });
-  const data = { items, credited: true, creditedAt: Date.now(), creditStatus: 'ok' };
+  // אימות) יורדות מהשורות — אחרת המרכזת הייתה סופרת אותן כלא-זוכו בתעודה ירוקה; כשאין
+  // כאלה, השורות כלל אינן נכתבות. הכתיבה היא טרנזקציה (executeReturnApproveTask) שקוראת
+  // את התעודה טרי ומאשרת רק אם היא עדיין לא אומתה ושורותיה הן אלה שאושרו — כך גם ניסיון
+  // חוזר מהתור אינו דורס שורות שנערכו ממכשיר אחר. הכתיבה קודמת לשינוי המקומי.
+  const at = Date.now();
+  const data = { credited: true, creditedAt: at, creditStatus: 'ok' };
   if (noteTotal != null) data.creditNoteTotal = noteTotal;
-  const saved = await runCloudTask('mark return verified', { op: 'update', path: dataPath('returns', id), data, operationId: makeOperationId('return_verified') });
+  if ((r.items || []).some(l => l && l.noteQty != null)) data.items = (r.items || []).map(l => { const c = { ...l }; delete c.noteQty; return c; });
+  const saved = await runCloudTask('mark return verified', { op: 'return-approve', returnsId: id, signature: signature || returnItemsSignature(r),
+    noteTotal: noteTotal == null ? null : noteTotal, at, data, operationId: makeOperationId('return_verified') });
   if (!saved) return false;
   Object.assign(r, data);
   buzz(18);
@@ -3746,7 +3767,14 @@ async function saveReturnVerify(opts) {
   // אחרת אימות חוזר של תעודה שהועברה היה סוגר אותה ומבטל את ההעברה.
   const open = outItems.some(l => l.noteQty != null);
   const id = returnVerify.id, noteTotal = returnVerify.noteTotal;
-  const extra = (returnVerify.extra || []).filter(x => (Number(x.qty) || 0) > 0).map(x => ({ productId: x.productId, name: x.name, barcode: x.barcode || '', qty: Number(x.qty) || 0 }));
+  const extraAll = (returnVerify.extra || []).filter(x => (Number(x.qty) || 0) > 0).map(x => ({ productId: x.productId, code: x.code || '', name: x.name, barcode: x.barcode || '', qty: Number(x.qty) || 0 }));
+  // מה שכבר שויך מהתעודה הזאת יורד — יחידה שזוכתה פעם אחת משויכת פעם אחת
+  const already = (returnVerify.allocated || []).map(a => ({ ...a }));
+  const extra = extraAll.map(x => {
+    let q = x.qty;
+    already.forEach(a => { if (q <= 0 || !(a.qty > 0) || !creditLineSameProduct(x, a)) return; const take = Math.min(q, a.qty); q -= take; a.qty -= take; });
+    return { ...x, qty: q };
+  }).filter(x => x.qty > 0);
   const updateData = { items: outItems, creditNoteTotal: noteTotal == null ? null : noteTotal, creditStatus: open ? 'open' : 'ok', credited: true, creditedAt: Date.now() };
   const opId = makeOperationId('return_verify');
   const saved = await runCloudTask('save return verification', { op: 'update', path: dataPath('returns', id), data: updateData, operationId: opId });
@@ -3759,6 +3787,7 @@ async function saveReturnVerify(opts) {
   setView('receiptsHistory');
   if (undone) updateCart();
   // v123: מוצר שזוכה בלי שהוחזר — מחפשים לו חוסר פתוח באותו מוצר
+  if (extraAll.length && !extra.length) { showToast('הזיכוי נשמר. מה שזוכה בלי שהוחזר כבר משויך מהתעודה הזאת ✓', null, null, 3400); return; }
   if (extra.length) {
     if (openCreditSplitPrompt(id, extra)) { showToast('זוכה גם על מוצר שלא הוחזר — לאיזה חוסר הוא שייך?', null, null, 3400); return; }
     showToast('הזיכוי נשמר. לא נמצא חוסר פתוח (14 יום) במוצר שזוכה בלי שהוחזר — לא נרשם קישור', null, null, 4200);
@@ -3819,6 +3848,10 @@ function refreshRetEditHeader() {
 // פיצול מארזים — אותו כלל כמו v172 בחזרות: מארזים שלמים במחיר מארז + שארית בודדים
 function retEditPackInfo(idx) {
   const l = ((returnEdit && returnEdit.items) || [])[idx]; if (!l || l.isDeposit) return null;
+  // שורה שהועברה מפער היא תביעה על יחידות של תעודה אחרת — לא מפצלים אותה למארזים
+  if (l.carried || String(l.productId || '').indexOf('carry_') === 0) return null;
+  // בתעודה שאומתה מפצלים רק שורה שזוכתה במלואה ולא נערכה — אחרת הזיכוי לא מתחלק נכון
+  if (returnEdit.wasCredited && retEditCreditedOf(l) !== (Number(l.qty) || 0)) return null;
   const p = retEditProductFor(l); if (!p || !p.billingPackId) return null;
   const size = parseInt(p.billingPackSize, 10) || 0; if (size < 2) return null;
   const pack = products.find(x => x.id === p.billingPackId); if (!pack) return null;
@@ -3829,9 +3862,9 @@ function retEditPackInfo(idx) {
 function retEditConvertPack(idx) {
   const info = retEditPackInfo(idx); if (!info || !returnEdit) return;
   const l = returnEdit.items[idx]; if (!l) return;
-  // שורות המארז מחליפות את שורת הבודדים. בתעודה שאומתה — אם השורה זוכתה במלואה,
-  // גם המארזים זוכו (הפיצול רק מתקן את הרישום לפי הנייר).
-  const fully = l.noteQty == null || Number(l.noteQty) === Number(l.qty);
+  // שורות המארז מחליפות את שורת הבודדים. בתעודה שאומתה מגיעים לכאן רק כשהשורה זוכתה
+  // במלואה (retEditPackInfo) — אז גם המארזים זוכו; הפיצול רק מתקן את הרישום לפי הנייר.
+  const fully = !!returnEdit.wasCredited;
   const out = [{ key: 'p' + Date.now(), productId: info.pack.id, code: productCode(info.pack), name: info.pack.name, barcode: info.pack.barcode || '', qty: info.n, noteQty: null, origQty: 0, isNew: true, fullyCredited: fully }];
   if (info.remainder > 0) out.push({ key: 's' + Date.now(), productId: info.single.id, code: productCode(info.single), name: info.single.name, barcode: info.single.barcode || '', qty: info.remainder, noteQty: null, origQty: 0, isNew: true, fullyCredited: fully });
   returnEdit.items.splice(idx, 1);
@@ -3843,7 +3876,22 @@ function retEditConvertPack(idx) {
 function retEditStepQty(idx, d) { const l = ((returnEdit && returnEdit.items) || [])[idx]; if (!l) return; l.qty = Math.max(0, (Number(l.qty) || 0) + d); renderReturnItemsEdit(); }
 function retEditSetQtyLive(idx, v) { const l = ((returnEdit && returnEdit.items) || [])[idx]; if (!l) return; let q = parseInt((v || '').toString().replace(/[^0-9]/g, ''), 10); if (isNaN(q) || q < 0) q = 0; l.qty = q; refreshRetEditHeader(); }
 function retEditSetNameLive(idx, v) { const l = ((returnEdit && returnEdit.items) || [])[idx]; if (!l) return; l.name = v; }
-function retEditRemove(idx) { if (!returnEdit) return; returnEdit.items.splice(idx, 1); if (returnEdit.replaceIdx === idx) returnEdit.replaceIdx = -1; buzz(10); renderReturnItemsEdit(); }
+// v123: כמה זוכה על שורה בעורך — לפי מה שנשמר, לא לפי מה שנערך עכשיו
+function retEditCreditedOf(l) {
+  if (!l) return 0;
+  if (l.isNew) return l.fullyCredited ? (Number(l.qty) || 0) : 0;
+  return l.origNoteQty != null ? Number(l.origNoteQty) : (Number(l.origQty) || 0);
+}
+function retEditRemove(idx) {
+  if (!returnEdit) return;
+  const l = returnEdit.items[idx]; if (!l) return;
+  // בתעודה שאומתה, שורה שזוכתה אינה נעלמת עם הזיכוי שלה: היא נשארת בכמות 0, והזיכוי
+  // עליה יופיע כזיכוי ביתר
+  if (returnEdit.wasCredited && !l.isDeposit && !l.isNew && retEditCreditedOf(l) > 0) { l.qty = 0; showToast('השורה זוכתה — היא נשארת בכמות 0 והזיכוי עליה יופיע כזיכוי ביתר', null, null, 3400); }
+  else returnEdit.items.splice(idx, 1);
+  if (returnEdit.replaceIdx === idx) returnEdit.replaceIdx = -1;
+  buzz(10); renderReturnItemsEdit();
+}
 function retEditReplaceStart(idx) { if (!returnEdit) return; returnEdit.replaceIdx = idx; returnEdit.addQuery = ''; renderReturnItemsEdit(); setTimeout(() => { const i = $('reAddSearch'); if (i) i.focus(); }, 80); }
 function retEditReplacePick(pid) {
   if (!returnEdit) return;
@@ -3950,15 +3998,21 @@ async function saveReturnItemsEdit(opts) {
   opts = opts || {};
   if (!returnEdit) return;
   if (returnHasLinkedReturnCredit(returnEdit.id)) return;
+  const wasCredited = !!returnEdit.wasCredited;
   const src = (returnEdit.items || []);
-  const dropped = src.filter(l => !((Number(l.qty) || 0) > 0 && (l.name || '').trim())).length;
-  const items = src.filter(l => (Number(l.qty) || 0) > 0 && (l.name || '').trim());
-  if (!items.length) { showToast('חייב להישאר לפחות פריט אחד עם שם וכמות', null, null, 2600); return; }
-  if (dropped > 0 && !opts.skipDropped) {
-    showConfirm('שורות ריקות', dropped + ' שורות ללא שם או בכמות 0 יימחקו מהתעודה. להמשיך?', 'המשך', function () { saveReturnItemsEdit({ skipDropped: true }); });
+  // v123: בתעודה שאומתה, שורה שזוכתה ונשארה בכמות 0 נשמרת (הזיכוי עליה = זיכוי ביתר)
+  const keepZero = l => wasCredited && !l.isDeposit && !l.isNew && (l.name || '').trim() && !((Number(l.qty) || 0) > 0) && retEditCreditedOf(l) > 0;
+  const live = l => (Number(l.qty) || 0) > 0 && (l.name || '').trim();
+  const dropped = src.filter(l => !live(l) && !keepZero(l)).length;
+  const zeroKept = src.filter(keepZero).length;
+  const items = src.filter(l => live(l) || keepZero(l));
+  if (!src.some(live)) { showToast('חייב להישאר לפחות פריט אחד עם שם וכמות', null, null, 2600); return; }
+  if ((dropped > 0 || zeroKept > 0) && !opts.skipDropped) {
+    const msg = (dropped > 0 ? dropped + ' שורות ללא שם או בכמות 0 יימחקו מהתעודה. ' : '') +
+      (zeroKept > 0 ? zeroKept + ' שורות שזוכו יישארו בכמות 0 — הזיכוי עליהן יופיע כזיכוי ביתר. ' : '') + 'להמשיך?';
+    showConfirm('שורות ריקות', msg, 'המשך', function () { saveReturnItemsEdit({ skipDropped: true }); });
     return;
   }
-  const wasCredited = !!returnEdit.wasCredited;
   const outItems = items.map(l => {
     const line = { ...l };
     ['key', 'origQty', 'origNoteQty', 'origProductId', 'origBarcode', 'isNew', 'fullyCredited', 'noteQty'].forEach(k => delete line[k]);
@@ -3974,7 +4028,7 @@ async function saveReturnItemsEdit(opts) {
     // אחרי החלפת מוצר), ושורה חדשה — 0. כך העלאת כמות פותחת חוסר בזיכוי ואינה
     // נספרת בשקט כ"זוכה" במרכזת.
     if (wasCredited && !line.isDeposit) {
-      const credited = l.isNew ? (l.fullyCredited ? line.qty : 0) : (l.origNoteQty != null ? Number(l.origNoteQty) : (Number(l.origQty) || 0));
+      const credited = retEditCreditedOf(l);
       if (credited !== line.qty) line.noteQty = credited;
     }
     return line;
@@ -3987,11 +4041,14 @@ async function saveReturnItemsEdit(opts) {
   const saved = await runCloudTask('edit return items', { op: 'update', path: dataPath('returns', returnEdit.id), data: updateData, operationId: opId });
   if (!saved) return;
   if (r) Object.assign(r, updateData);
-  const origin = returnEdit.origin;
+  const id = returnEdit.id, origin = returnEdit.origin;
   returnEdit = null;
   buzz(18);
+  // v78: עריכה שסגרה את הפער מבטלת גם החזרה קודמת לרשימת החזרות (כמו אימות שסוגר אותו)
+  const undone = (r && r.credited && !open) ? await undoReturnCarry(id, { silent: true }) : false;
   setView(origin);
-  showToast((r && r.credited && open) ? 'הפריטים עודכנו — נותר פער בזיכוי' : 'הפריטים עודכנו ✓', null, null, 2800);
+  if (undone) updateCart();
+  showToast((r && r.credited && open) ? 'הפריטים עודכנו — נותר פער בזיכוי' : (undone ? 'הפריטים עודכנו ✓ הפריטים שהועברו ירדו מרשימת החזרות' : 'הפריטים עודכנו ✓'), null, null, 2800);
 }
 async function pruneCollection(name, keep, minAgeDays) {
   if (!db) return;
@@ -4860,6 +4917,7 @@ async function executeCloudTask(task) {
   if (!db || !task) throw new Error('אין חיבור לענן');
   if (Array.isArray(task.tasks)) { for (const t of task.tasks) await executeCloudTask(t); return; }
   if (task.op === 'return-credit-link') return executeReturnCreditLinkTask(task);
+  if (task.op === 'return-approve') return executeReturnApproveTask(task);
   if (task.op === 'batch') {
     const batch = writeBatch(db);
     (task.writes || []).forEach(w => {
@@ -4936,7 +4994,7 @@ async function retryCloudFailedWrites() {
       }
       catch (e) {
         if (e && e.code === 'duplicate-barcode') { removeCloudFailedWrite(item.id); duplicate++; continue; }
-        if (e && e.code === 'stale-return-credit-link') { removeCloudFailedWrite(item.id); staleLinks++; continue; }
+        if (e && (e.code === 'stale-return-credit-link' || e.code === 'stale-return-approve')) { removeCloudFailedWrite(item.id); staleLinks++; continue; }
         item.error = errText(e); item.tries = (item.tries || 0) + 1; item.updatedAt = Date.now(); fail++;
       }
     }
@@ -4944,7 +5002,7 @@ async function retryCloudFailedWrites() {
     const retryMessage = fail
       ? ('נשמרו ' + ok + ', נשארו ' + fail + ' פעולות שלא נשמרו' + (duplicate ? ' · ' + duplicate + ' נחסמו: הפריט כבר קיים' : ''))
       : (duplicate ? (duplicate + ' פעולות נחסמו: הפריט כבר קיים') : 'כל הפעולות נשמרו לענן ✓');
-    showToast(staleLinks ? ('נשמרו ' + ok + ' פעולות. ' + staleLinks + ' קישורי זיכוי לא נשמרו כי התעודות השתנו — בדוק ובחר אותם מחדש.' + (fail ? ' עוד ' + fail + ' פעולות ממתינות לשמירה.' : '')) : retryMessage, null, null, staleLinks ? 5500 : 4000);
+    showToast(staleLinks ? ('נשמרו ' + ok + ' פעולות. ' + staleLinks + ' פעולות זיכוי (קישור או אישור) לא נשמרו כי התעודות השתנו — בדוק אותן מחדש.' + (fail ? ' עוד ' + fail + ' פעולות ממתינות לשמירה.' : '')) : retryMessage, null, null, staleLinks ? 5500 : 4000);
   } finally {
     cloudWriteInFlight = false;
     hideCloudBusy();
@@ -5011,7 +5069,7 @@ async function mustCloudWrite(actionName, fn, opts) {
       if (typeof opts.onDuplicateBarcode === 'function') opts.onDuplicateBarcode(e);
       return false;
     }
-    if (e && e.code === 'stale-return-credit-link') {
+    if (e && (e.code === 'stale-return-credit-link' || e.code === 'stale-return-approve')) {
       const queued = cloudFailedWrites.find(x => x.operationId === (opts.failedTask && opts.failedTask.operationId));
       if (queued) removeCloudFailedWrite(queued.id);
       showToast(e.message, null, null, 5500);
@@ -14712,8 +14770,11 @@ function rangeProductMatrixData(d) {
   const dayAgg = {}, rows = {};
   const agg = (day) => (dayAgg[day] = dayAgg[day] || { q: 0, r: 0, amount: 0, fair: 0 });
   const isDepositLine = l => !!(l.isDeposit || String(l.productId || '').indexOf('deposit-') === 0);
+  // v123: שורה בלי מוצר קטלוג (מועברת/ישנה) — לפי קוד הפריט לפני ברקוד: בקטלוג של
+  // ברמן כמה מוצרים חולקים ברקוד אחד
   const rowFor = (l) => {
     const p = (l.productId && products.find(x => x.id === l.productId)) ||
+      (l.code && products.find(x => productCode(x) === String(l.code))) ||
       products.find(x => (l.barcode && x.barcode === l.barcode) || x.name === l.name) || null;
     const key = (p && p.id) || l.productId || ('n:' + String(l.name || ''));
     if (!rows[key]) rows[key] = {
@@ -14769,6 +14830,22 @@ function rangeProductMatrixData(d) {
       row.creditedEx += pu.unit * cred; row.rebate -= pu.rebate * cred;
       const a = agg(day); a.r += cred; a.amount -= pu.unit * cred; a.fair -= pu.unit * sent;
       if (pu.promo) row.promo = true;
+      if (!row.product && !(pu.unit > 0)) row.unpriced = true;
+    });
+    // v123: תעודת הזיכוי הזאת זיכתה גם חוסר בזיכוי של תעודת חזרות קודמת (קישור v87).
+    // היחידות זוכו על הנייר הזה — נספרות כאן, ביום שלו; בתעודה הקודמת השורה נשארה "לא זוכה".
+    if (!credited) return;
+    (Array.isArray(rt.creditAllocations) ? rt.creditAllocations : []).forEach(al => {
+      if (!al || al.targetType !== 'return') return;
+      (al.items || []).forEach(it => {
+        const q = Number(it && it.qty) || 0; if (!(q > 0)) return;
+        const row = rowFor(it);
+        const pu = unitFor(row, it, day);
+        const c = cell(row, day); c.r += q; c.amt -= pu.unit * q;
+        row.credited += q; row.amount -= pu.unit * q; row.inc -= pu.unit * q * vat;
+        row.creditedEx += pu.unit * q; row.rebate -= pu.rebate * q;
+        const a = agg(day); a.r += q; a.amount -= pu.unit * q;
+      });
     });
   });
   const days = Object.keys(dayAgg).sort().map(day => {
@@ -14802,7 +14879,9 @@ function mtxRowFlags(row) {
   return (row.promo ? ' <i class="fa-solid fa-tag text-rose-500" title="מוצר במבצע מרכזת — המחיר בשורה הוא מחיר המבצע, כמו בחשבונית"></i>' : '') +
     (row.prices.length > 1 ? ' <i class="fa-solid fa-arrow-right-arrow-left text-amber-600" title="המחיר השתנה בתוך התקופה (מחיר חדש או מבצע שהתחיל באמצע) — בחשבונית מופיע מחיר אחד לשורה"></i>' : '') +
     (row.openUnits > 0 ? ' <span class="text-[10px] font-black text-rose-600">חסר ' + mtxQty(row.openUnits) + ' יח׳ שטרם זוכה</span>' : '') +
-    (row.openUnits < 0 ? ' <span class="text-[10px] font-black text-amber-600">+' + mtxQty(-row.openUnits) + ' יח׳ מעבר לחיוב</span>' : '');
+    (row.openUnits < 0 ? ' <span class="text-[10px] font-black text-amber-600">+' + mtxQty(-row.openUnits) + ' יח׳ מעבר לחיוב</span>' : '') +
+    // v123: שורה ידנית בלי מוצר במאגר — הכמות נספרת, אבל אין לה מחיר בחשבון החודש
+    (row.unpriced ? ' <span class="text-[10px] font-black text-amber-600" title="מוצר ידני שאינו במאגר — הכמות נספרת אבל אין לו מחיר; השווה מול החשבונית ידנית">ללא מחיר</span>' : '');
 }
 // התצוגה הראשית: שורה לכל מוצר על כל רוחב המסך, בלי גלילה לצדדים —
 // אותן שלוש עמודות שמשווים מול הנייר (כמות, מחיר, לתשלום), במחירי החשבונית.
@@ -15130,6 +15209,21 @@ function ymdDayDiff(a, b) {
   if (!Number.isFinite(pa) || !Number.isFinite(pb)) return null;
   return Math.round((pa - pb) / 86400000);
 }
+// v123: כמה יחידות פתוחות לכל מוצר בתעודת קליטה — אחרי זיכוי ביחידות, ואחרי זיכוי
+// כספי ישן (לפני v123) שכיסה חלק מהחוסר, באותו כלל עיגול כמו במרכזת (5 אג׳ ליחידה).
+function receiptOpenShortUnits(rc, di) {
+  di = di || receiptDiscrepancyInfo(rc);
+  const out = {};
+  if (di.shortFullyCredited) return out;
+  let money = Number(di.shortCreditEx) || 0;
+  (di.shortItems || []).forEach(x => {
+    let n = Number(x.n) || 0;
+    const price = Number(x.price) || 0;
+    if (money > 0 && price > 0 && n > 0) { const covered = Math.min(n, Math.floor((money + 0.05 * n) / price + 1e-9)); n -= covered; money -= covered * price; }
+    if (n > 0 && x.productId) out[x.productId] = (out[x.productId] || 0) + n;
+  });
+  return out;
+}
 // v123: למי שייך מוצר שזוכה בתעודת הזיכוי בלי שהוחזר — חוסר פתוח באותו מוצר
 // בתעודת קליטה, בחלון של 14 יום. כמות מדויקת קודם, אחר כך חלקית, ואז הקרובה
 // בתאריך. לא מנחשים: בלי חוסר פתוח באותו מוצר אין מועמד.
@@ -15146,22 +15240,24 @@ function shortageCreditCandidates(lines, receiptList, opts) {
     const rcDate = storedReceiptDate(rc);
     const dd = anchor ? ymdDayDiff(rcDate, anchor) : null;
     if (dd != null && Math.abs(dd) > windowDays) return;
-    const di = receiptDiscrepancyInfo(rc);
-    // חוסר שנסגר בזיכוי כספי לפני v123 כבר אינו פתוח
-    if (di.shortFullyCredited) return;
-    const items = [];
+    // מה שכבר זוכה (ביחידות, או בכסף לפני v123) אינו פתוח
+    const openBy = receiptOpenShortUnits(rc);
+    const items = [], used = [];
     let exact = true;
-    want.forEach(w => {
-      const open = (di.shortItems || []).filter(s => s.productId === w.productId).reduce((a, s) => a + (Number(s.n) || 0), 0);
+    (lines || []).forEach((w, i) => {
+      if (!w || !w.productId || !(Number(w.qty) > 0)) return;
+      const open = Number(openBy[w.productId]) || 0;
       if (!(open > 0)) return;
       const qty = Math.min(open, Number(w.qty) || 0);
       if (qty !== open || qty !== Number(w.qty)) exact = false;
       items.push({ productId: w.productId, name: w.name || '', qty, open });
+      used.push({ i, qty });
     });
     if (!items.length) return;
     out.push({ receiptId: rc.id, docDate: rcDate || '', kind: exact && items.length === want.length ? 'item' : 'partial',
-      partial: items.some(x => x.qty < x.open), days: dd == null ? null : Math.abs(dd), remainingUnits: Number(di.shortUnits) || 0,
-      items: items.map(x => ({ productId: x.productId, name: x.name, qty: x.qty })) });
+      partial: items.some(x => x.qty < x.open), days: dd == null ? null : Math.abs(dd),
+      remainingUnits: Object.keys(openBy).reduce((a, k) => a + openBy[k], 0),
+      items: items.map(x => ({ productId: x.productId, name: x.name, qty: x.qty })), used });
   });
   const rank = c => (c.kind === 'item' ? 0 : 1);
   const far = c => (c.days == null ? 999 : c.days);
@@ -15529,12 +15625,11 @@ let shortCreditPick = null;
 function openShortCreditPrompt(rcId) {
   const rc = receipts.find(x => x.id === rcId); if (!rc) return;
   const di = receiptDiscrepancyInfo(rc);
+  const openBy = receiptOpenShortUnits(rc, di);
   const lines = [];
   (di.shortItems || []).forEach(x => {
-    if (!x.productId || !((Number(x.n) || 0) > 0)) return;
-    const ex = lines.find(l => l.productId === x.productId);
-    if (ex) { ex.max += Number(x.n) || 0; ex.qty = ex.max; }
-    else lines.push({ productId: x.productId, name: x.name || '', max: Number(x.n) || 0, qty: Number(x.n) || 0 });
+    if (!x.productId || !(openBy[x.productId] > 0) || lines.some(l => l.productId === x.productId)) return;
+    lines.push({ productId: x.productId, name: x.name || '', max: openBy[x.productId], qty: openBy[x.productId] });
   });
   if (!lines.length) { showToast('אין חוסר פתוח לזיכוי בתעודה הזאת', null, null, 2600); return; }
   shortCreditTarget = rcId;
@@ -15574,8 +15669,8 @@ function shortCreditPickedLines() {
 }
 // הזיכוי שנבחר מול החוסר הפתוח עכשיו — ייתכן שזיכוי נרשם בינתיים ממכשיר אחר
 function shortCreditPickError(rc, picked) {
-  const di = receiptDiscrepancyInfo(rc);
-  const bad = picked.find(x => x.qty > (di.shortItems || []).filter(s => s.productId === x.productId).reduce((a, s) => a + (Number(s.n) || 0), 0));
+  const openBy = receiptOpenShortUnits(rc);
+  const bad = picked.find(x => x.qty > (Number(openBy[x.productId]) || 0));
   return bad ? 'הזיכוי על ' + bad.name + ' גדול מהחוסר הפתוח — בדוק שוב' : '';
 }
 function hideShortCreditPrompt() { const m = $('shortCreditModal'); m.classList.add('hidden'); m.classList.remove('flex'); shortCreditTarget = null; shortCreditPick = null; }
@@ -15827,15 +15922,8 @@ function buildCreditSplitRecords(rt, rc, items, opts) {
 // v87: השלמה מתעודת חזרות חדשה לחוסר ידוע בזיכוי של חזרות קודמות. v123: לפי
 // מוצר וכמות. כל מועמד מציג תעודה, מוצרים וכמות לאישור.
 function returnShortageCreditCandidates(sourceReturn, lines, list) {
-  const want = (lines || []).filter(x => x && Number(x.qty) > 0);
-  if (!want.length || !sourceReturn) return [];
+  if (!(lines || []).some(x => x && Number(x.qty) > 0) || !sourceReturn) return [];
   const sourceDate = sourceReturn.docDate || sourceReturn.date || '';
-  const sameProduct = (w, s) => {
-    const sp = String(s.productId || '');
-    if (w.productId && sp && sp.indexOf('carry_') !== 0 && sp.indexOf('manual_') !== 0) return String(w.productId) === sp;
-    if (w.barcode && s.barcode) return String(w.barcode) === String(s.barcode);
-    return !!w.name && w.name === s.name;
-  };
   const candidates = [];
   (list || []).forEach(target => {
     if (!target || target.id === sourceReturn.id || !target.credited) return;
@@ -15844,21 +15932,25 @@ function returnShortageCreditCandidates(sourceReturn, lines, list) {
     if (days == null || days < 0 || (days === 0 && Number(target.timestamp) > Number(sourceReturn.timestamp))) return;
     const di = returnsDiscrepancyInfo(target);
     if (!di.open || !di.shortItems.length) return;
-    const pool = want.map(w => ({ ...w, left: Number(w.qty) || 0 }));
-    const items = [];
+    // used: איזו שורה "זוכה בלי שהוחזר" נצרכה ובכמה — כדי שהיתרה תחושב בדיוק לפיה
+    const pool = (lines || []).map((w, i) => ({ w, i, left: (w && Number(w.qty) > 0) ? Number(w.qty) : 0 }));
+    const items = [], used = [];
     di.shortItems.forEach(s => {
-      const w = pool.find(p => p.left > 0 && sameProduct(p, s));
-      if (!w) return;
-      const qty = Math.min(w.left, Number(s.n) || 0);
+      const p = pool.find(x => x.left > 0 && creditLineSameProduct(x.w, s));
+      if (!p) return;
+      const qty = Math.min(p.left, Number(s.n) || 0);
       if (!(qty > 0)) return;
-      w.left -= qty;
-      items.push({ rowIndex: s.rowIndex, productId: s.productId || '', name: s.name, barcode: s.barcode, qty });
+      p.left -= qty;
+      used.push({ i: p.i, qty });
+      const item = { rowIndex: s.rowIndex, productId: s.productId || '', name: s.name, barcode: s.barcode, qty };
+      if (s.code) item.code = s.code;
+      items.push(item);
     });
     if (!items.length) return;
     const partial = items.length < di.shortItems.length || items.some(x => x.qty < (Number((di.shortItems.find(s => s.rowIndex === x.rowIndex) || {}).n) || 0));
     const key = target.id + '|' + items.map(x => x.rowIndex + ':' + x.qty).join(',');
     candidates.push({ key, targetType: 'return', returnId: target.id, docDate: date, noteNumber: target.creditNoteNumber || '',
-      kind: items.length === 1 ? 'item' : 'doc', partial, remainingUnits: di.shortUnits, items });
+      kind: items.length === 1 ? 'item' : 'doc', partial, remainingUnits: di.shortUnits, items, used });
   });
   return candidates.sort((a, b) => b.docDate.localeCompare(a.docDate));
 }
@@ -15868,6 +15960,27 @@ function returnCreditLinkSnapshot(r) {
     : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(k => [k, canonical(value[k])])) : value;
   return JSON.stringify(canonical([r.items || [], r.totalExVat, r.creditNoteTotal, r.creditNoteParts, r.credited, r.creditStatus,
     r.docDate, r.date, r.timestamp, r.creditNoteNumber, creditAllocationList(r), returnCreditNotes(r), returnCarriedNotes(r)]));
+}
+function staleReturnApprove() {
+  const error = new Error('התעודה כבר אומתה או השתנתה במכשיר אחר — האישור לא נשמר. בדוק אותה שוב מול הנייר.');
+  error.code = 'stale-return-approve';
+  return error;
+}
+// v123: "אישור" תעודת זיכוי — טרנזקציה על התעודה הטרייה (ראה markReturnVerified)
+async function executeReturnApproveTask(task) {
+  const ref = doc(db, ...dataPath('returns', task.returnsId));
+  const out = await runTransaction(db, async tx => {
+    const snap = await tx.get(ref);
+    const fresh = snap.exists() ? { ...snap.data(), id: task.returnsId } : null;
+    if (!fresh || fresh.credited || returnItemsSignature(fresh) !== task.signature) throw staleReturnApprove();
+    const data = { credited: true, creditedAt: task.at, creditStatus: 'ok' };
+    if (task.noteTotal != null) data.creditNoteTotal = task.noteTotal;
+    if ((fresh.items || []).some(l => l && l.noteQty != null)) data.items = (fresh.items || []).map(l => { const c = { ...l }; delete c.noteQty; return c; });
+    tx.update(ref, data);
+    return data;
+  });
+  const local = returns.find(x => x.id === task.returnsId);
+  if (local) Object.assign(local, out);
 }
 function staleReturnCreditLink() {
   const error = new Error('התעודות השתנו מאז ההצעה. בדוק את התעודות ובחר את השיוך מחדש.');
@@ -16029,19 +16142,14 @@ async function confirmCreditSplitPick(idxStr) {
     if (!ok) return;
     hideCreditSplitPrompt();
     buzz(24);
-    // מה שנשאר מהיחידות שזוכו בלי שהוחזרו — אולי שייך לחוסר נוסף
-    const used = (c.items || []).map(i => ({ ...i, qty: Number(i.qty) || 0 }));
-    const left = (ctx.lines || []).map(w => {
-      let q = Number(w.qty) || 0;
-      used.forEach(i => {
-        if (q <= 0 || !(i.qty > 0)) return;
-        const same = (w.productId && i.productId) ? w.productId === i.productId : ((w.barcode && i.barcode) ? w.barcode === i.barcode : w.name === i.name);
-        if (!same) return;
-        const take = Math.min(q, i.qty); q -= take; i.qty -= take;
-      });
-      return { ...w, qty: q };
-    }).filter(w => w.qty > 0);
-    if (left.length && openCreditSplitPrompt(ctx.returnsId, left)) { showToast('נשארו עוד יחידות שזוכו בלי שהוחזרו — לאיזה חוסר הן שייכות?', null, null, 3400); return; }
+    // מה שנשאר מהיחידות שזוכו בלי שהוחזרו — אולי שייך לחוסר נוסף. מורידים בדיוק את
+    // מה שהמועמד צרך מכל שורה (used), באותה זהות שבה הוא נמצא — גם כששורת היעד היא
+    // שורה מועברת או ידנית (carry_/manual_)
+    const left = (ctx.lines || []).map(w => ({ ...w }));
+    (c.used || []).forEach(u => { const w = left[u.i]; if (w) w.qty = Math.max(0, (Number(w.qty) || 0) - (Number(u.qty) || 0)); });
+    if (!Array.isArray(c.used)) left.forEach(w => { w.qty = 0; });
+    const rest = left.filter(w => (Number(w.qty) || 0) > 0);
+    if (rest.length && openCreditSplitPrompt(ctx.returnsId, rest)) { showToast('נשארו עוד יחידות שזוכו בלי שהוחזרו — לאיזה חוסר הן שייכות?', null, null, 3400); return; }
     if (c.targetType === 'return') {
       const target = returns.find(x => x.id === c.returnId);
       showToast(target && returnsDiscrepancyInfo(target).open ? 'ההשלמה קושרה — היתרה בתעודה הקודמת נשארה פתוחה' : 'ההשלמה קושרה — החוסר בזיכוי הקודם נסגר ✓', null, null, 3600);
@@ -16192,6 +16300,11 @@ function renderReceiptsHistory() {
           '<div class="mt-1 pt-1 border-t border-emerald-200 text-emerald-700/80">היחידות יורדות מהחיוב בחשבונית. החוסר המקורי נשמר בשורות.</div></div>' : '') +
         ((di.shortCreditNotes || []).length ? (function () {
           const rem = Math.max(0, r2((Number(di.shortValRaw) || 0) - (Number(di.shortCreditEx) || 0)));
+          if (!di.shortFullyCredited && !(di.shortItems || []).length) {
+            // v123: מה שנשאר אחרי הזיכוי הכספי הישן נסגר ביחידות — אין "נותר חוב"
+            return '<div class="mt-2 bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-xs text-emerald-800"><div class="font-black mb-1"><i class="fa-solid fa-file-invoice-dollar"></i> זיכוי כספי מלפני v123 (לזיהוי)</div>' +
+              di.shortCreditNotes.map(x => '<div class="flex justify-between gap-2"><span>זיכוי ' + new Date(Number(x.at) || 0).toLocaleDateString('he-IL') + '</span><span class="shrink-0">₪' + fmtMoney(x.amount) + '</span></div>').join('') + '</div>';
+          }
           return '<div class="mt-2 ' + (di.shortFullyCredited ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200') + ' border rounded-xl p-2.5 text-xs">' +
             '<div class="font-black mb-1 ' + (di.shortFullyCredited ? 'text-emerald-800' : 'text-amber-800') + '"><i class="fa-solid fa-file-invoice-dollar"></i> ' + (di.shortFullyCredited ? 'החוסר התקבל בזיכוי ✓' : 'זיכוי חלקי — נותר חוב ₪' + fmtMoney(rem)) + '</div>' +
             di.shortCreditNotes.map(x => '<div class="flex justify-between gap-2 ' + (di.shortFullyCredited ? 'text-emerald-700' : 'text-amber-700') + '">' +

@@ -121,10 +121,11 @@ test('an unverified document never carries a credited count after an edit', asyn
 });
 
 test('the pack split works without a price; on a fully credited line the packs stay credited', async () => {
-  const rt = open(doc({ credited: true, creditStatus: 'ok' }));
+  const d = doc({ credited: true, creditStatus: 'ok' });
+  d.items[0].qty = 13;
+  const rt = open(d);
   rt.run(`products.push({ id: 'pack6', code: '1016', name: 'מארז 6 אחיד', barcode: '1016', price: 30 });
-    const p = products.find(x => x.id === 'code_101'); p.billingPackId = 'pack6'; p.billingPackSize = 6;
-    returnEdit.items[0].qty = 13;`);
+    const p = products.find(x => x.id === 'code_101'); p.billingPackId = 'pack6'; p.billingPackSize = 6;`);
   assert.match(rt.run('retEditRowHtml(returnEdit.items[0], 0)'), /פצל ל-2 מארזים \+ 1 בודדים/);
   assert.doesNotMatch(rt.run('retEditRowHtml(returnEdit.items[0], 0)'), /₪/);
   rt.run('retEditConvertPack(0)');
@@ -132,6 +133,60 @@ test('the pack split works without a price; on a fully credited line the packs s
   const s = saved(rt);
   assert.deepEqual(s.items.slice(0, 2).map(l => [l.productId, l.qty, l.noteQty]), [['pack6', 2, undefined], ['code_101', 1, undefined]]);
   assert.ok(s.items.slice(0, 2).every(l => MONEY_LINE.every(k => !Object.hasOwn(l, k))));
+});
+
+test('on a verified document a partly credited or edited line is not offered a pack split, and a carried line never is', () => {
+  const setPack = `products.push({ id: 'pack6', code: '1016', name: 'מארז 6 אחיד', barcode: '1016', price: 30 });
+    const p = products.find(x => x.id === 'code_101'); p.billingPackId = 'pack6'; p.billingPackSize = 6;`;
+  // (א) 13 הוחזרו, 7 זוכו — פיצול היה מחלק את הזיכוי לא נכון
+  const partly = doc({ credited: true, creditStatus: 'open' });
+  partly.items[0].qty = 13; partly.items[0].noteQty = 7;
+  const a = open(partly); a.run(setPack);
+  assert.equal(a.run('retEditPackInfo(0)'), null);
+  assert.doesNotMatch(a.run('retEditRowHtml(returnEdit.items[0], 0)'), /re-pack/);
+  // (ב) שורה שזוכתה במלואה אבל הכמות שלה הועלתה בעריכה
+  const raised = doc({ credited: true, creditStatus: 'ok' });
+  raised.items[0].qty = 13;
+  const b = open(raised); b.run(setPack + ' returnEdit.items[0].qty = 19;');
+  assert.equal(b.run('retEditPackInfo(0)'), null);
+  // (ג) תעודה שטרם אומתה — הפיצול מוצע
+  const fresh = doc(); fresh.items[0].qty = 13;
+  const c = open(fresh); c.run(setPack);
+  assert.notEqual(c.run('retEditPackInfo(0)'), null);
+  // (ד) שורה שהועברה מפער — לעולם לא
+  const carried = doc(); carried.items[0] = { name: 'אחיד פרוס ברמן', barcode: '497112', productId: 'carry_1', qty: 13, carried: true, carriedFrom: 'older' };
+  const e = open(carried); e.run(setPack);
+  assert.equal(e.run('retEditPackInfo(0)'), null);
+});
+
+test('on a verified document removing or zeroing a credited line keeps it at qty 0 with its credit, as over-credit', async () => {
+  const rt = open(doc({ credited: true, creditStatus: 'ok' }));
+  rt.run('retEditRemove(0)');
+  assert.equal(rt.run('returnEdit.items.length'), 4, 'the credited line stays in the editor');
+  assert.equal(rt.run('returnEdit.items[0].qty'), 0);
+  await rt.run('saveReturnItemsEdit()');
+  assert.match(rt.node('confirmMsg').textContent, /יישארו בכמות 0/);
+  await rt.run('saveReturnItemsEdit({ skipDropped: true })');
+  const s = saved(rt);
+  assert.deepEqual([s.items[0].productId, s.items[0].qty, s.items[0].noteQty], ['code_101', 0, 3]);
+  assert.equal(s.creditStatus, 'open');
+  assert.equal(rt.run('returnsDiscrepancyInfo(returns[0]).overUnits'), 3);
+  // שורה שטרם אומתה נמחקת כרגיל
+  const rt2 = open(doc());
+  rt2.run('retEditRemove(0)');
+  assert.equal(rt2.run('returnEdit.items.length'), 3);
+});
+
+test('an item edit that closes a carried gap takes the carried rows back off the open returns list', async () => {
+  const d = doc({ credited: true, creditStatus: 'open', carriedNotes: [{ productId: 'code_101', name: 'אחיד פרוס ברמן', barcode: '497112', qty: 2, at: 1 }] });
+  d.items[0].qty = 5; d.items[0].noteQty = 3;
+  const rt = open(d);
+  rt.run(`returnsList.push({ productId: 'carry_9', name: 'אחיד פרוס ברמן', barcode: '497112', qty: 2, manual: true, carried: true, carriedFrom: 'r1' }); returnsSlots.weekly = returnsList;`);
+  rt.run(`retEditSetQtyLive(0, '3')`);
+  await rt.run('saveReturnItemsEdit()');
+  assert.equal(rt.writes[rt.writes.length - 2].data.creditStatus, 'ok');
+  assert.deepEqual(rt.writes[rt.writes.length - 1].data, { carriedNotes: [] });
+  assert.equal(rt.run('returnsList.length'), 0);
 });
 
 test('merge unites the same product whatever its legacy price; no totals; mergedFrom counts units', () => {
