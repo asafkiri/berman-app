@@ -21,7 +21,7 @@ const promos = Object.entries(month.promos).map(([id, v]) => ({ id, ...v }));
 const recs = Object.values(month.receipts), rets = Object.values(month.returns);
 
 const FNS = ['r2', 'todayStr', 'storedReceiptDate', 'productCode', 'productListPrice',
-  'promoFixedPrice', 'promoActive', 'monthEndPromoForProduct', 'monthEndUnitRebate', 'mtxQty', 'mtxReturnUnit',
+  'promoFixedPrice', 'promoActive', 'monthEndPromoForProduct', 'monthEndUnitRebate', 'mtxQty',
   'mtxPromoUnit', 'vatRateForDoc', 'priceAt', 'invoiceUnitAt', 'priceHistoryWith', 'receiptCreditedShortUnits', 'rangeProductMatrixData'];
 // eslint-disable-next-line no-eval
 const api = eval('let VAT = 0.18;\n' + extractSource(FNS, []) + '\n({ ' + FNS.join(', ') + ' })');

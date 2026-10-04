@@ -56,17 +56,44 @@ test('manual quantity and reconciliation decisions arrive together with the same
   source.run(`openReconcile(); receiptCountingMode = 'manual';
     receiptQuantityReview = {rows: [{productId:'code_238', received:3, expected:4, status:'shortage'}]};
     reconcileData[0].checked = true; reconcileData[0].noteQty = 13;
-    reconcilePaperEntered = true; manualSearchTerm = 'לחם'; manualSearchOpen = true;
-    manualAssigned = [{productId:'code_238', qty:3}]; manualPromoMarks = {code_238:true};
-    noteCheckRows = [{pid:'code_238', st:'shortage', q:3, price:5}]; noteCheckQtyMode = true;
-    detectiveQuestionState = {fingerprint:'review-1', asked:2, constraints:[{pid:'code_238', qty:3}]};`);
+    reconcilePaperEntered = true;`);
   const target = device({ canEdit: true });
   await transfer(source, target);
   for (const expression of ['receiptDraftId', 'receiptCountingMode', 'receiptQuantityReview', 'reconcileData',
-    'reconcilePaperEntered', 'manualSearchTerm', 'manualSearchOpen', 'manualAssigned', 'manualPromoMarks',
-    'noteCheckRows', 'noteCheckQtyMode', 'detectiveQuestionState']) {
+    'reconcilePaperEntered']) {
     assert.deepEqual(plain(target.run(expression)), plain(source.run(expression)), expression);
   }
+  assert.equal(target.requests.length, 0);
+});
+
+// v124: 22 מפתחות של זרימות שהוסרו (הבלש, בדיקת התעודה, הבדיקה הידנית, מבצע בתעודה,
+// הנחת ספק ותביעת זיכוי) ירדו מהטיוטה המשותפת — בלי לשנות את SCHEMA (2) ואת גרסת
+// המטען (1). מכשיר v123 ממלא אותם בברירות מחדל משלו; v124 מתעלם מהם ואינו שולח אותם.
+const V123_ONLY_KEYS = {
+  receiptPromoOnPaper: [], reconcileDetectiveRoundingGap: null, detectiveOpen: false, detectiveStrictNote: '',
+  detectiveScope: null, detectiveQuestionState: { fingerprint: '', asked: 0, constraints: [] }, detectiveLinesWitness: null,
+  noteCheckOpen: false, noteCheckAuto: false, noteCheckRows: [], noteCheckRes: null, noteCheckQtyMode: false,
+  noteCheckForceQty: false, ncPromoResult: null, reconcileSupplierDiscount: 0, reconcileSupplierPromoItems: [],
+  reconcilePromoMismatchItems: [], reconcileSupplierCreditClaim: null, manualSearchTerm: '', manualAssigned: [],
+  manualSearchOpen: false, manualPromoMarks: {}
+};
+test('a v123 draft that still carries the removed keys applies cleanly, and v124 never sends them back', async () => {
+  const source = device();
+  await source.scan();
+  source.run('openReconcile()');
+  const payload = plain(source.run('captureSharedReceipt()'));
+  assert.equal(payload.version, 1, 'the payload version stays 1 — a v123 device throws on any other');
+  Object.keys(V123_ONLY_KEYS).forEach(k => assert.ok(!(k in payload.state), k + ' is not sent'));
+  const legacy = { ...payload, state: { ...payload.state, ...V123_ONLY_KEYS, reconcileSupplierDiscount: 3.2, manualPromoMarks: { code_238: true } } };
+  const target = device({ canEdit: true });
+  target.context.testIncomingReceipt = legacy;
+  target.context.testIncomingMeta = { source: 'remote', canEdit: true, head: target.status.head, revision: 2 };
+  await target.run('applySharedReceipt(testIncomingReceipt, testIncomingMeta)');
+  assert.deepEqual(plain(target.run('reconcileData')), plain(source.run('reconcileData')));
+  const back = plain(target.run('captureSharedReceipt()'));
+  Object.keys(V123_ONLY_KEYS).forEach(k => assert.ok(!(k in back.state), k + ' is not echoed'));
+  assert.deepEqual(Object.keys(plain(target.run('emptySharedReceipt()')).state).sort(), Object.keys(plain(target.run('sharedReceiptBindings()'))).sort(),
+    'the empty state and the bindings list the same keys');
   assert.equal(target.requests.length, 0);
 });
 

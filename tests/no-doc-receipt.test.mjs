@@ -5,14 +5,11 @@
 // הרצה: node tests/no-doc-receipt.test.mjs
 import { extractSource } from './extract.mjs';
 
-const FNS = ['r2', 'moneyDiffCents', 'lineTotalFromUnit', 'todayStr', 'storedReceiptDate',
+const FNS = ['r2', 'lineTotalFromUnit', 'todayStr', 'storedReceiptDate',
   'normNote', 'noteSign', 'notesAnchor', 'receiptAwaitingDoc', 'cloneReceiptDiffItem',
-  'consumeReceiptDiffQty', 'consumeStoredReceiptOffsets', 'supplierCreditClaimOpen',
-  'supplierCreditClaimDeferred', 'aiPriceFindingPromoMatch', 'promoForProduct', 'promoActive',
-  'promoTriggered', 'promoFixedPrice', 'promoPctOf', 'basketQty', 'promoMinUnitsP',
-  'discountedUnitPrice', 'shortCreditToleranceCents', 'shortCreditFullyCovers',
+  'consumeReceiptDiffQty', 'consumeStoredReceiptOffsets',
   'receiptDiscrepancyInfo', 'receiptPaperLineCount', 'productListPrice', 'priceAt'];
-const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;'];
+const CONSTS = [];
 let products = [], promos = [], receiptList = [];
 // eslint-disable-next-line no-eval
 const api = eval(extractSource(FNS, CONSTS) + '\n({ ' + FNS.join(', ') + ' })');

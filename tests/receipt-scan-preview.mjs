@@ -30,7 +30,7 @@ document.getElementById('testRequests').textContent = localStorage.getItem('test
 document.getElementById('testStart').onclick = async () => {
   receiptList = []; receiptNotes = []; recomputeNoteTotal(); receiptDraftId = null;
   receiptOpened = true; receiptDocDate = '2026-09-09'; receiptEntryMode = 'photo'; receiptAnchorSource = null;
-  receiptNoDoc = false; receiptAttachTarget = null; receiptPromoOnPaper = [];
+  receiptNoDoc = false; receiptAttachTarget = null;
   bermanSeedPhotoFirstScan(1);
   aiScanDocuments[0].pages = [{dataUrl:'data:image/jpeg;base64,Zml4dHVyZQ==',orientationConfirmed:true}];
   await bermanRunPaperScanInBackground();

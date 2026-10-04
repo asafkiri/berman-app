@@ -54,9 +54,8 @@ test('save without sending and WhatsApp send write the same quantities-only docu
     assert.doesNotMatch(msgBefore, /₪/);
     assert.equal(rt.requests.length, 0, 'no network');
     if (via === 'send') assert.match(rt.run('window.location.href'), /^https:\/\/wa\.me\/972501234567\?text=/);
-    // returnTotals לא ממציא סכום לתעודה חדשה
-    rt.context.saved = data;
-    assert.deepEqual(JSON.parse(rt.run('JSON.stringify(returnTotals(saved))')), { ex: 0, inc: 0 });
+    // v124: returnTotals הוסר; המסמך עצמו אינו נושא סכום
+    assert.ok(!('totalExVat' in data) && !('totalIncVat' in data), JSON.stringify(Object.keys(data)));
   }
 });
 

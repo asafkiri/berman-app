@@ -32,7 +32,7 @@ let products = productList, returns = [], VAT = 0.18;
 const htmlEscape = v => String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[ch]));
 
 const FNS = ['r2', 'lineTotalFromUnit', 'dDisp', 'fmtMoney', 'vatRateForDoc',
-  'amountIncForDoc', 'returnTotals', 'creditAllocationList', 'returnsBalance', 'returnCreditNotes', 'consumeReturnLinkedCredit',
+  'creditAllocationList', 'returnsBalance', 'returnCreditNotes', 'consumeReturnLinkedCredit',
   'returnCarriedNotes', 'retCarryKey', 'consumeReturnCarriedNotes', 'returnsDiscrepancyInfo',
   'retCarryPlan', 'retCarrySideText', 'retCarryBoxHtml', 'retCarryBtnHtml', 'buildReturnRow', 'anIsCarriedLine', 'anIsDepositLine'];
 // eslint-disable-next-line no-eval
