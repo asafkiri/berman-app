@@ -848,7 +848,7 @@ let sharedReceiptScanToken = null;
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '118'; // v118: המרכזת החודשית לפי כמויות × מחיר הלקוח; היסטוריית מחירים ושורות חשבונית
+const APP_VERSION = '119'; // v119: ההשוואה שורה-שורה לחשבונית ירדה; אימוץ מחיר חשבונית מתוך שורת המוצר
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -862,7 +862,7 @@ const BACKUP_COLLECTIONS = [
   { name: 'returns', label: 'היסטוריית חזרות' },
   { name: 'receipts', label: 'תעודות קליטה' },
   { name: 'promos', label: 'מבצעים' },
-  { name: 'invoices', label: 'חשבוניות חודשיות (שורות שהוקלדו)' },
+  { name: 'invoices', label: 'סה״כ חשבוניות חודשיות שהוקלדו' },
   { name: 'notes', label: 'הערות' },
   { name: 'settings', label: 'הגדרות מחירים' },
   { name: 'config', label: 'הגדרות מערכת' },
@@ -2201,7 +2201,6 @@ function actionTitleFromCloud(actionName, task) {
     'save app config': ['settings', 'שמירת הגדרות מערכת'],
     'create promo': ['promo', 'יצירת מבצע'],
     'adopt invoice price': ['price', 'אימוץ מחיר מהחשבונית'],
-    'assign invoice alt code': ['product', 'שיוך קוד חשבונית למוצר'],
     'save promo': ['promo', 'שמירת מבצע'],
     'restore from trash': ['restore', 'שחזור מסל מחזור'],
     'delete trash item': ['delete', 'מחיקה לצמיתות מסל מחזור'],
@@ -2225,10 +2224,9 @@ function actionDetailsFromCloud(actionName, task) {
   if (actionName === 'split credit note to shortage' || actionName === 'cancel credit note split') return (task && task.summary) || '';
   if (actionName === 'add product' || actionName === 'create product' || actionName === 'save product') return d.name ? ('מוצר: ' + d.name + ' · מומלץ: ' + (d.average || 0) + ' · ברירת מחדל: ' + (d.defaultUnit === 'unit' ? 'יחידות' : 'ארגז')) : '';
   if (actionName === 'sync legacy default units') return 'סונכרנו בחירות ארגז/יחידה מהמכשיר הזה לענן';
-  if (actionName === 'adopt invoice price' || actionName === 'assign invoice alt code') {
+  if (actionName === 'adopt invoice price') {
     const id = task && task.path ? task.path[task.path.length - 1] : '';
     const p = products.find(x => x.id === id);
-    if (actionName === 'assign invoice alt code') return (p ? p.name + ' · ' : '') + 'קודים בחשבונית: ' + ((d.altCodes || []).join(', '));
     const last = (d.priceHistory || []).slice(-1)[0];
     return (p ? p.name + ' · ' : '') + (last ? '₪' + fmt3(last.price) + ' מ-' + dDisp(last.from) : '');
   }
@@ -17851,7 +17849,8 @@ function mtxRowFlags(row) {
 // התצוגה הראשית: שורה לכל מוצר על כל רוחב המסך, בלי גלילה לצדדים —
 // אותן שלוש עמודות שמשווים מול הנייר (כמות, מחיר, לתשלום), במחירי החשבונית.
 // לחיצה על מוצר פותחת מתחתיו את הימים שלו, אחד מתחת לשני.
-function rangeProductListHtml(m) {
+function rangeProductListHtml(m, adoptMonth) {
+  adoptMonth = adoptMonth || todayStr().slice(0, 7);
   const COLS = 'display:grid;grid-template-columns:1fr 3.1rem 3.4rem 4.7rem;align-items:stretch';
   const numCell = 'flex flex-col items-center justify-center text-center border-r border-slate-200 px-0.5';
   const head = '<div class="text-[11px] font-black text-slate-400 bg-slate-50 border-y-2 border-slate-200 rounded-t-lg" style="' + COLS + '">' +
@@ -17870,6 +17869,13 @@ function rangeProductListHtml(m) {
         '<div class="' + numCell + ' py-1 font-black text-slate-700" dir="ltr">' + fmtMoney(c.amt) + '</div>' +
       '</div>';
     }).join('');
+    // v119: מחיר אחר בחשבונית — מאמצים מכאן, מתאריך שנבחר; product.price אינו משתנה
+    const adoptHtml = row.product
+      ? '<div class="flex flex-wrap items-center gap-1 mt-1.5 pt-1.5 px-1 border-t border-slate-200 text-[10px] font-bold text-slate-500"><span>מחיר אחר בחשבונית?</span>' +
+        '<input data-role="inv-price-input" data-key="' + htmlEscape(row.key) + '" type="text" inputmode="decimal" placeholder="' + fmt3(row.unit) + '" class="w-16 h-8 text-center font-black border border-slate-300 rounded-lg bg-white text-[12px] outline-none focus:border-blue-500">' +
+        '<select data-role="inv-from" data-key="' + htmlEscape(row.key) + '" class="h-8 text-[11px] font-bold bg-white border border-slate-300 rounded-lg px-1">' + invoiceAdoptMonths(adoptMonth).map(o => '<option value="' + o.from + '">מ' + htmlEscape(o.label) + '</option>').join('') + '</select>' +
+        '<button data-role="inv-adopt" data-pid="' + htmlEscape(row.product.id) + '" data-key="' + htmlEscape(row.key) + '" class="btn-tap bg-amber-500 text-white rounded-lg px-2 h-8 text-[11px] font-black">אמץ</button></div>'
+      : '';
     const subQty = (row.credited || row.received !== row.billed)
       ? '<div class="text-[10px] font-bold text-slate-400">חויב ' + mtxQty(row.billed) + (row.credited ? ' · זוכה ' + mtxQty(row.credited) : '') + (row.received !== row.billed ? ' · נספר ' + mtxQty(row.received) : '') + '</div>' : '';
     return '<details class="border-b border-slate-200">' +
@@ -17886,6 +17892,7 @@ function rangeProductListHtml(m) {
       '</summary>' +
       '<div class="bg-slate-50 rounded-lg px-1 py-1 mb-1.5 border border-slate-200">' +
         '<div class="text-[10px] font-bold text-slate-400 pb-0.5 pr-1">הימים של הפריט הזה בתקופה · חויב לפי התעודה, זוכה = החזרות וחוסרים שזוכו</div>' + dayHead + dayRows +
+        adoptHtml +
       '</div>' +
     '</details>';
   }).join('');
@@ -17970,7 +17977,7 @@ function rangeProductMatrixHtml(d) {
   return '<details open class="mt-3 bg-white border-2 border-slate-200 rounded-xl overflow-hidden"><summary class="cursor-pointer p-3 font-black text-sm text-slate-700"><i class="fa-solid fa-list-ul text-amber-600"></i> פירוט לפי מוצר — כמו בחשבונית המפורטת</summary>' +
     '<div class="px-3 pb-3">' +
       '<div class="text-[11px] text-slate-400 font-bold mb-2">שורה לכל פריט לפי קוד, כמו סדר החשבונית. הכמות היא מה שחויב בתעודות פחות מה שזוכה; המחיר הוא מחיר הלקוח (ומבצע מרכזת) ביום התעודה, לא המחיר שהודפס בתעודה. לחיצה על פריט פותחת את הימים שלו.</div>' +
-      rangeProductListHtml(m) +
+      rangeProductListHtml(m, String(d.to || todayStr()).slice(0, 7)) +
       '<div class="text-[11px] text-slate-400 font-bold mt-2">' + m.list.length + ' פריטים · ' + m.days.length + ' ימי תנועה · <i class="fa-solid fa-tag text-rose-500"></i> מבצע (במחיר המבצע) · <i class="fa-solid fa-arrow-right-arrow-left text-amber-600"></i> המחיר השתנה בתקופה</div>' +
       promoNote +
       rangeProductGridHtml(m) +
@@ -19372,9 +19379,9 @@ function rangeDocsMerged(name) {
   const seen = new Set(base.map(x => x.id));
   return base.concat(extra.filter(x => x && x.id && !seen.has(x.id)));
 }
-// ===== v118: שורות החשבונית — מוקלדות לצד הטבלה ונשמרות לפי חודש =====
-// invoices/{YYYY-MM} = { month, totalEx, lines: { [code]: { qty, price } } }.
-// ההשוואה שורה-שורה זמינה רק כשהטווח הוא חודש קלנדרי אחד, כי כך החשבונית בנויה.
+// ===== v118/v119: סה"כ החשבונית שהוקלד נשמר לפי חודש =====
+// invoices/{YYYY-MM} = { month, totalEx }. (ההשוואה שורה-שורה שהייתה ב-v118 ירדה
+// ב-v119 — ההשוואה נעשית בעין מול הטבלה, שבנויה בדיוק במבנה החשבונית.)
 let monthInvoice = null;
 let monthInvoiceTimer = null;
 function rangeMonthKey(from, to) {
@@ -19387,55 +19394,16 @@ async function loadMonthInvoice(month) {
   if (monthInvoice && monthInvoice.month === month) return false;
   let data = {};
   if (db) { try { const snap = await getDoc(doc(db, ...dataPath('invoices', month))); if (snap.exists()) data = snap.data() || {}; } catch (e) { console.error(e); } }
-  monthInvoice = { month, totalEx: data.totalEx != null ? Number(data.totalEx) : null, lines: data.lines && typeof data.lines === 'object' ? data.lines : {} };
+  monthInvoice = { month, totalEx: data.totalEx != null ? Number(data.totalEx) : null };
   return true;
 }
 function saveMonthInvoice() {
   if (!monthInvoice || !monthInvoice.month) return;
   clearTimeout(monthInvoiceTimer);
-  const payload = { month: monthInvoice.month, totalEx: monthInvoice.totalEx, lines: cloneSafe(monthInvoice.lines), updatedAt: Date.now() };
+  const payload = { month: monthInvoice.month, totalEx: monthInvoice.totalEx, updatedAt: Date.now() };
   monthInvoiceTimer = setTimeout(() => {
     runCloudTaskSilent('save invoice lines', { op: 'set', path: dataPath('invoices', payload.month), data: payload, merge: true, operationId: makeOperationId('inv') });
   }, 700);
-}
-function setInvoiceLine(code, field, raw) {
-  if (!monthInvoice) return;
-  code = String(code || '').trim(); if (!code) return;
-  // שורה של החזרות בלבד מודפסת בכמות שלילית (1220 בחשבונית מאי: −4)
-  const negative = /^\s*[-−]/.test(String(raw || ''));
-  let v = parseNoteVal(raw, field === 'price' ? 3 : 2);
-  if (v != null && negative && field === 'qty') v = -v;
-  const line = { ...(monthInvoice.lines[code] || {}) };
-  if (v == null) delete line[field]; else line[field] = v;
-  if (line.qty == null && line.price == null) delete monthInvoice.lines[code]; else monthInvoice.lines[code] = line;
-  saveMonthInvoice();
-}
-// המוצר שאליו שייכת שורת חשבונית: לפי קוד, או לפי קוד חלופי שברמן נתנה לאותו
-// מוצר (458 "חלומית ארוזה" ו-4581 "חלומית ארוזה עגולה" על אותו ברקוד).
-function productForInvoiceCode(code) {
-  code = String(code || '').trim();
-  return products.find(p => productCode(p) === code) || products.find(p => Array.isArray(p.altCodes) && p.altCodes.map(String).indexOf(code) !== -1) || null;
-}
-function invoiceCodesOfRow(row) {
-  const codes = [];
-  if (row.code) codes.push(String(row.code));
-  (row.product && Array.isArray(row.product.altCodes) ? row.product.altCodes : []).forEach(c => { if (codes.indexOf(String(c)) === -1) codes.push(String(c)); });
-  return codes;
-}
-// השוואת שורה לחשבונית: 'ok' | 'qty' | 'price' | 'amount' | 'none'
-function invoiceRowCompare(row, inv) {
-  const lines = invoiceCodesOfRow(row).map(code => ({ code, ...(inv.lines[code] || {}) })).filter(l => l.qty != null || l.price != null);
-  if (!lines.length) return { status: 'none', lines };
-  const invQty = lines.reduce((a, l) => a + (Number(l.qty) || 0), 0);
-  const invAmount = r2(lines.reduce((a, l) => a + (Number(l.qty) || 0) * (Number(l.price) || 0), 0));
-  const out = { lines, invQty, invAmount, qtyDiff: r2(invQty - row.expectedQty), amountDiff: r2(invAmount - row.amount) };
-  if (Math.abs(out.qtyDiff) > 0.001) out.status = 'qty';
-  // ברמן מדפיסה את מחיר הלקוח בשלוש ספרות אחרי הנקודה ומכפילה אותו; הבדל
-  // בספרה השלישית (5.7408 מול 5.741) כבר מזיז את השורה באגורות
-  else if (lines.length === 1 && lines[0].price != null && Math.round(Number(lines[0].price) * 1000) !== Math.round(row.unit * 1000)) { out.status = 'price'; out.invPrice = Number(lines[0].price); }
-  else if (Math.abs(out.amountDiff) > 0.05) out.status = 'amount';
-  else out.status = 'ok';
-  return out;
 }
 function invoiceAdoptMonths(month) {
   const out = [];
@@ -19448,108 +19416,15 @@ function invoiceAdoptMonths(month) {
   out.push({ from: todayStr(), label: 'מהיום' });
   return out;
 }
-function invoiceChipHtml(row, cmp, month) {
-  const id = 'invChip_' + row.key.replace(/[^a-zA-Z0-9_-]/g, '_');
-  let inner;
-  if (cmp.status === 'none') inner = '<span class="text-slate-400">לא הוקלד</span>';
-  else if (cmp.status === 'ok') inner = '<span class="text-emerald-700"><i class="fa-solid fa-circle-check"></i> תואם</span>';
-  else if (cmp.status === 'qty') inner = '<span class="text-rose-700"><i class="fa-solid fa-triangle-exclamation"></i> כמות: אצלנו ' + mtxQty(row.expectedQty) + ' · בחשבונית ' + mtxQty(cmp.invQty) + ' (' + (cmp.qtyDiff > 0 ? '+' : '') + mtxQty(cmp.qtyDiff) + ')</span>';
-  else if (cmp.status === 'price') {
-    const opts = invoiceAdoptMonths(month).map(o => '<option value="' + o.from + '">' + htmlEscape(o.label) + '</option>').join('');
-    inner = '<span class="text-amber-700"><i class="fa-solid fa-tag"></i> מחיר: אצלנו ' + fmt3(row.unit) + ' · בחשבונית ' + fmt3(cmp.invPrice) + '</span>' +
-      (row.product ? '<span class="inline-flex items-center gap-1 mr-2"><select data-role="inv-from" data-key="' + htmlEscape(row.key) + '" class="text-[11px] font-bold bg-white border border-amber-300 rounded-lg px-1 py-0.5">' + opts + '</select>' +
-        '<button data-role="inv-adopt" data-pid="' + htmlEscape(row.product.id) + '" data-price="' + cmp.invPrice + '" data-key="' + htmlEscape(row.key) + '" class="btn-tap bg-amber-500 text-white rounded-lg px-2 py-0.5 text-[11px] font-black">אמץ את מחיר החשבונית</button></span>' : '');
-  } else inner = '<span class="text-amber-700"><i class="fa-solid fa-circle-info"></i> סכום: אצלנו ₪' + fmtMoney(row.amount) + ' · בחשבונית ₪' + fmtMoney(cmp.invAmount) + '</span>';
-  return '<div id="' + id + '" class="text-[11px] font-bold mt-0.5">' + inner + '</div>';
-}
-function refreshInvoiceChips() {
-  if (!monthInvoice || !lastRangeData || !lastRangeData.matrix) return;
-  lastRangeData.matrix.list.forEach(row => {
-    const el = document.getElementById('invChip_' + row.key.replace(/[^a-zA-Z0-9_-]/g, '_'));
-    if (el) el.outerHTML = invoiceChipHtml(row, invoiceRowCompare(row, monthInvoice), monthInvoice.month);
-  });
-  const sum = $('invSummary'); if (sum) sum.innerHTML = invoiceSummaryText(lastRangeData.matrix, monthInvoice);
-}
-function invoiceSummaryText(m, inv) {
-  let ok = 0, typed = 0;
-  m.list.forEach(row => { const c = invoiceRowCompare(row, inv); if (c.status !== 'none') typed++; if (c.status === 'ok') ok++; });
-  const extra = invoiceExtraLines(m, inv);
-  return typed ? (ok + ' מתוך ' + typed + ' שורות שהוקלדו תואמות' + (extra.length ? ' · ' + extra.length + ' שורות בחשבונית בלי תנועה אצלנו' : '')) : 'הקלד כמות ומחיר מהחשבונית ליד כל שורה; ההשוואה מתעדכנת מיד';
-}
-// שורות חשבונית שאין להן שורה בטבלה: מוצר בלי תנועה החודש, או קוד שאינו במאגר
-function invoiceExtraLines(m, inv) {
-  const used = new Set();
-  m.list.forEach(row => invoiceCodesOfRow(row).forEach(c => used.add(c)));
-  return Object.keys(inv.lines || {}).filter(code => !used.has(code)).sort().map(code => ({ code, ...(inv.lines[code] || {}), product: productForInvoiceCode(code) }));
-}
-function rangeInvoiceSectionHtml(d) {
-  const month = rangeMonthKey(d.from, d.to);
-  const m = d.matrix;
-  const head = '<div class="font-black text-slate-800 text-sm flex items-center gap-2"><i class="fa-solid fa-file-circle-check text-blue-600"></i> שורות החשבונית — השוואה שורה-שורה</div>';
-  if (!month) return '<div class="mt-3 bg-white border-2 border-slate-200 rounded-xl p-3">' + head + '<div class="text-[11px] text-slate-500 font-bold mt-1">בחר חודש קלנדרי שלם ("חודש שעבר" / "החודש הנוכחי") כדי להקליד את שורות החשבונית ולהשוות אותן.</div></div>';
-  if (!monthInvoice || monthInvoice.month !== month) return '<div class="mt-3 bg-white border-2 border-slate-200 rounded-xl p-3">' + head + '<div class="text-[11px] text-slate-500 font-bold mt-1">טוען את שורות החשבונית של ' + month + '…</div></div>';
-  const inv = monthInvoice;
-  const COLS = 'display:grid;grid-template-columns:1fr 4.2rem 4.6rem;align-items:center;gap:.25rem';
-  const input = (code, field, val, ph) => '<input data-role="inv-' + field + '" data-code="' + htmlEscape(code) + '" type="text" inputmode="decimal" value="' + (val != null ? val : '') + '" placeholder="' + ph + '" class="w-full h-9 text-center font-black border-2 border-slate-200 rounded-lg outline-none focus:border-blue-500 bg-white text-sm">';
-  const rows = m.list.map(row => {
-    const cmp = invoiceRowCompare(row, inv);
-    const codes = invoiceCodesOfRow(row);
-    const inputs = codes.map(code => {
-      const l = inv.lines[code] || {};
-      return '<div style="' + COLS + '" class="py-0.5">' +
-        '<div class="min-w-0 text-[11px] font-bold text-slate-500 truncate">' + (codes.length > 1 ? 'קוד ' + htmlEscape(code) : '') + '</div>' +
-        '<div>' + input(code, 'qty', l.qty, 'כמות') + '</div><div>' + input(code, 'price', l.price, 'מחיר') + '</div></div>';
-    }).join('');
-    return '<div class="border-b border-slate-200 py-1.5">' +
-      '<div style="' + COLS + '">' +
-        '<div class="min-w-0"><div class="text-[13px] font-black text-slate-800 truncate">' + htmlEscape(row.name) + '</div>' +
-          '<div class="text-[11px] font-bold text-slate-400">קוד ' + htmlEscape(row.code || '—') + ' · אצלנו ' + mtxQty(row.expectedQty) + ' × ' + fmt3(row.unit) + ' = ₪' + fmtMoney(row.amount) + '</div></div>' +
-        (codes.length === 1 ? '<div>' + input(codes[0], 'qty', (inv.lines[codes[0]] || {}).qty, 'כמות') + '</div><div>' + input(codes[0], 'price', (inv.lines[codes[0]] || {}).price, 'מחיר') + '</div>' : '<div></div><div></div>') +
-      '</div>' +
-      (codes.length > 1 ? inputs : '') +
-      invoiceChipHtml(row, cmp, month) +
-    '</div>';
-  }).join('');
-  const extra = invoiceExtraLines(m, inv);
-  const prodOptions = products.filter(p => !p.hidden).slice().sort((a, b) => productCode(a).localeCompare(productCode(b))).map(p => '<option value="' + htmlEscape(p.id) + '">' + htmlEscape(productCode(p) + ' · ' + p.name) + '</option>').join('');
-  const extraHtml = extra.length ? '<div class="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-2">' +
-    '<div class="text-[11px] font-black text-amber-800 mb-1">בחשבונית ואין להן שורה למעלה</div>' +
-    extra.map(x => '<div class="flex flex-wrap items-center justify-between gap-2 py-1 border-b border-amber-100 last:border-0 text-xs font-bold text-slate-700">' +
-      '<span>קוד ' + htmlEscape(x.code) + (x.product ? ' · ' + htmlEscape(x.product.name) + ' (אין תנועה אצלנו החודש)' : ' · <span class="text-rose-700">לא במאגר</span>') + ' · ' + (x.qty != null ? mtxQty(x.qty) + ' יח׳' : '') + (x.price != null ? ' × ' + fmt3(x.price) : '') + '</span>' +
-      (x.product ? '' : '<span class="inline-flex items-center gap-1"><select data-role="inv-assign-select" data-code="' + htmlEscape(x.code) + '" class="text-[11px] font-bold bg-white border border-amber-300 rounded-lg px-1 py-0.5 max-w-[11rem]"><option value="">שייך למוצר…</option>' + prodOptions + '</select><button data-role="inv-assign" data-code="' + htmlEscape(x.code) + '" class="btn-tap bg-amber-500 text-white rounded-lg px-2 py-0.5 text-[11px] font-black">שייך</button></span>') +
-      '<button data-role="inv-remove-line" data-code="' + htmlEscape(x.code) + '" class="btn-tap text-rose-600 text-[11px] font-black"><i class="fa-solid fa-trash-can"></i></button>' +
-    '</div>').join('') + '</div>' : '';
-  const addHtml = '<div class="mt-3 flex items-center gap-1">' +
-    '<input id="invNewCode" type="text" inputmode="numeric" placeholder="קוד" class="w-16 h-9 text-center font-black border-2 border-slate-200 rounded-lg outline-none focus:border-blue-500 bg-white text-sm">' +
-    '<input id="invNewQty" type="text" inputmode="decimal" placeholder="כמות" class="w-16 h-9 text-center font-black border-2 border-slate-200 rounded-lg outline-none focus:border-blue-500 bg-white text-sm">' +
-    '<input id="invNewPrice" type="text" inputmode="decimal" placeholder="מחיר" class="w-20 h-9 text-center font-black border-2 border-slate-200 rounded-lg outline-none focus:border-blue-500 bg-white text-sm">' +
-    '<button data-role="inv-add-line" class="btn-tap flex-1 bg-slate-100 text-slate-700 rounded-lg h-9 px-2 text-[11px] font-black">הוסף שורה מהחשבונית שלא מופיעה למעלה</button></div>';
-  return '<details open class="mt-3 bg-white border-2 border-slate-200 rounded-xl overflow-hidden"><summary class="cursor-pointer p-3">' + head + '</summary>' +
-    '<div class="px-3 pb-3">' +
-      '<div id="invSummary" class="text-[11px] text-slate-500 font-bold mb-2">' + invoiceSummaryText(m, inv) + '</div>' +
-      rows + extraHtml + addHtml +
-    '</div></details>';
-}
 async function adoptInvoicePrice(pid, price, from) {
   const p = products.find(x => x.id === pid); if (!p) return;
   const amount = Number(price); if (!(amount > 0)) return;
   const fromDay = String(from || todayStr()).slice(0, 10);
-  const month = monthInvoice && monthInvoice.month ? monthInvoice.month : fromDay.slice(0, 7);
-  const priceHistory = priceHistoryWith(p, fromDay, amount, { method: 'invoice', month, adoptedAt: Date.now() });
+  const priceHistory = priceHistoryWith(p, fromDay, amount, { method: 'invoice', month: fromDay.slice(0, 7), adoptedAt: Date.now() });
   const ok = await runCloudTask('adopt invoice price', { op: 'update', path: dataPath('products', pid), data: { priceHistory }, operationId: makeOperationId('price_hist') });
   if (!ok) return;
   p.priceHistory = priceHistory;
   showToast(p.name + ': מחיר חשבונית ₪' + fmt3(amount) + ' מ-' + dDisp(fromDay) + ' — המרכזת חושבה מחדש', null, null, 3500);
-  calcReceiptRange();
-}
-async function assignInvoiceAltCode(code, pid) {
-  const p = products.find(x => x.id === pid); if (!p) return;
-  code = String(code || '').trim(); if (!code) return;
-  const altCodes = (Array.isArray(p.altCodes) ? p.altCodes.map(String) : []).filter(c => c !== code).concat([code]);
-  const ok = await runCloudTask('assign invoice alt code', { op: 'update', path: dataPath('products', pid), data: { altCodes }, operationId: makeOperationId('alt_code') });
-  if (!ok) return;
-  p.altCodes = altCodes;
-  showToast('קוד ' + code + ' שויך ל"' + p.name + '"', null, null, 2500);
   calcReceiptRange();
 }
 // תעודות וחזרות של הטווח נטענות במיוחד: ה-snapshot מחזיק רק את 100 התעודות
@@ -19578,7 +19453,6 @@ function renderRangeResult(from, to) {
     supplierPaymentModeCardsHtml(d) +
     supplierCalculationStepsHtml(d) +
     rangeProductMatrixHtml(d) +
-    rangeInvoiceSectionHtml(d) +
     rangeDailyHtml(d) +
     (d.openCnt ? '<div class="text-[11px] text-rose-700/80 font-bold mt-2 bg-rose-50 rounded-lg p-2"><i class="fa-solid fa-clipboard-question"></i> ' + d.openCnt + ' תעודות פתוחות בטווח — חוסרים שטרם זוכו מסומנים בטבלה לפי מוצר</div>' : '') +
     supplierStatementVerifyHtml(d);
@@ -19693,11 +19567,11 @@ function compareSupplierStatement() {
     const claimsMatch = d.openClaimsEx > 0 && Math.abs(diff - d.openClaimsEx) <= tolerance;
     html = '<div class="bg-rose-50 border-2 border-rose-200 rounded-xl p-3 text-rose-800 text-xs font-bold"><div class="font-black text-sm"><i class="fa-solid fa-triangle-exclamation"></i> החשבונית גבוהה מהמערכת ב־₪' + fmtMoney(diff) + ' (לפני מע״מ)</div><div class="mt-1">לפי המערכת: ₪' + fmtMoney(d.netEx) + ' · לפי החשבונית: ₪' + fmtMoney(supplierInc) + '</div>' +
       (claimsMatch ? '<div class="mt-2 bg-white/80 rounded-lg p-2">הפער שווה בדיוק לחוסרים שטרם זוכו (₪' + fmtMoney(d.openClaimsEx) + '). ברמן חייבה יחידות שלא התקבלו — דרוש זיכוי.</div>'
-        : '<div class="mt-2 bg-white/80 rounded-lg p-2">הקלד את שורות החשבונית למעלה: הצ׳יפ ליד כל שורה יראה אם הפער בכמות (תעודה שלא נקלטה, החזרה שלא זוכתה) או במחיר (מחיר לקוח שונה — אפשר לאמץ בלחיצה).</div>') + '</div>';
+        : '<div class="mt-2 bg-white/80 rounded-lg p-2">רוץ שורה מול שורה בטבלה למעלה: כמות שונה (תעודה שלא נקלטה, החזרה שלא זוכתה) או מחיר שונה (פותחים את המוצר ומאמצים את מחיר החשבונית).</div>') + '</div>';
   } else {
     const lower = r2(-diff);
     html = '<div class="bg-blue-50 border-2 border-blue-200 rounded-xl p-3 text-blue-900 text-xs font-bold"><div class="font-black text-sm"><i class="fa-solid fa-circle-info"></i> החשבונית נמוכה מהמערכת ב־₪' + fmtMoney(lower) + ' (לפני מע״מ)</div><div class="mt-1">לפי המערכת: ₪' + fmtMoney(d.netEx) + ' · לפי החשבונית: ₪' + fmtMoney(supplierInc) + '</div>' +
-      '<div class="mt-2 bg-white/80 rounded-lg p-2">כנראה מחיר לקוח נמוך יותר באחד המוצרים (כמו לחמנ׳ עננים 10: 12.00 בחשבונית מול 14.28 בתעודות), או זיכוי שלא סומן במערכת. הקלד את שורות החשבונית למעלה כדי לראות איזו שורה.</div></div>';
+      '<div class="mt-2 bg-white/80 rounded-lg p-2">כנראה מחיר לקוח נמוך יותר באחד המוצרים (כמו לחמנ׳ עננים 10: 12.00 בחשבונית מול 14.28 בתעודות), או זיכוי שלא סומן במערכת. רוץ שורה מול שורה בטבלה למעלה.</div></div>';
   }
   out.innerHTML = html + discHtml;
   out.classList.remove('hidden');
@@ -23100,7 +22974,6 @@ $('rsBody').addEventListener('change', e => {
 });
 $('scanPriceNotice').addEventListener('click', () => { closeScanner(); renderReceiving(); const panel = app.querySelector('[data-price-panel]'); if (panel) panel.open = true; const details = app.querySelector('[data-price-details]'); if (details) { details.open = true; details.scrollIntoView({ block: 'start' }); } });
 app.addEventListener('change', (e) => {
-  if (e.target.dataset.role === 'inv-qty' || e.target.dataset.role === 'inv-price') { setInvoiceLine(e.target.dataset.code, e.target.dataset.role === 'inv-qty' ? 'qty' : 'price', e.target.value); refreshInvoiceChips(); return; }
   if (e.target.dataset.role === 'price-doc-date') { priceAuditSetDate(Number(e.target.dataset.doc), e.target.value); return; }
   const t = e.target;
   // v32: בסיום הקלדת כמות (blur/Enter) בנייה מלאה אחת — הפוקוס כבר עוזב את
@@ -23628,10 +23501,7 @@ app.addEventListener('click', (e) => {
   else if (role === 'rc-minus') changeReceiptQty(id, -1);
   else if (role === 'rc-remove') removeReceiptLine(id);
   else if (role === 'rc-calc') calcReceiptRange();
-  else if (role === 'inv-adopt') { const sel = app.querySelector('select[data-role="inv-from"][data-key="' + CSS.escape(t.dataset.key || '') + '"]'); adoptInvoicePrice(t.dataset.pid, Number(t.dataset.price), sel ? sel.value : ''); }
-  else if (role === 'inv-assign') { const sel = app.querySelector('select[data-role="inv-assign-select"][data-code="' + CSS.escape(t.dataset.code || '') + '"]'); if (sel && sel.value) assignInvoiceAltCode(t.dataset.code, sel.value); else showToast('בחר מוצר לשיוך', null, null, 2000); }
-  else if (role === 'inv-add-line') { const code = String(($('invNewCode') || {}).value || '').trim(); if (!code || !monthInvoice) { showToast('הקלד קוד פריט מהחשבונית', null, null, 2000); return; } setInvoiceLine(code, 'qty', ($('invNewQty') || {}).value); setInvoiceLine(code, 'price', ($('invNewPrice') || {}).value); renderRangeResult($('rcFrom') ? $('rcFrom').value : '', $('rcTo') ? $('rcTo').value : ''); }
-  else if (role === 'inv-remove-line') { if (monthInvoice) { delete monthInvoice.lines[String(t.dataset.code || '')]; saveMonthInvoice(); renderRangeResult($('rcFrom') ? $('rcFrom').value : '', $('rcTo') ? $('rcTo').value : ''); } }
+  else if (role === 'inv-adopt') { const key = CSS.escape(t.dataset.key || ''); const inp = app.querySelector('input[data-role="inv-price-input"][data-key="' + key + '"]'); const sel = app.querySelector('select[data-role="inv-from"][data-key="' + key + '"]'); const price = parseNoteVal(inp ? inp.value : '', 3); if (!(price > 0)) { showToast('הקלד את המחיר ליחידה מהחשבונית (ללא מע״מ)', null, null, 2500); return; } adoptInvoicePrice(t.dataset.pid, price, sel ? sel.value : ''); }
   else if (role === 'seed-catalog') seedBermanCatalog();
   else if (role === 'rc-month-cur') setRangeMonth(0);
   else if (role === 'rc-month-prev') setRangeMonth(-1);
