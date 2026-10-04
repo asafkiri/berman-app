@@ -306,7 +306,8 @@ test('שורות פיקדון ושורות שהועברו מפער אינן צו
   await rt.click('rv-not-credited', '0');
   assert.equal(rt.run('rvFormCandidates().length'), 0);
   assert.equal(summary(rt).gap, 17);
-  assert.deepEqual(summary(rt).shortItems, [{ name: 'לחמניות 10 בשקית', qty: 2, total: 17 }], 'the claim is valued at the credited price');
+  assert.equal(state(rt).items[0].unitPrice, 10.399818, 'not credited: back to the regular price');
+  assert.deepEqual(summary(rt).shortItems, [{ name: 'לחמניות 10 בשקית', qty: 2, total: 20.8 }], 'the claim is valued at the regular price');
   await checkAll(rt);
   await rt.run('saveReturnVerify({ skipGap: true })');
   const saved = rt.writes[0].data;
@@ -357,4 +358,192 @@ test('תעודת חזרה שנשלחת עכשיו נושאת על כל שורה 
   assert.equal(sent[0].lineTotal, 10.4);
   assert.equal(Object.hasOwn(sent[1], 'sentUnitPrice'), false, 'a manual line has no catalog price behind it');
   assert.equal(sent[1].unitPrice, 4.5);
+});
+
+// ===== השלמות אחרי הסקירה =====
+
+test('חוסר שהוחזר לרשימת החזרות נתבע במחיר המדויק — החוב נסגר לאגורה והתעודה הבאה נושאת אותו מחיר', async () => {
+  const items = [line(101, 13), line(3701, 2)];
+  const rt = open(doc(items, '2026-10-04'), 23, "returnsList = []; returnsSlots = { weekly: returnsList, daily: [] }; returnsSlot = 'weekly';");
+  await rt.click('rv-not-credited', '0');
+  await checkAll(rt);
+  assert.equal(summary(rt).gap, 0);
+  await saveClick(rt);
+  assert.equal(rt.writes[0].data.creditStatus, 'open');
+  assert.equal(rt.run('returnsDiscrepancyInfo(returns[0]).shortVal'), 74.63);
+  assert.equal(rt.run('returnsDiscrepancyInfo(returns[0]).owed'), 74.63);
+  const plan = JSON.parse(rt.run('JSON.stringify(retCarryPlan(returns[0]))'));
+  assert.equal(plan.items[0].price, 5.7408);
+  assert.equal(plan.val, 74.63);
+  await rt.run("saveReturnCarry('test-return', retCarryPlan(returns[0]))");
+  assert.equal(rt.run('returnsDiscrepancyInfo(returns[0]).owed'), 0);
+  assert.equal(rt.run('returnsBalance().bal'), 0);
+  assert.equal(rt.run('returnsList[0].unitPrice'), 5.7408);
+  assert.equal(rt.run('returnsList[0].carried'), true);
+  const sent = JSON.parse(rt.run('openReturnsSend(); JSON.stringify(sendCtx.items)'));
+  assert.equal(sent[0].unitPrice, 5.7408);
+  assert.equal(sent[0].lineTotal, 74.63);
+  assert.equal(sent[0].carried, true);
+  // שורה מועברת שנייה באותו מחיר מתאחדת לשורה אחת
+  await rt.run("saveReturnCarry('test-return', { items: [{ name: 'אחיד פרוס ברמן', barcode: '497112', qty: 1, price: 5.7408, amountOnly: false }], val: 5.74 })");
+  assert.equal(rt.run('returnsList.length'), 1);
+  assert.equal(rt.run('returnsList[0].qty'), 14);
+});
+
+test('"לא זוכה" על שורה שעמדה על מחיר המבצע מחזיר אותה למחיר הרגיל — החוסר נתבע במחיר המלא ואין "מבצע בתעודה"', async () => {
+  const items = [line(1231, 1), line(3701, 2), line(101, 7)];
+  const rt = open(doc(items, '2026-10-04'), 71.69);
+  assert.equal(state(rt).items[0].unitPrice, 8.5);
+  await rt.click('rv-not-credited', '0');
+  assert.equal(state(rt).items[0].unitPrice, 10.399818);
+  assert.doesNotMatch(row(rt, 0), /rv-form-/);
+  assert.deepEqual(summary(rt).shortItems, [{ name: 'לחמניות 10 בשקית', qty: 1, total: 10.4 }]);
+  assert.doesNotMatch(summaryHtml(rt), /מבצע בתעודה/);
+  await checkAll(rt);
+  await rt.run('saveReturnVerify({ skipGap: true })');
+  const saved = rt.writes[0].data;
+  assert.equal(saved.items[0].unitPrice, 10.399818);
+  assert.equal(saved.items[0].noteQty, 0);
+  assert.equal(Object.hasOwn(saved.items[0], 'priceForm'), false);
+  assert.equal(Object.hasOwn(saved.items[0], 'promoOnPaper'), false);
+  // גם דרך כפתור המינוס
+  const rt2 = open(doc(items, '2026-10-04'), 71.69);
+  await rt2.click('rv-minus', '0');
+  assert.equal(state(rt2).items[0].noteQty, 0);
+  assert.equal(state(rt2).items[0].unitPrice, 10.399818);
+  await rt2.click('rv-plus', '0');
+  assert.match(row(rt2, 0), /rv-form-regular" data-id="0" aria-pressed="true"/, 'back to one unit: chips return, at the regular price');
+});
+
+test('שורה שנשמרה לפני v116 כבר במחיר המבצע (בלי דגל) מזוהה כצורת מחיר: צ\'יפ מבצע, מחיר רגיל משוחזר, ותיעוד בשמירה', async () => {
+  const items = [{ name: 'לחמניות 10 בשקית', barcode: '498256', code: '1231', productId: 'code_1231', qty: 1, unitPrice: 8.5, lineTotal: 8.5 }, line(3701, 2)];
+  const rt = open(doc(items, '2026-10-04'), 31.5);
+  const s = state(rt);
+  assert.equal(s.items[0].unitPrice, 8.5, 'the stored promo price is not overwritten at open');
+  assert.equal(s.items[0].sentUnitPrice, 10.399818, 'the regular price comes from the catalog');
+  assert.match(row(rt, 0), /rv-form-promo" data-id="0" aria-pressed="true"/);
+  assert.match(summaryHtml(rt), /מבצע בתעודה/);
+  assert.equal(summary(rt).gap, 0);
+  await checkAll(rt); await saveClick(rt);
+  const saved = rt.writes[0].data;
+  assert.equal(saved.creditStatus, 'ok');
+  assert.equal(saved.items[0].priceForm, 'promo_on_paper');
+  assert.equal(saved.items[0].promoOnPaper.expectedNet, 10.4);
+  assert.equal(saved.items[0].sentUnitPrice, 10.399818);
+});
+
+test('שורה שמורה במחיר המבצע כשהנייר מתאים דווקא למחיר הרגיל: ההצעה היא לחזור לרגיל, והיא סוגרת', async () => {
+  const items = [line(1231, 1, { unitPrice: 8.5, lineTotal: 8.5, priceForm: 'promo_on_paper' }), line(3701, 2)];
+  const rt = open(doc(items, '2026-10-04'), 33.4);
+  const sol = solution(rt);
+  assert.equal(sol.kind, 'close');
+  assert.equal(sol.applied, false);
+  assert.deepEqual(sol.ids, []);
+  assert.equal(sol.revertLines.length, 1);
+  assert.equal(summary(rt).gap, 1.9);
+  const html = summaryHtml(rt);
+  assert.match(html, /הסבר אפשרי לפער/);
+  assert.match(html, /לחמניות 10 בשקית · 1 יח׳ חזרה למחיר הרגיל ₪10.40 \(\+₪1.90\) — סוגר את סכום התעודה/);
+  assert.match(html, /חזור למחיר הרגיל/);
+  await rt.click('rv-apply-forms');
+  assert.equal(state(rt).items[0].unitPrice, 10.399818);
+  assert.equal(summary(rt).gap, 0);
+  await checkAll(rt); await saveClick(rt);
+  assert.equal(rt.writes[0].data.creditStatus, 'ok');
+  assert.equal(Object.hasOwn(rt.writes[0].data.items[0], 'priceForm'), false);
+});
+
+test('מחיר שהוקלד קרוב למחיר המבצע באגורה הוא "ידני"; בדיוק מחיר המבצע הוא "מבצע"', async () => {
+  const items = [line(1231, 1), line(3701, 2), line(101, 7)];
+  const rt = open(doc(items, '2026-10-04'), 71.69);
+  typePrice(rt, 0, '8.504');
+  assert.equal(rt.run('rvLineForm(returnVerify.items[0], rvLineForms(returnVerify.items[0], returnVerify.day))'), 'manual');
+  await checkAll(rt);
+  await rt.run('saveReturnVerify({ skipGap: true })');
+  assert.equal(rt.writes[0].data.items[0].priceForm, 'manual');
+  assert.equal(Object.hasOwn(rt.writes[0].data.items[0], 'promoOnPaper'), false);
+  rt.run("openReturnVerify('test-return')");
+  assert.equal(state(rt).items[0].unitPrice, 8.504);
+  typePrice(rt, 0, '8.50');
+  assert.match(rt.node('rvForms_0').innerHTML, /rv-form-promo" data-id="0" aria-pressed="true"/, 'chips refresh while typing');
+  assert.equal(rt.node('rvLineTot_0').textContent, 'שורה ₪8.50');
+  await checkAll(rt);
+  await rt.run('saveReturnVerify({ skipGap: true })');
+  assert.equal(rt.writes[1].data.items[0].priceForm, 'promo_on_paper');
+});
+
+test('מבצע שהחיסכון שלו אינו גדול מהסיבולת אינו מועמד — ולא חוסם הכרעה אוטומטית של מבצע אמיתי', async () => {
+  const items = [line(1231, 1), line(3604, 1), line(3701, 2)];
+  const before = "promos.push({ id: 'tiny', name: 'פרנה — אגורות', fixedPrice: 9.01, pct: 0, start: '2026-09-01', end: '2026-10-31', productIds: ['code_3604'], type: 'receipt' });";
+  const rt = open(doc(items, '2026-10-04'), sum([8.5, 9.03, 23]), before);
+  assert.deepEqual(state(rt).autoForms, [0]);
+  assert.equal(state(rt).items[0].unitPrice, 8.5);
+  assert.equal(state(rt).items[1].unitPrice, 9.03);
+  assert.equal(rt.run('rvFormCandidates().length'), 1);
+  assert.match(row(rt, 1), /מבצע חודשי ₪9.01/, 'the chip is still offered for a manual decision');
+});
+
+test('מבצע שנמחק מהמאגר אחרי האימות: התיעוד על השורה נשאר בשמירה חוזרת', async () => {
+  const items = [line(1231, 1), line(3701, 2), line(101, 7)];
+  const rt = open(doc(items, '2026-10-04'), 71.69);
+  await checkAll(rt); await saveClick(rt);
+  rt.run("promos = promos.filter(p => !(p.productIds || []).includes('code_1231')); openReturnVerify('test-return')");
+  assert.equal(state(rt).items[0].unitPrice, 8.5);
+  assert.doesNotMatch(row(rt, 0), /rv-form-/);
+  assert.equal(summary(rt).gap, 0);
+  await checkAll(rt); await saveClick(rt);
+  const saved = rt.writes[1].data;
+  assert.equal(saved.creditStatus, 'ok');
+  assert.equal(saved.items[0].priceForm, 'promo_on_paper');
+  assert.equal(saved.items[0].promoOnPaper.promoFixedPrice, 8.5);
+});
+
+test('עורך הפריטים שומר את צורת המחיר גם לשורה ישנה שיש לה ברקוד בלי מזהה מוצר', async () => {
+  const items = [{ name: 'לחמניות 10 בשקית', barcode: '498256', qty: 1, unitPrice: 8.5, lineTotal: 8.5, priceForm: 'promo_on_paper', sentUnitPrice: 10.399818,
+    promoOnPaper: { expectedNet: 10.4, promoFixedPrice: 8.5, promoName: 'x', recordedAt: 1 } }, line(3701, 2)];
+  const rt = open(doc(items, '2026-10-04', { credited: true, creditNoteTotal: 31.5, creditStatus: 'ok' }), null);
+  rt.run("openReturnItemsEdit('test-return'); retEditSetQtyLive(1, '3')");
+  await rt.run('saveReturnItemsEdit()');
+  const saved = rt.writes[0].data;
+  assert.equal(saved.items[0].priceForm, 'promo_on_paper');
+  assert.equal(saved.items[0].sentUnitPrice, 10.399818);
+  assert.equal(saved.items[0].promoOnPaper.promoFixedPrice, 8.5);
+  assert.equal(saved.items[1].qty, 3);
+});
+
+test('סכום נייר אפס או שלילי (נמוך מהשיוכים) אינו מצב של צורת מחיר', async () => {
+  const items = [line(1231, 1), line(3701, 2), line(101, 7)];
+  const rt = open(doc(items, '2026-10-04', { creditAllocations: [{ id: 'a', amount: 80, receiptId: 'x' }] }), 71.69);
+  assert.equal(state(rt).noteTotal, r2(71.69 - 80));
+  assert.equal(solution(rt), null);
+  assert.equal(state(rt).items[0].unitPrice, 10.399818);
+  await checkAll(rt);
+  assert.doesNotMatch(summaryHtml(rt), /הסבר אפשרי לפער/);
+});
+
+test('שורה עם קידומת carry_ בלי דגל, או manual_, אינה מקבלת מוצר וצורות מחיר', () => {
+  const items = [{ productId: 'carry_123', name: 'לחמניות 10 בשקית', barcode: '498256', qty: 1, unitPrice: 8.5, lineTotal: 8.5 },
+    { productId: 'manual_9', name: 'ידני', barcode: '498256', qty: 1, unitPrice: 3, lineTotal: 3 }, line(3701, 2)];
+  const rt = open(doc(items, '2026-10-04'), 34.5);
+  assert.equal(rt.run('rvLineProduct(returnVerify.items[0])'), null);
+  assert.equal(rt.run('rvLineProduct(returnVerify.items[1])'), null);
+  assert.equal(state(rt).autoForms, undefined);
+  assert.doesNotMatch(row(rt, 0), /rv-form-/);
+  assert.equal(Object.hasOwn(state(rt).items[0], 'sentUnitPrice'), false);
+});
+
+test('ביטול שליחה מחזיר שורה מועברת במחיר המדויק ומאחד אותה עם שורה זהה ברשימה', () => {
+  const rt = runtime();
+  rt.run(`returns = []; returnsList = [{ productId: 'carry_1', name: 'אחיד פרוס ברמן', barcode: '497112', qty: 2, unitPrice: 5.7408, manual: true, carried: true, carriedFrom: 'older' }];
+    returnsSlots = { weekly: returnsList, daily: [] }; returnsSlot = 'weekly';
+    testDoc = { id: 'r1', date: '2026-10-04', docDate: '2026-10-04', credited: false, totalExVat: 97.63,
+      items: [{ productId: 'carry_2', name: 'אחיד פרוס ברמן', barcode: '497112', qty: 13, unitPrice: 5.7408, lineTotal: 74.63, carried: true, carriedFrom: 'older' },
+              { productId: 'code_3701', name: 'חלומית אישית 3 יח׳', barcode: '4033484', qty: 2, unitPrice: 11.5, lineTotal: 23 }] };
+    returns = [testDoc];`);
+  const plan = JSON.parse(rt.run('JSON.stringify(retUnsendPlan(returns[0]))'));
+  assert.equal(plan.items[0].unitPrice, 5.7408);
+  assert.equal(plan.val, 97.63);
+  rt.run('applyReturnUnsend(retUnsendPlan(returns[0]))');
+  assert.equal(rt.run('returnsList.length'), 2, 'the carried line merged into the existing identical row');
+  assert.equal(rt.run('returnsList[0].qty'), 15);
 });

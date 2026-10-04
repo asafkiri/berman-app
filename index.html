@@ -3040,7 +3040,8 @@ function openReturnsSend() {
   const retDay = returnsDocDate || todayStr();
   const items = returnsList.map(it => {
     const p = products.find(x => x.id === it.productId);
-    const unit = it.manual ? r2(Number(it.unitPrice) || 0) : (p ? effectivePrice(p, it.qty, retDay) : 0);
+    // v116: שורה שהוחזרה מפער זיכוי נושאת את מחיר הזיכוי המדויק, כמו שהוא נשמר באימות
+    const unit = it.carried ? (Number(it.unitPrice) || 0) : it.manual ? r2(Number(it.unitPrice) || 0) : (p ? effectivePrice(p, it.qty, retDay) : 0);
     const line = { name: it.name, barcode: it.barcode || '', code: productCode(p), productId: it.productId, qty: it.qty, unitPrice: unit, lineTotal: lineTotalFromUnit(unit, it.qty) };
     // v116: המחיר המדויק שבו נשלחה השורה והמחירון שמאחוריו נשמרים על השורה,
     // כדי שאימות הזיכוי יוכל לשחזר את המחיר הרגיל גם אחרי שהכרטיס במאגר השתנה.
@@ -3217,7 +3218,8 @@ function retCarryDocLabel(r) {
 function retCarryPlan(r) {
   if (!r || !r.credited) return null;
   const di = returnsDiscrepancyInfo(r);
-  const items = (di.shortItems || []).map(x => ({ name: x.name || '', barcode: x.barcode || '', qty: Number(x.n) || 0, price: r2(Number(x.price) || 0), amountOnly: false }));
+  // v116: מחיר הזיכוי עובר לתביעה בדיוק המלא שלו — אותו חישוב לפי שורה כמו באימות
+  const items = (di.shortItems || []).map(x => ({ name: x.name || '', barcode: x.barcode || '', qty: Number(x.n) || 0, price: Number(x.price) || 0, amountOnly: false }));
   if (items.length) return { items, val: r2(items.reduce((a, x) => a + lineTotalFromUnit(x.price, x.qty), 0)) };
   if (di.owed > 0.5) {
     const label = retCarryDocLabel(r);
@@ -3239,7 +3241,7 @@ function openReturnCarryConfirm(id) {
 async function saveReturnCarry(id, plan) {
   const r = returns.find(x => x.id === id); if (!r || !plan || !plan.items.length) return;
   const at = Date.now();
-  const notes = returnCarriedNotes(r).concat(plan.items.map(x => ({ name: x.name, barcode: x.barcode || '', qty: Number(x.qty) || 0, price: r2(Number(x.price) || 0), amountOnly: !!x.amountOnly, at })));
+  const notes = returnCarriedNotes(r).concat(plan.items.map(x => ({ name: x.name, barcode: x.barcode || '', qty: Number(x.qty) || 0, price: Number(x.price) || 0, amountOnly: !!x.amountOnly, at })));
   const saved = await runCloudTask('carry credit gap to returns', { op: 'update', path: dataPath('returns', id), data: { carriedNotes: cloneSafe(notes) }, operationId: makeOperationId('carry_gap') });
   if (!saved) return;
   r.carriedNotes = notes;
@@ -3248,7 +3250,7 @@ async function saveReturnCarry(id, plan) {
   plan.items.forEach(x => {
     const ex = returnsList.find(it => it.carriedFrom === id && it.name === x.name && r2(Number(it.unitPrice) || 0) === r2(Number(x.price) || 0));
     if (ex) ex.qty = (Number(ex.qty) || 0) + (Number(x.qty) || 0);
-    else returnsList.push({ productId: 'carry_' + Date.now() + '_' + Math.floor(Math.random() * 1000), name: x.name, barcode: x.barcode || '', qty: Number(x.qty) || 0, unitPrice: r2(Number(x.price) || 0), manual: true, carried: true, carriedFrom: id });
+    else returnsList.push({ productId: 'carry_' + Date.now() + '_' + Math.floor(Math.random() * 1000), name: x.name, barcode: x.barcode || '', qty: Number(x.qty) || 0, unitPrice: Number(x.price) || 0, manual: true, carried: true, carriedFrom: id });
   });
   saveReturnsDraft();
   buzz(18);
@@ -3379,7 +3381,7 @@ function retUnsendPlan(r) {
       name: String(line.name || ''),
       barcode: String(line.barcode || ''),
       qty,
-      unitPrice: r2(Number(line.unitPrice) || 0),
+      unitPrice: Number(line.unitPrice) || 0,
       carriedFrom: line.carriedFrom || null
     });
   });
@@ -3392,8 +3394,8 @@ function retUnsendPlan(r) {
 function retUnsendSameLine(existing, item) {
   if (!existing) return false;
   if (item.kind === 'catalog') return !existing.manual && String(existing.productId || '') === item.productId;
-  if (item.kind === 'carried') return !!existing.carried && String(existing.carriedFrom || '') === String(item.carriedFrom || '') && existing.name === item.name && r2(Number(existing.unitPrice) || 0) === item.unitPrice;
-  return !!existing.manual && !existing.carried && existing.name === item.name && r2(Number(existing.unitPrice) || 0) === item.unitPrice;
+  if (item.kind === 'carried') return !!existing.carried && String(existing.carriedFrom || '') === String(item.carriedFrom || '') && existing.name === item.name && r2(Number(existing.unitPrice) || 0) === r2(item.unitPrice);
+  return !!existing.manual && !existing.carried && existing.name === item.name && r2(Number(existing.unitPrice) || 0) === r2(item.unitPrice);
 }
 function retUnsendNewId(item) {
   if (item.kind === 'catalog') return item.productId;
@@ -3555,7 +3557,7 @@ function openReturnVerify(id, presetNoteTotal) {
       const line = { ...l, name: l.name, barcode: l.barcode || '', qty: Number(l.qty) || 0, noteQty: (l.noteQty != null ? Number(l.noteQty) : (Number(l.qty) || 0)), unitPrice: rvOpenUnit(l), checked: false };
       // המחיר הרגיל המדויק נרשם על השורה כבר כאן, כדי שמעבר למחיר המבצע וחזרה
       // (וגם שמירה של תעודה ישנה) לא יאבדו אותו.
-      if (!(Number(line.sentUnitPrice) > 0) && !line.priceForm) { const reg = rvRegularUnit(line, rvLineProduct(line)); if (reg > 0) line.sentUnitPrice = reg; }
+      if (!(Number(line.sentUnitPrice) > 0) && !line.priceForm) { const reg = rvRegularUnit(line, rvLineProduct(line), day); if (reg > 0) line.sentUnitPrice = reg; }
       return line;
     })
   };
@@ -3588,7 +3590,7 @@ function rvCreditedQty(l) { return Number(l && l.noteQty) || 0; }
 // המוצר שמאחורי השורה — לפי מזהה או ברקוד בלבד. התאמה לפי שם אינה ראיה
 // מספיקה כדי להחליף את המחיר שנשמר במחיר מהמאגר.
 function rvLineProduct(l) {
-  if (!l || l.isDeposit || l.carried || l.manual || l.amountOnly) return null;
+  if (!l || l.manual || l.amountOnly || anIsCarriedLine(l) || anIsDepositLine(l) || String(l.productId || '').indexOf('manual_') === 0) return null;
   if (l.productId) { const p = products.find(x => x.id === l.productId); if (p) return p; }
   if (l.barcode) { const p = findProductByBarcode(l.barcode, null); if (p) return p; }
   return null;
@@ -3596,13 +3598,16 @@ function rvLineProduct(l) {
 // המחיר הרגיל המדויק של השורה: מה שנשלח, או מחיר המאגר כשהוא תואם לאגורה את
 // מה שנשמר (תעודות שנשמרו לפני v116 שמרו מחיר מעוגל, 5.74 במקום 5.7408).
 // מחזיר 0 כשאי אפשר לקבוע את המחיר הרגיל — שורה כזאת אינה מקבלת צורות מחיר.
-function rvRegularUnit(l, p) {
+function rvRegularUnit(l, p, day) {
   const sent = Number(l && l.sentUnitPrice);
   if (sent > 0) return sent;
   const stored = Number(l && l.unitPrice) || 0;
   if (p) {
     const reg = Number(p.price) || 0;
     if (reg > 0 && moneyDiffCents(reg, stored) === 0) return reg;
+    // שורה שכבר נשמרה במחיר המבצע (לפני v116, בלי דגל): המחיר הרגיל שלה הוא מחיר המאגר
+    const pr = day ? aiActiveFixedPromoFor(p.id, day) : null;
+    if (reg > 0 && pr && moneyDiffCents(promoFixedPrice(pr), stored) === 0) return reg;
   }
   return 0;
 }
@@ -3613,14 +3618,14 @@ function rvOpenUnit(l) {
   if (l && l.priceForm && l.priceForm !== 'regular') return stored;
   const sent = Number(l && l.sentUnitPrice);
   if (sent > 0) return moneyDiffCents(sent, stored) === 0 ? sent : stored;
-  const reg = rvRegularUnit(l, rvLineProduct(l));
-  return reg > 0 ? reg : stored;
+  const p = rvLineProduct(l), reg = p ? (Number(p.price) || 0) : 0;
+  return (reg > 0 && moneyDiffCents(reg, stored) === 0) ? reg : stored;
 }
 function rvPromoFor(l, p, dateStr) {
   if (!p) return null;
   const pr = aiActiveFixedPromoFor(p.id, dateStr);
   if (!pr) return null;
-  const fixed = promoFixedPrice(pr), regular = rvRegularUnit(l, p), list = Number(p.listPrice) || 0;
+  const fixed = promoFixedPrice(pr), regular = rvRegularUnit(l, p, dateStr), list = Number(p.listPrice) || 0;
   // אותם תנאים כמו בהוכחת מבצע בקליטה: המבצע נמוך מהמחיר הרגיל ואינו המחירון עצמו
   if (!(fixed > 0) || !(regular > fixed + 0.005)) return null;
   if (list > 0 && moneyDiffCents(fixed, list) <= 2) return null;
@@ -3632,12 +3637,14 @@ function rvLineForms(l, dateStr) {
   if (!p) return null;
   const pr = rvPromoFor(l, p, dateStr);
   if (!pr) return null;
-  return { regular: rvRegularUnit(l, p), promo: promoFixedPrice(pr), promoName: promoTitle(pr), promoId: pr.id || '' };
+  return { regular: rvRegularUnit(l, p, dateStr), promo: promoFixedPrice(pr), promoName: promoTitle(pr), promoId: pr.id || '' };
 }
-// באיזו צורה השורה נמצאת עכשיו — לפי המחיר שלה, לא לפי דגל
+// באיזו צורה השורה נמצאת עכשיו — לפי המחיר שלה, לא לפי דגל. "מבצע" הוא בדיוק
+// מחיר המבצע (ערך שהוקלד קרוב אליו באגורה הוא "ידני"); "רגיל" נבדק לאגורה, כי
+// שורות ישנות נשמרו מעוגלות.
 function rvLineForm(l, forms) {
   const unit = Number(l && l.unitPrice) || 0;
-  if (forms && forms.promo > 0 && moneyDiffCents(unit, forms.promo) === 0) return 'promo';
+  if (forms && forms.promo > 0 && unit === forms.promo) return 'promo';
   if (forms && forms.regular > 0 && moneyDiffCents(unit, forms.regular) === 0) return 'regular';
   return 'manual';
 }
@@ -3648,10 +3655,21 @@ function rvApplyForm(idx, form) {
   return true;
 }
 function rvSetForm(idx, form) { if (rvApplyForm(idx, form)) { returnVerify.autoForms = null; rvRefreshRow(idx); } }
+// שורה שלא זוכתה אין לה מחיר נייר: אם עמדה על מחיר המבצע היא חוזרת למחיר הרגיל,
+// כדי שהתביעה על החוסר תהיה במחיר המלא ושלא יירשם "מבצע בתעודה" על שורה שאינה בתעודה.
+function rvDropPromoFormIfUncredited(l) {
+  if (!l || rvCreditedQty(l) > 0) return false;
+  const forms = rvLineForms(l, returnVerify.day);
+  if (!forms || rvLineForm(l, forms) !== 'promo') return false;
+  l.unitPrice = forms.regular;
+  return true;
+}
 // המועמדים לפתרון: שורות שזוכו (כמות > 0) שיש עליהן מבצע ושמחירן הוא אחת משתי
-// הצורות. מחיר ידני אינו נוגע — המשתמש כבר הכריע.
+// הצורות. מחיר ידני אינו נוגע — המשתמש כבר הכריע. חיסכון שאינו גדול מהסיבולת
+// אינו מועמד: אי אפשר להבדיל אותו מעיגול, והוא היה הופך כל פתרון לדו-משמעי.
 function rvFormCandidates() {
   const out = [];
+  const tol = rvFormToleranceCents((returnVerify.items || []).filter(l => rvCreditedQty(l) > 0).length);
   (returnVerify.items || []).forEach((l, idx) => {
     const q = rvCreditedQty(l);
     if (!(q > 0)) return;
@@ -3660,7 +3678,7 @@ function rvFormCandidates() {
     const form = rvLineForm(l, forms);
     if (form === 'manual') return;
     const saving = r2(lineTotalFromUnit(forms.regular, q) - lineTotalFromUnit(forms.promo, q));
-    if (!(saving > 0)) return;
+    if (!(saving > 0) || Math.round(saving * 100) <= tol) return;
     out.push({ idx, name: l.name, qty: q, forms, form, saving });
   });
   return out;
@@ -3674,6 +3692,7 @@ function solveCreditPriceForms() {
   const cands = rvFormCandidates();
   if (!cands.length || cands.length > RV_FORM_MAX_CANDIDATES) return null;
   const target = Number(returnVerify.noteTotal) || 0;
+  if (!(target > 0)) return null; // נייר אפס או שלילי (סכום נמוך מהשיוכים) אינו מצב של צורת מחיר
   const credited = (returnVerify.items || []).filter(l => rvCreditedQty(l) > 0).length;
   const tol = rvFormToleranceCents(credited);
   // הבסיס: כל המועמדים במחיר הרגיל (מי שכבר במבצע — החיסכון שלו מוחזר)
@@ -3693,20 +3712,20 @@ function solveCreditPriceForms() {
     else if (diff === partDiff) partCount++;
   }
   const idsOf = mask => cands.filter((c, i) => mask & (1 << i)).map(c => c.idx);
+  const linesOf = mask => cands.filter((c, i) => mask & (1 << i));
   const currentMask = cands.reduce((m, c, i) => m | (c.form === 'promo' ? (1 << i) : 0), 0);
+  // lines = שורות שצריכות לעבור למחיר המבצע; revertLines = שורות שעומדות על המבצע וצריכות לחזור לרגיל
+  const proposal = (kind, mask, extra) => ({ kind, ids: idsOf(mask), applied: mask === currentMask, lines: linesOf(mask & ~currentMask), revertLines: linesOf(currentMask & ~mask), ...(extra || {}) });
   // מה שנבחר כבר סוגר את הנייר — אין מה להציע, גם אם צירוף אחר היה סוגר אותו באותה מידה
-  if (closing.indexOf(currentMask) !== -1) {
-    if (currentMask === 0) return { kind: 'none' };
-    return { kind: 'close', ids: idsOf(currentMask), applied: true, lines: cands.filter((c, i) => currentMask & (1 << i)) };
-  }
+  if (closing.indexOf(currentMask) !== -1) return currentMask === 0 ? { kind: 'none' } : proposal('close', currentMask);
   if (closing.length === 1) {
-    if (closing[0] === 0) return { kind: 'none' };
-    return { kind: 'close', ids: idsOf(closing[0]), applied: false, lines: cands.filter((c, i) => closing[0] & (1 << i)) };
+    if (closing[0] === 0 && currentMask === 0) return { kind: 'none' };
+    return proposal('close', closing[0]);
   }
   if (closing.length > 1) return { kind: 'ambiguous', count: closing.length };
   if (partMask > 0 && partCount === 1) {
     let ex = base; cands.forEach((c, i) => { if (partMask & (1 << i)) ex = r2(ex - c.saving); });
-    return { kind: 'partial', ids: idsOf(partMask), applied: partMask === currentMask, residual: r2(target - ex), lines: cands.filter((c, i) => partMask & (1 << i)) };
+    return proposal('partial', partMask, { residual: r2(target - ex) });
   }
   if (partMask > 0 && partCount > 1) return { kind: 'ambiguous', count: partCount };
   return null;
@@ -3717,9 +3736,10 @@ function solveCreditPriceForms() {
 function rvFormsInfo() {
   const promoLines = [];
   (returnVerify.items || []).forEach((l, idx) => {
+    const q = rvCreditedQty(l);
+    if (!(q > 0)) return;
     const forms = rvLineForms(l, returnVerify.day);
     if (!forms || rvLineForm(l, forms) !== 'promo') return;
-    const q = rvCreditedQty(l);
     promoLines.push({ idx, name: l.name, qty: q, regular: forms.regular, promo: forms.promo, promoName: forms.promoName, saving: r2(lineTotalFromUnit(forms.regular, q) - lineTotalFromUnit(forms.promo, q)) });
   });
   const sol = solveCreditPriceForms();
@@ -3732,7 +3752,7 @@ function rvFormsInfo() {
 }
 function rvApplySuggestion() {
   const sol = solveCreditPriceForms();
-  if (!sol || !Array.isArray(sol.ids) || !sol.ids.length) return;
+  if (!sol || !Array.isArray(sol.ids) || (!sol.ids.length && !(Array.isArray(sol.revertLines) && sol.revertLines.length))) return;
   // קודם כל המועמדים חוזרים למחיר הרגיל, ואז רק השורות שבפתרון עוברות למבצע
   rvFormCandidates().forEach(c => rvApplyForm(c.idx, 'regular'));
   sol.ids.forEach(i => rvApplyForm(i, 'promo'));
@@ -3791,11 +3811,12 @@ function rvFormsHtml() {
   const sg = info.suggestion;
   if (sg && sg.kind === 'ambiguous') {
     html += '<div class="rounded-xl border p-3 mt-3 bg-amber-50 border-amber-200 text-amber-900 text-sm"><div class="font-black mb-1">יותר מצירוף אחד של מחירי מבצע מתאים לסכום</div>בחר בשורות עצמן איזה מוצר זוכה במחיר המבצע — האפליקציה לא מנחשת.</div>';
-  } else if (sg && Array.isArray(sg.lines) && sg.lines.length) {
-    const names = sg.lines.map(c => htmlEscape(c.name) + ' · ' + c.qty + ' יח׳ במחיר המבצע ₪' + fmt3(c.forms.promo) + ' (−₪' + fmtMoney(c.saving) + ')').join('; ');
+  } else if (sg && ((Array.isArray(sg.lines) && sg.lines.length) || (Array.isArray(sg.revertLines) && sg.revertLines.length))) {
+    const toPromo = (sg.lines || []).map(c => htmlEscape(c.name) + ' · ' + c.qty + ' יח׳ במחיר המבצע ₪' + fmt3(c.forms.promo) + ' (−₪' + fmtMoney(c.saving) + ')');
+    const toRegular = (sg.revertLines || []).map(c => htmlEscape(c.name) + ' · ' + c.qty + ' יח׳ חזרה למחיר הרגיל ₪' + fmt3(c.forms.regular) + ' (+₪' + fmtMoney(c.saving) + ')');
     const tail = sg.kind === 'close' ? ' — סוגר את סכום התעודה.' : ' — יישאר פער ₪' + fmtMoney(Math.abs(sg.residual)) + ' שאינו מוסבר במחירי מבצע.';
-    html += '<div class="rounded-xl border p-3 mt-3 bg-blue-50 border-blue-200 text-blue-900"><div class="font-black mb-1">הסבר אפשרי לפער</div><div class="text-sm">' + names + tail + '</div>' +
-      '<button data-role="rv-apply-forms" class="btn-tap mt-2 min-h-[40px] w-full rounded-xl bg-blue-600 text-white font-black text-sm">החל מחיר מבצע</button></div>';
+    html += '<div class="rounded-xl border p-3 mt-3 bg-blue-50 border-blue-200 text-blue-900"><div class="font-black mb-1">הסבר אפשרי לפער</div><div class="text-sm">' + toPromo.concat(toRegular).join('; ') + tail + '</div>' +
+      '<button data-role="rv-apply-forms" class="btn-tap mt-2 min-h-[40px] w-full rounded-xl bg-blue-600 text-white font-black text-sm">' + (toPromo.length ? 'החל מחיר מבצע' : 'חזור למחיר הרגיל') + '</button></div>';
   }
   return html;
 }
@@ -3821,9 +3842,13 @@ function rvRefreshRow(idx, keepInput) {
     card.className = rvRowClass(l);
     const status = $('rvStatus_' + idx); if (status) status.innerHTML = rvRowStatusHtml(l);
     const action = $('rvNoCredit_' + idx); if (action) action.innerHTML = rvNoCreditHtml(l, idx);
+    // v116: הצ'יפים וסכום השורה תלויים במחיר ובכמות שמוקלדים — מתרעננים בלי לגעת בשדה שבפוקוס
+    const forms = $('rvForms_' + idx); if (forms) forms.innerHTML = rvFormChipsHtml(l, idx);
+    const tot = $('rvLineTot_' + idx); if (tot) tot.textContent = rvLineTotText(l);
   }
   refreshRvHeader();
 }
+function rvLineTotText(l) { return 'שורה ₪' + fmtMoney(lineTotalFromUnit(l.unitPrice, rvCreditedQty(l))); }
 function rvToggleCheck(idx) {
   const l = (returnVerify.items || [])[idx]; if (!l) return;
   l.checked = !l.checked;
@@ -3835,16 +3860,20 @@ function rvMarkNotCredited(idx) {
   // action records a known missing credit while preserving what was returned.
   l.noteQty = 0;
   l.checked = true;
+  rvDropPromoFormIfUncredited(l);
   rvRefreshRow(idx);
 }
 function rvStepNote(idx, delta) {
   const l = (returnVerify.items || [])[idx]; if (!l) return;
-  l.noteQty = Math.max(0, (Number(l.noteQty) || 0) + delta); rvRefreshRow(idx);
+  l.noteQty = Math.max(0, (Number(l.noteQty) || 0) + delta); rvDropPromoFormIfUncredited(l); rvRefreshRow(idx);
 }
 function rvSetNoteLive(idx, val) {
   const l = (returnVerify.items || [])[idx]; if (!l) return;
   let q = parseInt((val || '').toString().replace(/[^0-9]/g, ''), 10); if (isNaN(q) || q < 0) q = 0;
-  l.noteQty = q; rvRefreshRow(idx, true);
+  l.noteQty = q;
+  // שדה שהתרוקן באמצע הקלדה אינו מצויר מחדש מתחת לאצבע; רק ספרה שהוקלדה
+  const dropped = /\d/.test(String(val || '')) && rvDropPromoFormIfUncredited(l);
+  rvRefreshRow(idx, !dropped);
 }
 function rvSetPriceLive(idx, val) {
   const l = (returnVerify.items || [])[idx]; if (!l) return;
@@ -3852,6 +3881,7 @@ function rvSetPriceLive(idx, val) {
 }
 // v116: צ'יפים לשורה שיש עליה מבצע מחיר-קבוע — "מחיר רגיל" / "מבצע חודשי"
 function rvFormChipsHtml(l, idx) {
+  if (!(rvCreditedQty(l) > 0)) return ''; // שורה שלא זוכתה — אין לה מחיר נייר; שדה המחיר נשאר לתביעה
   const forms = rvLineForms(l, returnVerify.day);
   if (!forms) return '';
   const cur = rvLineForm(l, forms);
@@ -3883,8 +3913,8 @@ function rvRowHtml(l, idx) {
   return '<div id="rvCard_' + idx + '" data-rvcard="' + idx + '" class="' + rvRowClass(l) + '">' +
     '<div class="flex items-start justify-between gap-2 mb-2"><div class="min-w-0"><div class="font-black text-slate-800 text-base break-words">' + htmlEscape(l.name) + '</div>' +
       '<div id="rvStatus_' + idx + '" class="text-sm mt-1">' + rvRowStatusHtml(l) + '</div></div>' + checkBtn + '</div>' +
-    '<div class="text-xs text-slate-500 flex flex-wrap items-center gap-1 mb-3">מחיר לזיכוי: ₪<input data-role="rv-price" data-id="' + idx + '" aria-label="מחיר לזיכוי ליחידה" type="text" inputmode="decimal" value="' + priceFieldVal(l.unitPrice) + '" class="w-16 min-h-[36px] text-center border border-slate-300 rounded-lg px-1 py-1 outline-none focus:border-blue-500 bg-white"> ליח׳ ללא מע״מ · שורה ₪' + fmtMoney(lineTotalFromUnit(l.unitPrice, noteQty)) + '</div>' +
-    rvFormChipsHtml(l, idx) +
+    '<div class="text-xs text-slate-500 flex flex-wrap items-center gap-1 mb-3">מחיר לזיכוי: ₪<input data-role="rv-price" data-id="' + idx + '" aria-label="מחיר לזיכוי ליחידה" type="text" inputmode="decimal" value="' + priceFieldVal(l.unitPrice) + '" class="w-16 min-h-[36px] text-center border border-slate-300 rounded-lg px-1 py-1 outline-none focus:border-blue-500 bg-white"> ליח׳ ללא מע״מ · <span id="rvLineTot_' + idx + '">' + rvLineTotText(l) + '</span></div>' +
+    '<div id="rvForms_' + idx + '">' + rvFormChipsHtml(l, idx) + '</div>' +
     '<div class="flex flex-wrap items-center justify-between gap-2">' +
       '<div class="text-sm text-slate-500 font-bold">הוחזר: <span class="text-slate-800 font-black">' + sent + '</span></div>' +
       '<div class="flex items-center gap-1.5"><span class="text-slate-600 font-bold text-sm">זוכה:</span>' +
@@ -3935,28 +3965,33 @@ async function saveReturnVerify(opts) {
   if (!opts.skipGap && returnVerify.noteTotal != null) {
     const g = rvGap();
     if (Math.abs(g) > 1) {
-      // v116: כשיש הצעת מחיר מבצע שטרם הוחלה — אומרים זאת כאן, לפני שהפער נשמר
-      const sol = solveCreditPriceForms();
-      const hint = sol && !sol.applied && (sol.kind === 'close' || sol.kind === 'partial') ? ' ייתכן שחלק מהפער הוא מחיר מבצע — ראה "הסבר אפשרי לפער" בראש המסך.' : '';
+      // v116: כשיש הצעת מחיר מבצע שמוצגת בראש המסך וטרם הוחלה — אומרים זאת כאן, לפני שהפער נשמר
+      const sg = rvFormsInfo().suggestion;
+      const hint = sg && (sg.kind === 'close' || sg.kind === 'partial') ? ' ייתכן שחלק מהפער הוא מחיר מבצע — ראה "הסבר אפשרי לפער" בראש המסך.' : '';
       showConfirm('נותר פער בסכום', 'סכום הכמויות שזוכו עדיין שונה מסכום התעודה ב־₪' + fmtMoney(Math.abs(g)) + '.' + (rvCreditSummary().shortItems.length ? ' הפער הזה נוסף למוצרים שכבר סימנת שלא זוכו.' : '') + hint + ' התעודה תישאר פתוחה לבדיקה.', 'שמור עם פער פתוח', function () { saveReturnVerify({ skipChecked: true, skipGap: true }); }); return;
     }
   }
   const outItems = items.map(l => {
     // v116: המחיר נשמר בדיוק המלא שלו והשורה מעוגלת פעם אחת — כמו אצל ברמן
-    const unit = Number(l.unitPrice) || 0;
+    const forms = rvLineForms(l, returnVerify.day);
+    let form = forms ? rvLineForm(l, forms) : null;
+    let unit = Number(l.unitPrice) || 0;
+    // שורה שלא זוכתה אין לה מחיר נייר — נשמרת במחיר הרגיל, שבו נתבע החוסר
+    if (form === 'promo' && !(rvCreditedQty(l) > 0)) { unit = forms.regular; form = 'regular'; }
     const line = { ...l, name: l.name, barcode: l.barcode || '', qty: Number(l.qty) || 0, unitPrice: unit, lineTotal: lineTotalFromUnit(unit, l.qty) };
     delete line.checked;
     delete line.noteQty;
     if (Number(l.noteQty) !== Number(l.qty)) line.noteQty = Number(l.noteQty) || 0;
     // צורת המחיר נרשמת על השורה לפי המחיר שנבחר: מבצע (עם תיעוד כמו בקליטה),
     // רגיל (בלי דגל), או ידני. הדגל נגזר מהמחיר, ולכן תמיד תואם אותו.
-    const forms = rvLineForms(l, returnVerify.day);
-    const form = forms ? rvLineForm(l, forms) : null;
     delete line.priceForm; delete line.promoOnPaper;
     if (form === 'promo') {
       line.priceForm = 'promo_on_paper';
       line.promoOnPaper = promoOnPaperStamp(forms.regular, forms.promo, forms.promoName);
       if (!(Number(line.sentUnitPrice) > 0)) line.sentUnitPrice = forms.regular;
+    } else if (form !== 'regular' && l.priceForm === 'promo_on_paper' && l.promoOnPaper && moneyDiffCents(unit, l.promoOnPaper.promoFixedPrice) === 0) {
+      // המבצע כבר לא במאגר (או שונה), אבל המחיר שזוכה הוא עדיין מחיר המבצע שתועד — התיעוד נשאר
+      line.priceForm = l.priceForm; line.promoOnPaper = cloneSafe(l.promoOnPaper);
     } else if (form === 'manual' || (!forms && Number(l.sentUnitPrice) > 0 && moneyDiffCents(unit, l.sentUnitPrice) !== 0)) {
       line.priceForm = 'manual';
     }
@@ -3994,7 +4029,7 @@ function retEditProductFor(l) {
   if (l.barcode) { const p = findProductByBarcode(l.barcode, null); if (p) return p; }
   return products.find(x => x.name === l.name) || null;
 }
-function retCreditUnit(p) { return r2(Number(p && (Number(p.creditPrice) > 0 ? p.creditPrice : p.price)) || 0); }
+function retCreditUnit(p) { return r4(Number(p && (Number(p.creditPrice) > 0 ? p.creditPrice : p.price)) || 0); } // v116: בלי עיגול לאגורות לפני הכפל
 function openReturnItemsEdit(id) {
   if (returnHasLinkedReturnCredit(id)) return;
   const r = returns.find(x => x.id === id); if (!r) return;
@@ -4018,6 +4053,7 @@ function openReturnItemsEdit(id) {
       origQty: Number(l.qty) || 0,
       origUnitPrice: Number(l.unitPrice) || 0,
       origProductId: l.productId || '',
+      origBarcode: l.barcode || '',
       sentUnitPrice: (Number(l.sentUnitPrice) > 0 ? Number(l.sentUnitPrice) : null),
       priceForm: l.priceForm || null,
       promoOnPaper: (l.promoOnPaper && typeof l.promoOnPaper === 'object') ? cloneSafe(l.promoOnPaper) : null
@@ -4194,7 +4230,7 @@ async function saveReturnItemsEdit(opts) {
     // noteQty (מה שהספק זיכה בשורה) נשמר רק אם השורה עצמה לא נגעה — אחרת הוא כבר לא מתאר את אותה שורה
     if (l.noteQty != null && qty === l.origQty && l.noteQty !== qty) line.noteQty = l.noteQty;
     // v116: צורת המחיר ומחיר השליחה המדויק שורדים רק כשהמוצר והמחיר לא נגעו
-    const samePrice = l.productId && l.productId === l.origProductId && moneyDiffCents(unit, l.origUnitPrice) === 0;
+    const samePrice = (l.productId || '') === (l.origProductId || '') && (l.barcode || '') === (l.origBarcode || '') && moneyDiffCents(unit, l.origUnitPrice) === 0;
     if (samePrice && Number(l.sentUnitPrice) > 0) line.sentUnitPrice = Number(l.sentUnitPrice);
     if (samePrice && l.priceForm) line.priceForm = l.priceForm;
     if (samePrice && l.promoOnPaper) line.promoOnPaper = cloneSafe(l.promoOnPaper);
