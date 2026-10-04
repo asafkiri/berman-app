@@ -66,7 +66,9 @@ test('analyzer card: a shortage claim that closes shows billed · scanned · mis
   const html = r.node('app').innerHTML;
   assert.ok(!/התצוגה נכשלה/.test(html));
   const [card] = analyzerCards(html);
-  assert.ok(strip(card).startsWith('חוסר חוסר: 8 × ברמן אסלי 5 פיתות · ₪39.30 ₪39.30'), strip(card));
+  // v122: the card is quantities only — the claim's money never reaches the receiving screen
+  assert.ok(strip(card).startsWith('חוסר חוסר: 8 × ברמן אסלי 5 פיתות חויב בתעודה'), strip(card));
+  assert.ok(!strip(card).includes('₪'), 'no money on the analyzer card: ' + strip(card));
   assert.deepEqual(cells(card), { 'חויב בתעודה': '12', 'נסרק בפועל': '4', 'חסר': '8' });
   assert.ok(strip(card).includes('נסרקו 4 יח׳ מתוך 12 שחויבו בתעודה'));
 });

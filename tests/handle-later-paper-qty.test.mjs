@@ -272,14 +272,16 @@ test('aiRecordFindingsAsPaperQty adds up several quantity findings for one produ
   assert.deepEqual(JSON.parse(out), [2, 12, 10], 'last-wins would give 238 → 6, 101 → 13');
 });
 
-test('a product billed but never scanned gets a line at the engine\'s expected price (the shortage is valued at it)', async () => {
+// v122: a shortage is a quantity — the finding carries no price and the new line is
+// written with the billed quantity only (money is the monthly reconciliation's business).
+test('a product billed but never scanned gets a line with the billed quantity and no money on the finding', async () => {
   const r = await scanned([{ rows: [[238, 12], [339, 3], [101, 10]] }], { 238: 12, 101: 10 });
   const shortage = JSON.parse(r.run("JSON.stringify(aiScanEvaluation.findings.find(f => f.productId === 'code_339' && f.type === 'shortage'))"));
-  const catalog = Number(r.run("products.find(p => p.id === 'code_339').price"));
-  assert.notEqual(shortage.expectedPrice, catalog, 'the fixture must tell the two prices apart');
+  assert.equal(shortage.qty, 3);
+  assert.ok(!('expectedPrice' in shortage) && !('amount' in shortage) && !('paperPrice' in shortage), JSON.stringify(shortage));
   closeLater(r);
   const line = JSON.parse(r.run("JSON.stringify(reconcileData.find(l => l.productId === 'code_339'))"));
-  assert.deepEqual([line.received, line.noteQty, line.price], [0, 3, shortage.expectedPrice]);
+  assert.deepEqual([line.received, line.noteQty], [0, 3]);
 });
 
 test('a stale paper quantity already on the line (typed, or restored) is replaced by what the paper billed', async () => {

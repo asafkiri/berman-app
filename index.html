@@ -5821,93 +5821,6 @@ function bermanScanPromoOnPaperUnit(productId) {
   const unit = Number(aggregate.paperUnitPrice) || 0;
   return unit > 0 ? unit : 0;
 }
-// מחיל את אותה הכרעה על שורות השוואה שכבר נבנו — למקרה שהסריקה נחתה אחרי
-// שהמסך נפתח. נוגע במחיר בלבד: לא בכמויות, לא בסימוני הבדיקה, ולא בשורות
-// שהסריקה לא הכריעה. אידמפוטנטי — שורה שכבר במחיר הנכון אינה משתנה.
-// v91: המחיר המודפס של שורה שהוכרעה כ"מחירון מלא". ההכרעה עצמה נעשית
-// בחשבון ברמת המסמך (bermanFullListMatch), אבל אחרי שהיא נעשתה זו עובדה על
-// השורה — וזה המחיר ששולם בפועל.
-function bermanScanFullListUnits() {
-  const out = new Map();
-  if (!aiScanEvaluation || !aiScanResponse) return out;
-  let ctx = null;
-  try { ctx = aiPriceGapContext(aiScanEvaluation); } catch (ctxError) { return out; }
-  if (!ctx) return out;
-  (ctx.fullListRows || (ctx.fullListRow ? [ctx.fullListRow] : [])).forEach(r => {
-    if (!r || !r.product || !(Number(r.printedList) > 0)) return;
-    out.set(String(r.product.id), Number(r.printedList));
-  });
-  return out;
-}
-function bermanRepriceReconcileFromScan() {
-  if (!Array.isArray(reconcileData)) return 0;
-  const fullList = bermanScanFullListUnits();
-  let changed = 0;
-  reconcileData.forEach(line => {
-    if (!line || line.isDeposit) return;
-    const unit = bermanScanPromoOnPaperUnit(line.productId);
-    if (unit > 0) {
-      const expectedNet = Number(line.basePrice) || Number(line.price) || 0;
-      if (!(expectedNet > unit + 0.005)) return;
-      if (Math.abs((Number(line.price) || 0) - unit) <= 0.005) return;
-      line.price = unit;
-      line.promoOnPaper = promoOnPaperStamp(expectedNet, unit, promoTitle(aiActiveFixedPromoFor(line.productId, priceAuditPromoDay())));
-      changed++;
-      return;
-    }
-    // v91: הצד ההפוך — המבצע לא ירד בתעודה והשורה חויבה במחירון מלא. עד כאן
-    // היא נשמרה במחיר הרגיל, ולכן התעודה טענה שהיא זולה ב-₪41 ממה ששולם,
-    // נשארה פתוחה על אותו פער, והתחזית למרכזת חישבה את הקיזוז מהמחיר הרגיל
-    // במקום מזה שחויב — כלומר ציפתה ל-₪16.38 במקום ₪57.68.
-    const full = fullList.get(String(line.productId)) || 0;
-    if (!(full > 0) || Math.abs((Number(line.price) || 0) - full) <= 0.005) return;
-    line.price = full;
-    // המחירון המלא שייך לתעודה הזאת בלבד. בלי הסימון הזה saveReconciledReceipt
-    // היה כותב אותו בחזרה אל מחיר המוצר במאגר (₪12.047 ← ₪17.21) ומרעיל את
-    // כל התעודות הבאות — אותה הגנה שכבר קיימת למחיר מבצע שירד בתעודה.
-    line.aiPaperPriceOnly = true;
-    delete line.promoOnPaper; // חויב במחירון מלא — הקיזוז יגיע מהמרכזת, לא מהתעודה
-    changed++;
-  });
-  return changed;
-}
-// סטטוס הנחות מרכזת בתעודה הנוכחית (לתצוגה בלבד — לא משפיע על סכום התעודה)
-// v49: מוצרים שהמבצע שלהם ירד כבר בתעודה הזאת (המחיר המודפס = מחיר המבצע).
-// ידוע משני מקורות: שורת ההשוואה שכבר נרשמה במחיר הנייר (אחרי לחיצת הקליטה),
-// או תוצאת הסריקה שעוד לא נקלטה. בשניהם התחזית חייבת לדעת שאין קיזוז על השורה.
-// v61: ומקור שלישי — ההכרעה המקומית, שקורית עוד לפני מסך ההשוואה.
-function promoOnPaperProductIds() {
-  const ids = new Set();
-  const day = activeReceiptDate();
-  receiptPromoOnPaper.forEach(pid => { if (receiptPromoOnPaperHas(pid, day)) ids.add(String(pid)); });
-  (reconcileData || []).forEach(l => { if (l && l.promoOnPaper) ids.add(String(l.productId)); });
-  if (aiScanEvaluation && aiScanResponse) {
-    try { const ctx = aiPriceGapContext(aiScanEvaluation); ((ctx && ctx.promoOnPaperRows) || []).forEach(r => ids.add(String(r.product.id))); }
-    catch (ctxError) {}
-  }
-  return ids;
-}
-function receiptMonthEndStatuses() {
-  const day = activeReceiptDate(); const seen = {}; const out = [];
-  const onPaper = promoOnPaperProductIds();
-  receiptList.forEach(it => {
-    const pr = monthEndPromoForProduct(it.productId, day);
-    if (pr && !seen[pr.id]) {
-      seen[pr.id] = 1;
-      let rebate = 0, onPaperQty = 0, onPaperSaved = 0;
-      receiptList.forEach(x => {
-        if (pr.productIds.indexOf(x.productId) === -1) return;
-        const p = products.find(z => z.id === x.productId), qty = Number(x.qty) || 0;
-        const perUnit = monthEndUnitRebate(pr, effectivePrice(p, x.qty, day));
-        // v49: המבצע ירד כבר בתעודה — ההפרש ירד מהחיוב עכשיו, לא יגיע כקיזוז.
-        if (onPaper.has(String(x.productId))) { onPaperQty += qty; onPaperSaved += perUnit * qty; return; }
-        rebate += perUnit * qty;
-      });
-      out.push({ id: pr.id || null, name: promoTitle(pr), pct: pr.pct, rebate: r2(rebate), onPaperQty, onPaperSaved: r2(onPaperSaved) });
-    }
-  });
-  return out;
-}
 // v49: הבלוק "קיזוז צפוי במרכזת" משותף למסך הקליטה ולסיכום הידני. baseEx הוא
 // הסכום לפי מחירי האפליקציה; התחזית מורידה ממנו גם את הקיזוז הצפוי וגם את מה
 // שכבר ירד בתעודה עצמה — כך שהיא תואמת למה שבאמת יישמר וישולם.
@@ -6496,7 +6409,7 @@ function receiptQuantityPaperRows() {
   try {
     reconcileData = [];
     const ev = aiEvaluateInvoiceScan(aiScanResponse);
-    if (!ev.basketComplete || !ev.allRowsMapped || !ev.totalVerified || !ev.unitsVerified || !ev.aggregates.size) return null;
+    if (!ev.basketComplete || !ev.allRowsMapped || !ev.anchorsVerified || !ev.aggregates.size) return null;
     const rows = Array.from(ev.aggregates.values()).map(a => ({ productId: a.product.id, name: a.product.name,
       barcode: a.product.barcode || '', paperQty: Number(a.qty) }));
     return rows.every(r => Number.isSafeInteger(r.paperQty) && r.paperQty > 0) ? rows : null;
@@ -7026,8 +6939,6 @@ function buildReconcileData() {
     if (paperPrice != null) row.promoOnPaper = promoOnPaperStamp(listed, paperPrice, promoTitle(mePromo));
     return row;
   });
-  // v89: והכרעת הסריקה — המקור הרביעי, ובמסלול הצילום הנפוץ ביותר.
-  bermanRepriceReconcileFromScan();
   // מיון חד-פעמי בפתיחה: שורות חריגות (חסר/עודף) למעלה — לא ממוין מחדש תוך כדי עבודה
   reconcileData.sort((a, b) => ((Number(a.noteQty) || 0) === (Number(a.received) || 0) ? 1 : 0) - ((Number(b.noteQty) || 0) === (Number(b.received) || 0) ? 1 : 0));
   // v173: שורות פיקדון נגזרות — מאושרות מראש (אין מה לסרוק פיזית); אם
@@ -7045,7 +6956,7 @@ function buildReconcileData() {
 // שויכה, בלי מוצר לא מוכר, וסך היחידות של כל תעודה אומת. ממצאי מחיר אינם
 // עניין של הקליטה.
 function aiScanQuantitiesGood(ev) {
-  if (!ev || !ev.findingsReady || ev.allRowsMapped === false || ev.unitsVerified === false) return false;
+  if (!ev || !ev.findingsReady || ev.allRowsMapped === false || ev.anchorsVerified === false) return false;
   const findings = (Array.isArray(ev.findings) ? ev.findings : []).filter(f => f && ['shortage', 'surplus'].includes(String(f.type || '')));
   const residuals = Array.isArray(ev.residuals) ? ev.residuals : [];
   const unknown = (Array.isArray(ev.barcodeSuggestions) ? ev.barcodeSuggestions : []).filter(x => x && x.unknownProduct === true);
@@ -8532,9 +8443,6 @@ function aiRefreshScanEvaluation() {
   // גם תקלה בהשוואה/תצוגה אינה מאבדת קריאה שכבר התקבלה מהשרת.
   try { aiScanEvaluation = aiEvaluateInvoiceScan(aiScanResponse); }
   finally { saveReceiptDraft(); }
-  // v89: סריקה שנחתה בזמן שמסך ההשוואה כבר פתוח מעדכנת את מחירי השורות
-  // שהיא הכריעה, כדי שהמסך לא יציג פער שהיא כבר סגרה.
-  try { bermanRepriceReconcileFromScan(); } catch (repriceError) {}
   return aiScanEvaluation;
 }
 // התמונות נשארות זמניות; כל פלט הפענוח ומספר העמודים המקורי נשמרים.
@@ -12588,8 +12496,8 @@ function aiAutoResolveMethodHe(method) {
 function aiAutoResolvePendingRow(pending, aggregates) {
   const suggestion = pending.resolution && pending.resolution.suggestion;
   const row = pending.row, qty = pending.qty, cents = pending.cents;
-  // שורה שהכמות, הסכום או החשבון שלה לא נקראו אינה ניתנת להכרעה אוטומטית.
-  if (qty == null || cents == null || pending.arithmeticError) return null;
+  // שורה שהכמות שלה לא נקראה אינה ניתנת להכרעה אוטומטית.
+  if (qty == null) return null;
   // v51: הצלבת "הכמות שנותרה בספירה" נמדדת מול תרומת השורה לצבירה, ולכן
   // בשורת זיכוי היא שלילית. עדות השם והמחיר אינה תלויה בסימן ונשארת כשהייתה.
   const signedQty = pending.credit ? -qty : qty;
@@ -12694,8 +12602,6 @@ function aiBuildPendingSuggestion(pending) {
     method: barcodeMatch.suggestion.method,
     nameOnly: barcodeMatch.suggestion.nameOnly === true,
     quantity: pending.qty,
-    lineTotal: pending.cents == null ? null : pending.cents / 100,
-    arithmeticVerified: pending.cents != null && aiRowHasArithmeticProof(row, pending.qty),
     rowConfidence: pending.rowConfidence
   };
   if (barcodeMatch.suggestion.unknownProduct === true) {
@@ -12741,82 +12647,35 @@ function aiResidualGroupHtml(residuals) {
     '<div class="text-[10px] font-bold text-slate-500 mb-1">השורות האלה אינן משתתפות בחישוב ואינן נתבעות. צלם מחדש כדי לאמת עד הסוף.</div>' +
     '<div>' + items + '</div></div>';
 }
-// ממצא AI אינו מספיק רק מפני שהשם או הברקוד נראים סבירים. לפני שמציגים
-// אותו כחוסר/עודף הוא חייב להסביר גם את פער היחידות וגם את פער הכסף הכולל.
-// הבדיקה משתמשת במחירי המערכת המדויקים ובתיקוני המחיר שנמצאו על הנייר,
-// ולכן אינה תלויה בשם המודפס ואינה יכולה להפוך מועמד לא פתור לחוסר אמיתי.
+// v122: ממצא AI חייב להסביר את פער היחידות: סך "סה"כ כללי" שבנייר פחות
+// מה שנסרק = סך החוסרים פחות סך העודפים. הכסף אינו עניין של הקליטה —
+// הוא מחושב במרכזת החודשית ממחירי האפליקציה.
 function aiFindingsClosure(evaluation, findings) {
   const rows = Array.isArray(findings) ? findings : (Array.isArray(evaluation && evaluation.findings) ? evaluation.findings : []);
   const receivedRows = Array.isArray(reconcileData) ? reconcileData : [];
-  const expectedUnits = receiptNoteUnits == null ? NaN : Number(receiptNoteUnits); // תנובה: אין עוגן יחידות — הסגירה נבדקת בכסף בלבד
-  // v186: המקום החמישי והאחרון שבו כלל v176 ("פיקדון = כסף בלבד, לא יחידות")
-  // פוספס. הסכימה כאן ספרה גם את שורת הפיקדון, ולכן היחידות שנקלטו יצאו 444
-  // במקום 432 — ופער היחידות הצפוי חושב כאפס בזמן שהממצאים האמיתיים הראו 12.
-  // כך ננעלה סגירה של תעודה שכל הממצאים בה נכונים.
+  const expectedUnits = receiptNoteUnits == null ? NaN : Number(receiptNoteUnits);
+  // v176: פיקדון אינו נספר ביחידות — סכום היחידות המודפס אינו כולל אותו.
   const receivedUnits = receivedRows.reduce((sum, line) => sum + (line && line.isDeposit ? 0 : (Number(line && line.received) || 0)), 0);
   const expectedUnitsDelta = isFinite(expectedUnits) ? expectedUnits - receivedUnits : null;
   let actualUnitsDelta = 0;
-  const quantityDeltaByProduct = new Map();
   rows.forEach(finding => {
     if (!finding || !['shortage', 'surplus'].includes(String(finding.type || ''))) return;
-    const signedQty = (finding.type === 'shortage' ? 1 : -1) * (Number(finding.qty) || 0);
-    actualUnitsDelta += signedQty;
-    const id = String(finding.productId == null ? '' : finding.productId);
-    if (id) quantityDeltaByProduct.set(id, (quantityDeltaByProduct.get(id) || 0) + signedQty);
+    actualUnitsDelta += (finding.type === 'shortage' ? 1 : -1) * (Number(finding.qty) || 0);
   });
   const unitsOk = expectedUnitsDelta == null ? true : Math.abs(actualUnitsDelta - expectedUnitsDelta) < 0.001;
-
-  const receivedAmount = reconcileReceivedInc();
-  const expectedAmountDelta = r2((Number(receiptNoteTotal) || 0) - receivedAmount);
-  let adjustedAmount = 0, formDelta = 0;
-  const seen = new Set();
-  const aggregateMap = evaluation && evaluation.aggregates instanceof Map ? evaluation.aggregates : null;
-  receivedRows.forEach(line => {
-    const id = String(line && line.productId != null ? line.productId : '');
-    seen.add(id);
-    const adjustedQty = Math.max(0, (Number(line && line.received) || 0) + (quantityDeltaByProduct.get(id) || 0));
-    adjustedAmount += lineTotalFromUnit(Number(line && line.price) || 0, adjustedQty);
-    // v89: שורה שהמבצע ירד בה כבר בתעודה חויבה פחות מהמחיר שבמסך ההשוואה,
-    // וזו אינה "בעיית מחיר" אלא צורת חיוב לגיטימית — ולכן אין עליה ממצא
-    // שיסגור את ההפרש. בלי התיקון הזה בדיקת הסגירה דורשת שממצאים יסבירו
-    // ₪34.20 שאיש לא טוען שחסרים, ונועלת תעודה שכל שורה בה נכונה.
-    const aggregate = aggregateMap ? aggregateMap.get(id) : null;
-    if (aggregate && bermanAggregateForm(aggregate) === BERMAN_FORM_PROMO_ON_PAPER) {
-      const billed = Number(aggregate.paperUnitPrice) || 0;
-      const priced = Number(line && line.price) || 0;
-      if (billed > 0 && Math.abs(billed - priced) > 0.005) formDelta += (billed - priced) * adjustedQty;
-    }
-  });
-  quantityDeltaByProduct.forEach((delta, id) => {
-    if (seen.has(id) || delta <= 0) return;
-    const aggregate = evaluation && evaluation.aggregates instanceof Map ? evaluation.aggregates.get(id) : null;
-    const product = aggregate && aggregate.product;
-    const related = rows.find(finding => String(finding && finding.productId != null ? finding.productId : '') === id);
-    const expectedPrice = Number(related && related.expectedPrice);
-    const fallbackPrice = Number(product && product.price) || Number(aggregate && aggregate.paperUnitPrice) || 0;
-    adjustedAmount += lineTotalFromUnit(isFinite(expectedPrice) && expectedPrice > 0 ? expectedPrice : fallbackPrice, delta);
-  });
-  let pricingDelta = 0;
-  rows.forEach(finding => {
-    if (!finding || !['price', 'promo_missing'].includes(String(finding.type || ''))) return;
-    pricingDelta += Number(finding.amount) || 0;
-  });
-  const supplierDiscount = Math.max(0, Number(evaluation && evaluation.supplierDiscount) || 0);
-  const actualAmountDelta = r2(adjustedAmount - receivedAmount + pricingDelta + formDelta - supplierDiscount);
-  const amountTolerance = Number(RECEIPT_ROUNDING_TOLERANCE_CENTS) || 0;
-  const amountDiffCents = Math.abs(Math.round(actualAmountDelta * 100) - Math.round(expectedAmountDelta * 100));
-  const amountOk = amountDiffCents === 0 || (unitsOk && amountDiffCents <= amountTolerance);
-  const ok = unitsOk && amountOk;
-  const reason = ok ? '' : (!unitsOk
-    ? 'הממצאים אינם סוגרים את פער היחידות: צפוי ' + expectedUnitsDelta + ', נמצא ' + actualUnitsDelta
-    : 'הממצאים אינם סוגרים את פער הסכום: צפוי ₪' + fmtMoney(expectedAmountDelta) + ', נמצא ₪' + fmtMoney(actualAmountDelta));
-  return { ok, unitsOk, amountOk, expectedUnitsDelta, actualUnitsDelta, expectedAmountDelta, actualAmountDelta, reason };
+  const ok = unitsOk;
+  const reason = ok ? '' : 'הממצאים אינם סוגרים את פער היחידות: צפוי ' + expectedUnitsDelta + ', נמצא ' + actualUnitsDelta;
+  return { ok, unitsOk, expectedUnitsDelta, actualUnitsDelta, reason };
 }
+// v122: ההשוואה מול הנייר היא כמויות בלבד. לכל תעודה: סכום הכמויות של
+// השורות שנקראו מול "סה"כ כללי" ומספר השורות מול "סה"כ שורות" (anchorsVerified);
+// לכל מוצר: הכמות שחויבה מול מה שנסרק (חוסר/עודף). המחיר המודפס נשאר
+// עדות לזהות המוצר בלבד (bermanAdaptScanPayload); הכסף מחושב במרכזת.
 function aiEvaluateInvoiceScan(payload) {
   const scan = payload && payload.scan;
-  const errors = [], warnings = [], findings = [], promoCandidates = [], barcodeSuggestions = [], aggregates = new Map(), docSummaries = [], residuals = [], pendings = [], autoResolutions = [], depositRows = [];
+  const errors = [], warnings = [], findings = [], barcodeSuggestions = [], aggregates = new Map(), docSummaries = [], residuals = [], pendings = [], autoResolutions = [];
   let unresolvedBarcodeRows = 0, unusableRows = 0;
-  if (!scan || !Array.isArray(scan.documents)) return { valid: false, totalVerified: false, unitsVerified: false, extractedTotal: 0, extractedUnits: 0, errors: ['השרת לא החזיר מסמכים תקינים'], warnings, findings, barcodeSuggestions, allRowsMapped: false, aggregates, docSummaries, residuals, autoResolutions, basketComplete: false, missingDocuments: 0 };
+  if (!scan || !Array.isArray(scan.documents)) return { valid: false, anchorsVerified: false, unitsVerified: false, extractedUnits: 0, errors: ['השרת לא החזיר מסמכים תקינים'], warnings, findings, barcodeSuggestions, allRowsMapped: false, aggregates, docSummaries, residuals, autoResolutions, basketComplete: false, missingDocuments: 0 };
   if (!Number.isInteger(Number(payload.serviceVersion)) || Number(payload.serviceVersion) < AI_SCAN_MIN_SERVICE_VERSION) {
     errors.push('שירות הסריקה עדיין בגרסה ישנה שאינה מוכיחה את מקור הברקוד — יש להעלות קודם את server.js החדש');
   }
@@ -12826,17 +12685,13 @@ function aiEvaluateInvoiceScan(payload) {
     if (!Number.isInteger(idx) || returned.has(idx)) errors.push('מספור המסמכים שחזר מה-AI אינו תקין');
     else returned.set(idx, doc);
   });
-  let extractedTotalCents = 0, extractedUnits = 0, rowTotalCents = 0, verifiedDocumentDiscountCents = 0;
-  // v22 ברמן: כסף השורות מחושב מהקטלוג (על הנייר אין סכומי שורה), והמרכזת של
-  // ברמן מעגלת כל שורה בדרכה. נתפס בתעודה האמיתית הראשונה (28.8): 9 שורות,
-  // 394.42 מחושב מול 394.43 "נטו לחיוב" — אגורה אחת חסמה תעודה מושלמת.
-  // הסבילות: אגורה לשורה (מינ' 2, מקס' 15 לתעודה) — רחוקה בסדר גודל מהמוצר
-  // הזול ביותר (132 אג'), כך שהיא לא יכולה להסתיר שורה או יחידה אמיתית.
-  let roundingSlackCents = 0;
+  let extractedUnits = 0;
   // v178: תעודה שלא חזר עבורה פענוח — או שחזרה בלי שורות מוצר — נספרת במפורש.
   // בלי הספירה הזאת אין לה שורות "שלא שויכו" ואין לה שורות פגומות, ולכן
   // basketComplete נשאר אמת והמערכת הכריזה "עודף" על כל מה שנסרק מהתעודה החסרה.
   let missingDocuments = 0;
+  // v122: שני העוגנים המודפסים, לכל תעודה בנפרד: יחידות ושורות.
+  let unitsAnchorsOk = true;
   const documentFailureReason = index => {
     const list = payload && Array.isArray(payload.perDocument) ? payload.perDocument : [];
     const entry = list.find(item => item && Number(item.docIndex) === index && item.ok === false);
@@ -12846,6 +12701,7 @@ function aiEvaluateInvoiceScan(payload) {
     const doc = returned.get(index);
     if (!doc) {
       missingDocuments++;
+      unitsAnchorsOk = false;
       const why = documentFailureReason(index);
       errors.push('תעודה ' + (index + 1) + ': לא התקבל פענוח מה-AI' + (why ? ' — ' + why : '') + '. צלם את התעודה הזאת שוב — בלעדיה אי אפשר להשוות מול הנייר.');
       return;
@@ -12854,79 +12710,44 @@ function aiEvaluateInvoiceScan(payload) {
       missingDocuments++;
       errors.push('תעודה ' + (index + 1) + ': לא נקראה ממנה אף שורת מוצר — היא אינה משתתפת בהשוואה. צלם אותה שוב.');
     }
-    // v51: הסימן של התעודה. הכמויות והסכומים נקראים מהנייר כמגודל חיובי,
-    // כאן הם נכנסים לסיכומים עם הסימן. הסיווג שהוקלד הוא הקובע, אבל הוא
-    // מוצלב מול הכותרת שה-AI קרא — שני עדים בלתי תלויים על אותו נייר, בדיוק
-    // כמו הכסף והיחידות. סתירה עוצרת, כי סימן הפוך שווה לטעות בגובה כפול.
+    // v51: הסימן של התעודה. הכמויות נקראות מהנייר כמגודל חיובי, כאן הן
+    // נכנסות לסיכומים עם הסימן. הסיווג שהוקלד הוא הקובע, אבל הוא מוצלב מול
+    // הכותרת שה-AI קרא — שני עדים בלתי תלויים על אותו נייר. סתירה עוצרת.
     const docIsCredit = inputDoc && inputDoc.kind === 'credit';
     const docSign = docIsCredit ? -1 : 1;
     if (doc.docType === 'credit' && !docIsCredit) errors.push('תעודה ' + (index + 1) + ': ה-AI קרא בכותרת תעודת זיכוי/החזרה, אך היא הוקלדה כחיוב. אם היא מבטלת חיוב מאותו משלוח — סמן אותה "זיכוי (מינוס)" בנתוני התעודה; אם הסחורה הוחזרה לנהג — מקומה במסך החזרות.');
     else if (doc.docType === 'invoice' && docIsCredit) errors.push('תעודה ' + (index + 1) + ': סומנה כזיכוי (מינוס), אך ה-AI קרא בכותרת תעודת משלוח/חשבונית רגילה. בדוק את הסימון.');
     else if (docIsCredit && doc.docType !== 'credit') warnings.push('תעודה ' + (index + 1) + ': סומנה כזיכוי אך כותרת המסמך לא נקראה בוודאות — הסימון שהוקלד הוא הקובע.');
     if (Number(doc.pageCount) !== aiScanDocumentPageCount(inputDoc)) errors.push('תעודה ' + (index + 1) + ': מספר העמודים שפוענחו אינו זהה למספר התמונות שצולמו');
-    const subtotalCents = aiMoneyCents(doc.subtotalExVat);
-    const expectedCents = aiMoneyCents(inputDoc.amount);
-    if (subtotalCents == null) errors.push('הסכום ללא מע״מ לא נקרא בתעודה ' + (index + 1));
-    else {
-      extractedTotalCents += docSign * subtotalCents;
-      if (expectedCents != null && subtotalCents !== expectedCents) errors.push('תעודה ' + (index + 1) + ': נקרא ₪' + fmtMoney(subtotalCents / 100) + ' במקום ₪' + fmtMoney(expectedCents / 100));
-    }
-    const vatCents = aiMoneyCents(doc.vatAmount), totalInclCents = aiMoneyCents(doc.totalInclVat);
-    if (subtotalCents != null && vatCents != null && totalInclCents != null && Math.abs((subtotalCents + vatCents) - totalInclCents) > 1) {
-      // סכומי מע״מ/ברוטו הם מידע מסכם בלבד. בתעודות משלוח הם לעיתים מחוץ
-      // לצילום או כוללים עיגול חשבונאי שונה. סכום הנטו שהוקלד נשאר בדיקה קשיחה.
-      warnings.push('תעודה ' + (index + 1) + ': סכומי המע״מ/ברוטו שנקראו אינם נסגרים בדיוק — האימות בוצע מול סכום הנטו');
-    }
     const docConfidence = Number(doc.confidence);
-    if (!isFinite(docConfidence) || docConfidence < 0.55) warnings.push('תעודה ' + (index + 1) + ': ביטחון הקריאה של הכותרת נמוך — השורות יאושרו רק אם כל בדיקות הסכום והכמות נסגרות');
+    if (!isFinite(docConfidence) || docConfidence < 0.55) warnings.push('תעודה ' + (index + 1) + ': ביטחון הקריאה של הכותרת נמוך — השורות יאושרו רק אם היחידות והשורות נסגרות מול המודפס');
     else if (docConfidence < 0.78) warnings.push('תעודה ' + (index + 1) + ': ביטחון הקריאה בינוני — בדוק היטב לפני אישור');
-    let docUnits = 0, docRowsCents = 0;
-    const docDepositCandidates = []; // v182
+    let docUnits = 0;
     (Array.isArray(doc.warnings) ? doc.warnings : []).forEach(w => warnings.push('תעודה ' + (index + 1) + ': ' + w));
     (Array.isArray(doc.rows) ? doc.rows : []).forEach((row, rowIndex) => {
       const rowNumber = row.lineNumber || (rowIndex + 1);
       const rowPrefix = 'תעודה ' + (index + 1) + ', שורה ' + rowNumber + ': ';
-      // v176 (תיקון לפי התעודה האמיתית): שורת פיקדון נספרת בכסף בלבד —
-      // סכום היחידות המודפס בתחתית התעודה אינו כולל אותה.
+      // v176: שורת פיקדון אינה שורת מוצר — סכום היחידות המודפס אינו כולל אותה.
       const depositNameRow = /פ.?קדון/.test(String(row.description || ''));
       const qtyRaw = row.quantity == null || row.quantity === '' ? NaN : Number(row.quantity);
       const qty = isFinite(qtyRaw) && qtyRaw >= 0 && Math.abs(qtyRaw - Math.round(qtyRaw)) < 0.001 ? Math.round(qtyRaw) : null;
       let rowUnusableReason = '';
       if (qty == null) { errors.push(rowPrefix + 'הכמות לא נקראה בוודאות'); unusableRows++; rowUnusableReason = 'הכמות לא נקראה בוודאות'; }
-      // docUnits/docRowsCents נשארים במגודל המודפס — הם נבדקים מול המספרים
-      // שעל אותו נייר. רק הסיכומים החוצים־תעודות נושאים את הסימן.
+      // docUnits נשאר במגודל המודפס — נבדק מול המספר שעל אותו נייר. רק
+      // הסיכום החוצה-תעודות נושא את הסימן.
       else if (!depositNameRow) { docUnits += qty; extractedUnits += docSign * qty; }
+      // המחיר המודפס (מחירון) משמש רק כעדות לזהות המוצר בהכרעות מקומיות.
       const total = aiLineTotal(row, qty);
       const cents = total == null || total < 0 ? null : aiMoneyCents(total);
-      if (cents == null) { errors.push(rowPrefix + 'סכום השורה לא נקרא'); unusableRows++; if (!rowUnusableReason) rowUnusableReason = 'סכום השורה לא נקרא'; }
-      else { docRowsCents += cents; rowTotalCents += docSign * cents; }
-      const crossCheckNote = qty == null ? '' : aiRowGrossCrossCheckNote(row, qty);
-      if (crossCheckNote) warnings.push(rowPrefix + crossCheckNote);
-      const arithmeticError = qty == null ? '' : aiRowArithmeticError(row, qty);
-      if (arithmeticError) { errors.push(rowPrefix + arithmeticError); unusableRows++; if (!rowUnusableReason) rowUnusableReason = arithmeticError; }
       if (rowUnusableReason) {
-        residuals.push({ docNumber: index + 1, documentIndex: index, lineNumber: rowNumber, sourcePage: Number(row.sourcePage), rowRegion: row.rowRegion || null, description: String(row.description || '').trim(), qty, amount: cents == null ? null : cents / 100, reason: rowUnusableReason, raw: { code: row.supplierItemCode, unit: row.unitPriceExVat, gross: row.grossLineTotalExVat, discount: row.lineDiscountExVat, total: row.lineTotalExVat } }); // v41: הקוד המודפס באבחון
+        residuals.push({ docNumber: index + 1, documentIndex: index, lineNumber: rowNumber, sourcePage: Number(row.sourcePage), rowRegion: row.rowRegion || null, description: String(row.description || '').trim(), qty, reason: rowUnusableReason, raw: { code: row.supplierItemCode, unit: row.unitPriceExVat, conf: row.confidence } });
       }
       const rowConfidence = Number(row.confidence);
-      if (!isFinite(rowConfidence) || rowConfidence < 0.55) warnings.push(rowPrefix + 'ביטחון הקריאה נמוך — השורה תאושר רק אם הברקוד, החשבון והסיכומים נסגרים');
+      if (!isFinite(rowConfidence) || rowConfidence < 0.55) warnings.push(rowPrefix + 'ביטחון הקריאה נמוך — השורה תאושר רק אם הקוד והכמויות נסגרים מול המודפס');
       else if (rowConfidence < 0.78) warnings.push(rowPrefix + 'ביטחון קריאה בינוני — מומלץ לבדוק מול התמונה');
-
-      // הכמות וסכום השורה נספרים גם אם המוצר עדיין לא הותאם. כך הסיכומים
-      // המודפסים נשארים גלויים ומדויקים, אך אין חישוב חוסר/עודף על סל חלקי.
-      // v169 (הכרעת המשתמש): טיפול הפיקדון פועל אך ורק על מוצרים שהוגדר
-      // להם "פיקדון ליחידה" בעורך המוצר. שורת פיקדון של מוצר לא-מוגדר
-      // אינה נבלעת ואינה נצברת לכמות המוצר (זה היה יוצר חוסר מדומה) —
-      // היא נעצרת כשגיאה מפורשת עד שהמשתמש יגדיר את השדה.
-      if (/פ.?קדון/.test(String(row.description || '')) && qty != null && cents != null && !arithmeticError) {
-        const depositMatch = aiResolveInvoiceBarcode(row);
-        const depositProduct = depositMatch && depositMatch.product;
-        if (depositProduct && Number(depositProduct.deposit) > 0) {
-          depositRows.push({ document: index + 1, description: String(row.description || '').trim() || 'פיקדון', productName: String(depositProduct.name || ''), qty: docSign * qty, cents: docSign * cents });
-          warnings.push(rowPrefix + 'זוהתה שורת פיקדון של ' + depositProduct.name + ' (' + qty + ' × ₪' + fmtMoney(cents / 100 / Math.max(1, qty)) + ' = ₪' + fmtMoney(cents / 100) + ') — תצורף לתעודה כשורה נפרדת');
-        } else {
-          errors.push(rowPrefix + 'שורת פיקדון' + (depositProduct ? ' של ' + depositProduct.name : '') + ' — אך למוצר לא הוגדר פיקדון. הגדר "פיקדון ליחידה" בעורך המוצר (מחירים נוספים) וסרוק שוב');
-          residuals.push({ docNumber: index + 1, documentIndex: index, lineNumber: rowNumber, sourcePage: Number(row.sourcePage), rowRegion: row.rowRegion || null, description: String(row.description || '').trim(), qty, amount: cents / 100, reason: 'שורת פיקדון למוצר שלא הוגדר לו פיקדון' });
-        }
+      if (depositNameRow) {
+        // v122: פיקדון אינו סחורה ואינו נספר ביחידות; הכסף שלו שייך למרכזת.
+        warnings.push(rowPrefix + 'שורת פיקדון — אינה נספרת ביחידות ואינה משתתפת בהשוואת הכמויות');
         return;
       }
       const barcodeMatch = aiResolveInvoiceBarcode(row);
@@ -12936,104 +12757,41 @@ function aiEvaluateInvoiceScan(payload) {
         // v132: אין שלב אישורי משתמש. השורה נאספת להכרעה אוטומטית שתרוץ
         // אחרי שכל המסמכים נקראו (כדי שהצלבת הכמות תראה את התמונה המלאה).
         // מה שלא יוכרע יירשם כשורת שארית — מוצג, לא נתבע, וחוסם רק את ההחלה.
-        pendings.push({ docIndex: index, rowIndex, rowNumber, rowPrefix, row, qty, cents, credit: docIsCredit, rowConfidence: isFinite(rowConfidence) ? rowConfidence : 0, arithmeticError, resolution: barcodeMatch });
+        pendings.push({ docIndex: index, rowIndex, rowNumber, rowPrefix, row, qty, cents, credit: docIsCredit, rowConfidence: isFinite(rowConfidence) ? rowConfidence : 0, resolution: barcodeMatch });
         return;
       }
       if (['unique_suffix', 'unique_full_pattern', 'unique_suffix_pattern'].includes(barcodeMatch.method)) warnings.push(product.name + ': הותאם בוודאות לפי הספרות שנקראו (' + barcodeMatch.observed + ')');
       if (['verified_suffix_name', 'verified_pattern_name', 'verified_one_digit_name'].includes(barcodeMatch.method)) warnings.push(product.name + ': הותאם אוטומטית לפי ראיית ברקוד יחידה ורמז שם תואם');
-      if (barcodeMatch.method === 'verified_name_price') warnings.push(product.name + ': הותאם לפי שם יחיד והצלבת מחיר/חשבון מקומית');
+      if (barcodeMatch.method === 'verified_name_price') warnings.push(product.name + ': הותאם לפי שם יחיד והצלבת מחיר מודפס מקומית');
       // v47: תיקון ספרה בקוד — נספר ומתועד ביומן בדיוק כמו הכרעה אוטומטית.
       if (barcodeMatch.method === 'tnuva_code_repair') {
         const rep = row.__tnuvaRepair || {};
-        warnings.push(product.name + ': הקוד המודפס נקרא ' + (rep.from || '?') + ' ותוקן ל־' + (rep.to || '?') + ' — ספרה אחת, מחיר הקטלוג אישר');
-        autoResolutions.push({ documentIndex: index, rowIndex, lineNumber: rowNumber, sourcePage: Number(row.sourcePage), productId: product.id, productName: String(product.name || '').slice(0, 160), barcode, method: 'tnuva_code_repair', printedDescription: String(row.description || '').slice(0, 160), observed: rep.from || null, quantity: qty, lineTotalExVat: cents == null ? null : r2(cents / 100), rowConfidence: isFinite(rowConfidence) ? rowConfidence : 0 });
+        warnings.push(product.name + ': הקוד המודפס נקרא ' + (rep.from || '?') + ' ותוקן ל־' + (rep.to || '?') + ' — ספרה אחת, מחיר המחירון אישר');
+        autoResolutions.push({ documentIndex: index, rowIndex, lineNumber: rowNumber, sourcePage: Number(row.sourcePage), productId: product.id, productName: String(product.name || '').slice(0, 160), barcode, method: 'tnuva_code_repair', printedDescription: String(row.description || '').slice(0, 160), observed: rep.from || null, quantity: qty, rowConfidence: isFinite(rowConfidence) ? rowConfidence : 0 });
       }
-      // v183: מועמד הפיקדון נאסף לפני שער החשבון. ב-v182 שורת ה-ICE עצמה
-      // נתקעה, ולכן המוצר לא נרשם כמועמד והשלמת שורת הפיקדון לא יכלה לרוץ.
-      if (qty != null && qty > 0 && Number(product.deposit) > 0) docDepositCandidates.push({ product, qty, cents: Math.round(Number(product.deposit) * qty * 100) });
-      if (qty == null || cents == null || arithmeticError) return;
-      const old = aggregates.get(product.id) || { product, qty: 0, totalCents: 0, rows: [], promotionTexts: [], priceVariants: new Set(), bermanForms: new Set() };
-      // v89: הצורה שהוכרעה לשורה נוסעת עם הצבירה, כדי שהמחיר הצפוי יימדד מול
-      // הצורה שבה השורה באמת חויבה. בלי זה שורה שהגיעה במחיר המבצע נמדדת מול
-      // המחיר הרגיל ומייצרת ממצא "מחיר שונה" מדומה בדיוק בגובה המבצע.
-      old.bermanForms.add(String(row.__bermanPriceForm || BERMAN_FORM_REGULAR));
+      if (qty == null) return;
+      const old = aggregates.get(product.id) || { product, qty: 0, rows: [] };
       // v51: שורת זיכוי מפחיתה מהצבירה של אותו מוצר. מוצר שחויב וזוכה
       // במלואו מגיע לאפס — הוא באמת לא התקבל, ולכן גם לא ייחשב חוסר.
-      old.qty += docSign * qty; old.totalCents += docSign * cents; old.rows.push({ document: index + 1, page: row.sourcePage, line: row.lineNumber, credit: docIsCredit, confidence: isFinite(rowConfidence) ? rowConfidence : 0, barcodeObserved: barcodeMatch.observed, barcodeMatchMethod: barcodeMatch.method, identityEvidence: barcodeMatch.identityEvidence || null });
-      // קיבוץ אבחוני בלבד לזיהוי מחירים מודפסים שונים; אינו משתתף בחישוב הסכום.
-      // כאן השוואה ברמת אגורות מכוונת, כדי שעיגולי שורה תקינים לא ייראו כמחירים שונים.
-      if (qty > 0) old.priceVariants.add(r2(cents / 100 / qty));
-      if (row.promotionText) old.promotionTexts.push(String(row.promotionText));
+      old.qty += docSign * qty; old.rows.push({ document: index + 1, page: row.sourcePage, line: row.lineNumber, credit: docIsCredit, confidence: isFinite(rowConfidence) ? rowConfidence : 0, barcodeObserved: barcodeMatch.observed, barcodeMatchMethod: barcodeMatch.method, identityEvidence: barcodeMatch.identityEvidence || null });
       aggregates.set(product.id, old);
     });
-    const printedUnits = doc.printedUnits == null || doc.printedUnits === '' ? null : Number(doc.printedUnits);
-    if (printedUnits != null && isFinite(printedUnits) && Math.round(printedUnits) !== docUnits) warnings.push('תעודה ' + (index + 1) + ': שדה היחידות המודפס נקרא אחרת מסכום השורות — נבדק מול הכמות שהוקלדה');
-    const printedLines = doc.printedLines == null || doc.printedLines === '' ? null : Number(doc.printedLines);
-    if (printedLines != null && isFinite(printedLines) && Math.round(printedLines) !== (Array.isArray(doc.rows) ? doc.rows.length : 0)) warnings.push('תעודה ' + (index + 1) + ': שדה מספר השורות המודפס אינו תואם לשורות שנקראו — סכום וכמות השורות נבדקו בנפרד');
-    if (inputDoc.units != null && docUnits !== Number(inputDoc.units)) errors.push('תעודה ' + (index + 1) + ': נקראו ' + docUnits + ' יחידות במקום ' + inputDoc.units);
-    // v182: שורת הפיקדון אינה שורת מוצר, וההנחיה לשרת מורה לדלג על שורות
-    // שאינן מוצר — ולכן ה-AI פשוט אינו מחזיר אותה, והתעודה נחסמה על פער
-    // של ₪3.05. כשהפער נסגר לאגורה על הפיקדון שהוגדר במאגר למוצר שנמצא
-    // בתעודה, השורה נגזרת מההגדרה שלך — בדיוק כמו בקליטה הידנית (v173).
-    // אין כאן המצאת כסף: המחיר מההגדרה, הכמות מהנייר, והסגירה מדויקת.
-    if (subtotalCents != null && docRowsCents < subtotalCents && docDepositCandidates.length) {
-      const shortfallCents = subtotalCents - docRowsCents;
-      const exact = docDepositCandidates.filter(candidate => candidate.cents === shortfallCents);
-      const allCents = docDepositCandidates.reduce((sum, candidate) => sum + candidate.cents, 0);
-      const chosen = exact.length === 1 ? exact : (allCents === shortfallCents ? docDepositCandidates : []);
-      let recoveredCents = 0;
-      chosen.forEach(candidate => {
-        recoveredCents += candidate.cents;
-        depositRows.push({ document: index + 1, description: 'פיקדון', productName: String(candidate.product.name || ''), qty: docSign * candidate.qty, cents: docSign * candidate.cents });
-        warnings.push('תעודה ' + (index + 1) + ': שורת הפיקדון של ' + candidate.product.name + ' לא הוחזרה מהקריאה. הפער נסגר בדיוק על הפיקדון שהוגדר במאגר (' + candidate.qty + ' × ₪' + fmtMoney(candidate.cents / 100 / Math.max(1, candidate.qty)) + ' = ₪' + fmtMoney(candidate.cents / 100) + ') ולכן נוספה כשורת פיקדון');
-      });
-      if (recoveredCents > 0) { docRowsCents += recoveredCents; rowTotalCents += docSign * recoveredCents; }
-    }
-    const printedDiscountCents = aiMoneyCents(doc.documentDiscountExVat);
-    // v22: הפרש עיגול מותר בין הכסף המחושב ל"נטו לחיוב" המודפס — אגורה לשורה.
-    // v52: שתי אגורות לשורה (מינ' 3, מקס' 25). המרכזת של ברמן מעגלת כל שורה
-    // בדרכה, ואגורה אחת לשורה הייתה צמודה מדי — תעודה של תשע שורות נחסמה על
-    // תשע אגורות. גם 25 נשארת רחוקה בסדר גודל מהמוצר הזול (132 אג'), ולכן
-    // אינה יכולה להסתיר שורה שלמה. הפער עצמו ממשיך להיאמר באזהרה למטה.
-    // v79: כששני העוגנים המודפסים סגורים בדיוק — היחידות והשורות — הסיבולת
-    // היא זו של README 6ב: 30 אג' לתעודה. בלי זה שער הצילום היה מקבל תעודה
-    // שהבדיקה הזאת פוסלת שורה אחת אחריו ("סכום השורות נמוך מסכום התעודה"),
-    // כלומר החסימה על 21 אג' הייתה חוזרת במסך הבא במקום להיפתר.
     const docRowCount = Array.isArray(doc.rows) ? doc.rows.length : 0;
-    const docUnitsAnchorExact = printedUnits != null && isFinite(printedUnits) && Math.round(printedUnits) === docUnits;
-    const docLinesAnchorExact = printedLines != null && isFinite(printedLines) && Math.round(printedLines) === docRowCount;
-    const docBaseRoundingTolCents = Math.min(25, Math.max(3, 2 * docRowCount));
-    const docRoundingTolCents = docUnitsAnchorExact && docLinesAnchorExact
-      ? Math.max(docBaseRoundingTolCents, RECEIPT_ROUNDING_TOLERANCE_CENTS) : docBaseRoundingTolCents;
-    roundingSlackCents += docRoundingTolCents;
-    const impliedRawCents = subtotalCents == null ? null : docRowsCents - subtotalCents;
-    const impliedDiscountCents = impliedRawCents != null && impliedRawCents !== 0 && Math.abs(impliedRawCents) <= docRoundingTolCents ? 0 : impliedRawCents;
-    if (impliedRawCents != null && impliedRawCents !== 0 && impliedDiscountCents === 0) {
-      warnings.push('תעודה ' + (index + 1) + ': הפרש עיגול של ' + Math.abs(impliedRawCents) + ' אג\' בין סכום השורות המחושב (₪' + fmtMoney(docRowsCents / 100) + ') ל"נטו לחיוב" (₪' + fmtMoney(subtotalCents / 100) + ') — תקין בנייר של ברמן, הספק מעגל כל שורה בדרכו');
+    const printedUnits = doc.printedUnits == null || doc.printedUnits === '' ? null : Number(doc.printedUnits);
+    if (printedUnits != null && isFinite(printedUnits) && Math.round(printedUnits) !== docUnits) warnings.push('תעודה ' + (index + 1) + ': שדה "סה"כ כללי" המודפס נקרא אחרת מסכום כמויות השורות — נבדק מול היחידות שהוקלדו');
+    const printedLines = doc.printedLines == null || doc.printedLines === '' ? null : Number(doc.printedLines);
+    if (printedLines != null && isFinite(printedLines) && Math.round(printedLines) !== docRowCount) warnings.push('תעודה ' + (index + 1) + ': שדה "סה"כ שורות" המודפס אינו תואם למספר השורות שנקראו — נבדק מול השורות שהוקלדו');
+    // v122: העוגנים של התעודה — יחידות ושורות — מול מה שהוקלד (או נקרא
+    // מהנייר ואומץ). אלה השערים היחידים; אין שער כסף.
+    const typedUnits = inputDoc.units == null ? null : Number(inputDoc.units);
+    const typedLines = inputDoc.lines == null ? null : Number(inputDoc.lines);
+    if (typedUnits == null) unitsAnchorsOk = false;
+    else if (docUnits !== typedUnits) { unitsAnchorsOk = false; errors.push('תעודה ' + (index + 1) + ': נקראו ' + docUnits + ' יחידות במקום ' + typedUnits + ' ("סה"כ כללי")'); }
+    if (typedLines != null && docRowCount !== typedLines) errors.push('תעודה ' + (index + 1) + ': נקראו ' + docRowCount + ' שורות במקום ' + typedLines + ' ("סה"כ שורות")');
+    if (printedUnits != null && isFinite(printedUnits) && Math.round(printedUnits) === docUnits && typedUnits != null && docUnits !== typedUnits) {
+      warnings.push('תעודה ' + (index + 1) + ': היחידות שנקראו (' + docUnits + ') תואמות לשדה המודפס בתעודה — ייתכן שהיחידות שהוקלדו (' + typedUnits + ') שגויות.');
     }
-    if (impliedDiscountCents != null) {
-      if (impliedDiscountCents < 0) errors.push('תעודה ' + (index + 1) + ': סכום השורות נמוך מסכום התעודה — כנראה חסרה שורה או תוספת שלא נקראה');
-      else if (impliedDiscountCents === 0) {
-        if (printedDiscountCents != null && printedDiscountCents !== 0) {
-          // כשסכומי השורות כבר שווים בדיוק לנטו, המספר המודפס הוא בדרך כלל
-          // סיכום של הנחות שורה/הפרש ברוטו ולא הנחה נוספת שיש להפחית שוב.
-          warnings.push('תעודה ' + (index + 1) + ': ההנחה המודפסת כבר מגולמת בסכומי השורות ולכן לא הופחתה פעם נוספת');
-        }
-      } else if (printedDiscountCents == null) {
-        errors.push('תעודה ' + (index + 1) + ': קיים פער של ₪' + fmtMoney(impliedDiscountCents / 100) + ' בין השורות לסכום, אך הנחת המסמך לא נקראה');
-      } else if (printedDiscountCents !== impliedDiscountCents) {
-        errors.push('תעודה ' + (index + 1) + ': הנחת המסמך שנקראה אינה סוגרת בדיוק את סכום השורות');
-      } else verifiedDocumentDiscountCents += docSign * printedDiscountCents; // v51: נושא את הסימן כדי שהזהות rowTotal−extractedTotal=הנחות תישמר
-    }
-    // v132: כשהקריאה עקבית פנימית (שורות מול סיכום מודפס) אך שונה מהעוגן
-    // שהוקלד — החשוד הסביר הוא ההקלדה, לא הקריאה. אומרים זאת במפורש.
-    if (subtotalCents != null && expectedCents != null && subtotalCents !== expectedCents && impliedDiscountCents != null && impliedDiscountCents >= 0 && (impliedDiscountCents === 0 || printedDiscountCents === impliedDiscountCents)) {
-      warnings.push('תעודה ' + (index + 1) + ': סכום השורות שנקראו נסגר בדיוק על ₪' + fmtMoney(subtotalCents / 100) + ' — ייתכן שהסכום שהוקלד (₪' + fmtMoney(expectedCents / 100) + ') שגוי. בדוק את ההקלדה.');
-    }
-    if (printedUnits != null && isFinite(printedUnits) && Math.round(printedUnits) === docUnits && inputDoc.units != null && docUnits !== Number(inputDoc.units)) {
-      warnings.push('תעודה ' + (index + 1) + ': היחידות שנקראו (' + docUnits + ') תואמות לשדה המודפס בתעודה — ייתכן שהיחידות שהוקלדו (' + inputDoc.units + ') שגויות.');
-    }
-    docSummaries.push({ noteIndex: index, invoiceNumber: doc.invoiceNumber || '', credit: docIsCredit, docType: doc.docType || 'unknown', subtotal: subtotalCents == null ? null : subtotalCents / 100, rowsSum: docRowsCents / 100, units: docUnits, rows: Array.isArray(doc.rows) ? doc.rows.length : 0, documentDiscount: printedDiscountCents == null ? null : printedDiscountCents / 100, confidence: isFinite(docConfidence) ? docConfidence : 0, printedVat: vatCents == null ? null : vatCents / 100, printedInclusive: totalInclCents == null ? null : totalInclCents / 100 });
+    docSummaries.push({ noteIndex: index, invoiceNumber: doc.invoiceNumber || '', credit: docIsCredit, docType: doc.docType || 'unknown', units: docUnits, rows: docRowCount, printedUnits: printedUnits != null && isFinite(printedUnits) ? Math.round(printedUnits) : null, printedLines: printedLines != null && isFinite(printedLines) ? Math.round(printedLines) : null, typedUnits, typedLines, confidence: isFinite(docConfidence) ? docConfidence : 0 });
   });
   // ===== v132: הכרעה אוטומטית של השורות שנותרו, בשני מעברים =====
   // מעבר שני נחוץ כי הצלבת "כמות שנותרה בספירה" משתנה אחרי כל הכרעה.
@@ -13043,81 +12801,27 @@ function aiEvaluateInvoiceScan(payload) {
     pendingList.forEach(pending => {
       const hit = aiAutoResolvePendingRow(pending, aggregates);
       if (!hit) { still.push(pending); return; }
-      const old = aggregates.get(hit.product.id) || { product: hit.product, qty: 0, totalCents: 0, rows: [], promotionTexts: [], priceVariants: new Set(), bermanForms: new Set() };
-      // v89: שורה שהמוצר שלה הוכרע רק כאן לא עברה במתאם, ולכן אין לה צורת
-      // מחיר מוכרעת. מסמנים זאת במפורש ולא מניחים "הנחה קבועה".
-      old.bermanForms.add('unknown');
+      const old = aggregates.get(hit.product.id) || { product: hit.product, qty: 0, rows: [] };
       const sign = pending.credit ? -1 : 1;
-      old.qty += sign * pending.qty; old.totalCents += sign * pending.cents;
+      old.qty += sign * pending.qty;
       old.rows.push({ document: pending.docIndex + 1, page: pending.row.sourcePage, line: pending.row.lineNumber, credit: !!pending.credit, confidence: pending.rowConfidence, barcodeObserved: (pending.resolution.suggestion && pending.resolution.suggestion.observed) || 'לא נקרא', barcodeMatchMethod: hit.method, identityEvidence: { auto: true, reason: aiAutoResolveMethodHe(hit.method) } });
-      if (pending.qty > 0) old.priceVariants.add(r2(pending.cents / 100 / pending.qty));
-      if (pending.row.promotionText) old.promotionTexts.push(String(pending.row.promotionText));
       aggregates.set(hit.product.id, old);
       warnings.push(hit.product.name + ': הוכרע אוטומטית — ' + aiAutoResolveMethodHe(hit.method));
-      autoResolutions.push({ documentIndex: pending.docIndex, rowIndex: pending.rowIndex, lineNumber: pending.rowNumber, sourcePage: Number(pending.row.sourcePage), productId: hit.product.id, productName: String(hit.product.name || '').slice(0, 160), barcode: hit.barcode, method: hit.method, printedDescription: String(pending.row.description || '').slice(0, 160), observed: (pending.resolution.suggestion && pending.resolution.suggestion.observed) || null, quantity: pending.qty, lineTotalExVat: r2(pending.cents / 100), rowConfidence: pending.rowConfidence });
+      autoResolutions.push({ documentIndex: pending.docIndex, rowIndex: pending.rowIndex, lineNumber: pending.rowNumber, sourcePage: Number(pending.row.sourcePage), productId: hit.product.id, productName: String(hit.product.name || '').slice(0, 160), barcode: hit.barcode, method: hit.method, printedDescription: String(pending.row.description || '').slice(0, 160), observed: (pending.resolution.suggestion && pending.resolution.suggestion.observed) || null, quantity: pending.qty, rowConfidence: pending.rowConfidence });
     });
     pendingList = still;
   }
-  // ===== v185: רשת ביטחון — זהות באלימינציה, אחרי שהכסף כבר הוכח =====
-  // עד כאן כל בדיקה עבדה ברמת התא: מחיר מול ברוטו, ברוטו מול נטו, ברוטו מול
-  // קטלוג. מודל ראייה אינו מחזיר את אותו תא פעמיים באותה צורה, ולכן תנודה
-  // אחת בעמודה משנית חסמה משלוח שלם שהכסף בו מדויק. השער האמיתי הוא סגירת
-  // הכסף: כשסכומי כל המסמכים נסגרים לאגורה מול מה שהוקלד, הכסף של השורה
-  // שנותרה כבר יושב בתוך סיכום מאומת. אם קיימת בדיוק שורה אחת שנסרקה, עוד
-  // לא נתבעה על ידי שום שורת נייר, והכמות והסכום שלה זהים לאגורה — זו היא.
-  // זה אינו ניחוש: יחידוּת בכמות, יחידוּת בכסף, ואלימינציה מול כל השאר.
-  const netMoneyProven = (() => {
-    const expected = aiMoneyCents(receiptNoteTotal);
-    if (expected == null || extractedTotalCents !== expected) return false;
-    // v22: "נטו לחיוב" המודפס מול הסכום שהוקלד נשאר מדויק לאגורה; הסבילות
-    // חלה רק על ההשוואה לכסף המחושב מהקטלוג, שם העיגול של הספק שונה משלנו.
-    return Math.abs((rowTotalCents - extractedTotalCents) - verifiedDocumentDiscountCents) <= roundingSlackCents;
-  })();
-  if (netMoneyProven && pendingList.length) {
-    const stillOpen = [];
-    pendingList.forEach(pending => {
-      if (pending.qty == null || pending.cents == null || pending.arithmeticError) { stillOpen.push(pending); return; }
-      // v51: האלימינציה מזהה שורת נייר לפי שורה שנסרקה פיזית עם אותה כמות
-      // ואותו כסף. שורת זיכוי אינה סחורה שנסרקה — בת הזוג שלה היא שורת חיוב
-      // בתעודה אחרת — ולכן היא אינה מועמדת לאלימינציה הזאת.
-      if (pending.credit) { stillOpen.push(pending); return; }
-      const options = (reconcileData || []).filter(line => {
-        if (!line || line.isDeposit || String(line.productId || '').indexOf('deposit-') === 0) return false;
-        if (aggregates.has(line.productId)) return false;
-        if ((Number(line.received) || 0) !== pending.qty) return false;
-        return aiMoneyCents(lineTotalFromUnit(line.price, Number(line.received) || 0)) === pending.cents;
-      });
-      const product = options.length === 1 ? products.find(candidate => String(candidate.id) === String(options[0].productId)) : null;
-      if (!product) { stillOpen.push(pending); return; }
-      const old = aggregates.get(product.id) || { product, qty: 0, totalCents: 0, rows: [], promotionTexts: [], priceVariants: new Set(), bermanForms: new Set() };
-      old.bermanForms.add('unknown'); // v89: הוכרע באלימינציה, לא במתאם — אין צורת מחיר מוכחת
-      old.qty += pending.qty; old.totalCents += pending.cents;
-      old.rows.push({ document: pending.docIndex + 1, page: pending.row.sourcePage, line: pending.row.lineNumber, confidence: pending.rowConfidence, barcodeObserved: 'לא נקרא', barcodeMatchMethod: 'net_proven_elimination', identityEvidence: { auto: true, reason: 'הכסף נסגר לאגורה; הכמות והסכום תואמים לשורה יחידה שלא נתבעה' } });
-      if (pending.qty > 0) old.priceVariants.add(r2(pending.cents / 100 / pending.qty));
-      if (pending.row.promotionText) old.promotionTexts.push(String(pending.row.promotionText));
-      aggregates.set(product.id, old);
-      autoResolutions.push({ documentIndex: pending.docIndex, rowIndex: pending.rowIndex, lineNumber: pending.rowNumber, sourcePage: Number(pending.row.sourcePage), productId: product.id, productName: String(product.name || '').slice(0, 160), barcode: normalizeBarcode(product.barcode || ''), method: 'net_proven_elimination', printedDescription: String(pending.row.description || '').slice(0, 160), observed: null, quantity: pending.qty, lineTotalExVat: r2(pending.cents / 100), rowConfidence: pending.rowConfidence });
-      warnings.push(product.name + ': שויך באלימינציה — סכומי התעודות נסגרו לאגורה, והכמות (' + pending.qty + ') והסכום (₪' + fmtMoney(pending.cents / 100) + ') תואמים לשורה יחידה אחת שלא נתבעה');
-    });
-    pendingList = stillOpen;
-  }
   pendingList.forEach(pending => {
     unresolvedBarcodeRows++;
-    errors.push(pending.rowPrefix + (pending.resolution.error || 'הברקוד לא זוהה במאגר'));
-    if (pending.qty != null && pending.cents != null && !pending.arithmeticError) {
-      residuals.push({ docNumber: pending.docIndex + 1, documentIndex: pending.docIndex, lineNumber: pending.rowNumber, sourcePage: Number(pending.row.sourcePage), rowRegion: pending.row.rowRegion || null, description: String(pending.row.description || '').trim(), qty: pending.qty, amount: pending.cents / 100, reason: pending.fallbackReason || pending.resolution.error || 'לא זוהה מוצר מתאים במאגר', raw: { code: pending.row.supplierItemCode, unit: pending.row.unitPriceExVat, gross: pending.row.grossLineTotalExVat, discount: pending.row.lineDiscountExVat, total: pending.row.lineTotalExVat, conf: pending.row.confidence } });
+    errors.push(pending.rowPrefix + (pending.resolution.error || 'הקוד לא זוהה במאגר'));
+    if (pending.qty != null) {
+      residuals.push({ docNumber: pending.docIndex + 1, documentIndex: pending.docIndex, lineNumber: pending.rowNumber, sourcePage: Number(pending.row.sourcePage), rowRegion: pending.row.rowRegion || null, description: String(pending.row.description || '').trim(), qty: pending.qty, reason: pending.fallbackReason || pending.resolution.error || 'לא זוהה מוצר מתאים במאגר', raw: { code: pending.row.supplierItemCode, unit: pending.row.unitPriceExVat, conf: pending.row.confidence } });
     }
     const builtSuggestion = aiBuildPendingSuggestion(pending);
     if (builtSuggestion) barcodeSuggestions.push(builtSuggestion);
   });
-  if (returned.size !== aiScanDocuments.length) errors.push('מספר המסמכים שחזר אינו זהה למספר התעודות שצולמו');
-  const expectedTotalCents = aiMoneyCents(receiptNoteTotal);
-  if (expectedTotalCents != null && extractedTotalCents !== expectedTotalCents) errors.push('סך כל המסמכים אינו זהה באגורות לסכום שהוקלד בתחילת הקליטה');
+  if (returned.size !== aiScanDocuments.length) { errors.push('מספר המסמכים שחזר אינו זהה למספר התעודות שצולמו'); unitsAnchorsOk = false; }
   if (receiptNoteUnits != null && extractedUnits !== Number(receiptNoteUnits)) errors.push('סך היחידות שנקרא (' + extractedUnits + ') אינו זהה ל-' + receiptNoteUnits + ' שהוקלדו בתחילת הקליטה');
-  const documentDiscountCents = rowTotalCents - extractedTotalCents;
-  // v22: אותה סבילות עיגול גם ברמת המשלוח כולו — הפער המותר הוא סכום
-  // הסבילויות של התעודות שנקראו.
-  if (Math.abs(documentDiscountCents - verifiedDocumentDiscountCents) > roundingSlackCents) errors.push('סך הנחות המסמך שנקראו אינו סוגר בדיוק את סכום כל השורות');
   // הצגת הצלבת כמות למועמד לפי שם נעשית על סכום כל הופעות המוצר, ולא על
   // שורה בודדת. זו ראיית חיזוק בלבד; היא אינה הופכת שם לברקוד ואינה מחילה דבר.
   const suggestedQtyByProduct = new Map();
@@ -13154,202 +12858,42 @@ function aiEvaluateInvoiceScan(payload) {
       const a = aggregates.get(id);
       const name = String((a.product && a.product.name) || '');
       if (a.qty < 0) { errors.push(name + ': הזיכוי גדול מהחיוב (' + a.qty + ' יח׳ נטו) — בדוק אילו תעודות סומנו כזיכוי'); return; }
-      if (a.qty === 0 && a.totalCents !== 0) { errors.push(name + ': הכמות מתקזזת לאפס אך נותר הפרש של ₪' + fmtMoney(a.totalCents / 100) + ' בין החיוב לזיכוי — כנראה מחיר שונה בין שתי התעודות'); return; }
-      if (a.qty === 0 && a.totalCents === 0) { aggregates.delete(id); cancelled.push(name); }
+      if (a.qty === 0) { aggregates.delete(id); cancelled.push(name); }
     });
     if (cancelled.length) warnings.push('בוטלו במלואם בזיכוי ולכן אינם חלק מהקליטה: ' + Array.from(new Set(cancelled)).join(' · '));
   }
   const allRowsMapped = unresolvedBarcodeRows === 0;
   // v132: דף הבעיות מוצג תמיד כשזוהו מוצרים. הרף המחמיר (findingsReady)
   // נשאר תנאי להחלה בלבד. basketComplete מציין שכל שורות הנייר נקראו ושויכו —
-  // רק אז מותר להסיק "עודף" או "מבצע חסר", כי אלה מסקנות מהיעדר שורה.
+  // רק אז מותר להסיק "עודף", כי זו מסקנה מהיעדר שורה.
   // "חוסר" (הנייר מבטיח יותר ממה שנסרק) הוא ראיה חיובית ומוצג גם על סל חלקי.
   const findingsReady = allRowsMapped && unusableRows === 0 && errors.length === 0;
   // v178: אין "סל שלם" בלי שכל התעודות חזרו עם שורות. "עודף" הוא מסקנה
   // מהיעדר שורה בנייר — ותעודה שלא נקראה היא היעדר שורות שאינו ראיה לכלום.
   const basketComplete = allRowsMapped && unusableRows === 0 && missingDocuments === 0 && returned.size === aiScanDocuments.length;
   if (aggregates.size > 0) {
-    // תוקף המבצע נקבע לפי תאריך התעודה, כמו בבדיקת המחירים ובמסך ההשוואה.
-    // עד כאן נבדק לפי היום, ולכן תעודה מתאריך קודם נשפטה מול מבצעי היום
-    // ודרישת הזיכוי מהספק נבנתה על מחיר צפוי שגוי. activeReceiptDate() מכיר רק
-    // את התאריך שהוקלד ביד, ובמסלול הצילום השדה הזה נשאר ריק — ולכן התאריך
-    // נקרא מאותו מקור שממנו קוראת בדיקת המחירים.
-    const day = priceAuditPromoDay();
-    const paperBasketQty = pr => {
-      if (!pr || !Array.isArray(pr.productIds)) return 0;
-      let total = 0;
-      aggregates.forEach(item => { if (pr.productIds.indexOf(item.product.id) !== -1) total += Number(item.qty) || 0; });
-      return total;
-    };
-    const paperPromoTriggered = pr => promoActive(pr, day) && paperBasketQty(pr) >= promoMinUnitsP(pr);
     aggregates.forEach(a => {
-    // מחיר אפקטיבי שנגזר מסכום שורת הנייר חייב להישאר בדיוק מלא.
-    // עיגול כאן היה מחזיר למשל 43.04 / 24 מ-1.79333 ל-1.79 ומאבד 8 אגורות.
-    a.paperUnitPrice = a.qty > 0 ? (a.totalCents / 100 / a.qty) : 0;
-    const line = (reconcileData || []).find(l => l.productId === a.product.id);
-    const received = Number(line && line.received) || 0;
-    const productPromo = promoForProduct(a.product.id, day);
-    // v89: המחיר הצפוי נמדד מול הצורה שבה השורה באמת חויבה. שורה שהמבצע ירד
-    // בה כבר בתעודה צפויה במחיר המבצע — אחרת היא נמדדת מול המחיר הרגיל
-    // ומייצרת ממצא "מחיר שונה" מדומה, בדיוק בגובה המבצע, על חיוב תקין.
-    const aggregateForm = bermanAggregateForm(a);
-    const formPromoUnit = aggregateForm === BERMAN_FORM_PROMO_ON_PAPER
-      ? promoFixedPrice(aiActiveFixedPromoFor(a.product.id, day)) : 0;
-    const expected = formPromoUnit > 0 ? r2(formPromoUnit)
-      : paperPromoTriggered(productPromo)
-      ? promoUnitPriceOf(productPromo, Number(a.product.price) || 0)
-      : r2(Number(a.product.price) || 0);
-    a.expectedUnitPrice = expected; // v48: מחיר-הסגירה נוסע להחלה — אותו עולם מחירים כמו הקליטה הידנית
-    const quantityDiff = a.qty - received;
-    if (quantityDiff > 0) findings.push({ type: 'shortage', productId: a.product.id, name: a.product.name, qty: quantityDiff, expectedPrice: expected, text: 'חסר ' + quantityDiff + ' × ' + a.product.name });
-    else if (quantityDiff < 0 && basketComplete) findings.push({ type: 'surplus', productId: a.product.id, name: a.product.name, qty: -quantityDiff, expectedPrice: expected, text: 'עודף ' + (-quantityDiff) + ' × ' + a.product.name });
-    const priceVariants = Array.from(a.priceVariants || []).sort((x, y) => x - y);
-    if (priceVariants.length > 1) {
-      const priceAmount = r2(a.totalCents / 100 - expected * a.qty);
-      findings.push({ type: 'price', productId: a.product.id, name: a.product.name, qty: a.qty, expectedPrice: expected, paperPrice: a.paperUnitPrice, amount: priceAmount, text: 'אותו מוצר חויב ביותר ממחיר אחד: ' + a.product.name + ' — ' + priceVariants.map(x => '₪' + fmtMoney(x)).join(' · ') });
-    } else if (basketComplete && a.qty > 0 && expected > 0 && Math.abs(a.paperUnitPrice - expected) > 0.02) {
-      const pr = productPromo, promoExpected = !!(pr && paperPromoTriggered(pr) && a.paperUnitPrice > expected + 0.02);
-      const priceFinding = { type: promoExpected ? 'promo_missing' : 'price', productId: a.product.id, name: a.product.name, qty: a.qty, expectedPrice: expected, paperPrice: a.paperUnitPrice, amount: r2((a.paperUnitPrice - expected) * a.qty), text: (promoExpected ? 'המבצע לא מופיע אצל הספק: ' : 'מחיר שונה: ') + a.product.name + ' — במערכת ₪' + fmtMoney(expected) + ', בנייר ₪' + fmtMoney(a.paperUnitPrice) };
-      // לעיתים תנובה מדפיסה את המבצעים כהנחה אחת בתחתית המסמך ולא כהנחת שורה.
-      // מחכים לסיום כל השורות ורק אז בודקים אם ההנחה הכללית סוגרת בדיוק את כל המבצעים.
-      if (promoExpected) promoCandidates.push(priceFinding);
-      else findings.push(priceFinding);
-    }
-    if (a.promotionTexts.length) findings.push({ type: 'printed_promo', productId: a.product.id, name: a.product.name, text: 'מבצע מודפס ליד ' + a.product.name + ': ' + Array.from(new Set(a.promotionTexts)).join(' · ') });
+      const line = (reconcileData || []).find(l => l.productId === a.product.id);
+      const received = Number(line && line.received) || 0;
+      const quantityDiff = a.qty - received;
+      if (quantityDiff > 0) findings.push({ type: 'shortage', productId: a.product.id, name: a.product.name, qty: quantityDiff, text: 'חסר ' + quantityDiff + ' × ' + a.product.name });
+      else if (quantityDiff < 0 && basketComplete) findings.push({ type: 'surplus', productId: a.product.id, name: a.product.name, qty: -quantityDiff, text: 'עודף ' + (-quantityDiff) + ' × ' + a.product.name });
     });
-    const expectedPromoDiscountCents = promoCandidates.reduce((sum, finding) => sum + Math.max(0, aiMoneyCents(finding.amount) || 0), 0);
-    if (promoCandidates.length && verifiedDocumentDiscountCents > 0 && expectedPromoDiscountCents === verifiedDocumentDiscountCents) {
-      findings.push({ type: 'printed_promo', amount: verifiedDocumentDiscountCents / 100, text: 'מבצעי המערכת מופיעים כהנחה כללית מאומתת בתעודה: ₪' + fmtMoney(verifiedDocumentDiscountCents / 100) });
-    } else {
-      findings.push(...promoCandidates);
-    }
     if (basketComplete) (reconcileData || []).forEach(line => {
-      // v177: שורת פיקדון נגזרת אינה מוצר שנסרק — הפיקדון שבנייר מטופל
-      // בנפרד (depositRows) ולכן אסור שהשורה הנגזרת תסומן "עודף".
+      // v177: שורת פיקדון נגזרת אינה מוצר שנסרק — אסור שתסומן "עודף".
       if (line.isDeposit || String(line.productId || '').indexOf('deposit-') === 0) return;
-      if ((Number(line.received) || 0) > 0 && !aggregates.has(line.productId)) findings.push({ type: 'surplus', productId: line.productId, name: line.name, qty: Number(line.received) || 0, expectedPrice: Number(line.price) || 0, text: 'עודף ' + (Number(line.received) || 0) + ' × ' + line.name + ' — לא מופיע בתעודה' });
+      if ((Number(line.received) || 0) > 0 && !aggregates.has(line.productId)) findings.push({ type: 'surplus', productId: line.productId, name: line.name, qty: Number(line.received) || 0, text: 'עודף ' + (Number(line.received) || 0) + ' × ' + line.name + ' — לא מופיע בתעודה' });
     });
-    if (documentDiscountCents > 2) findings.push({ type: 'document_discount', amount: documentDiscountCents / 100, text: 'הנחת מסמך כללית: ₪' + fmtMoney(documentDiscountCents / 100) });
   }
-  const totalVerified = expectedTotalCents != null && extractedTotalCents === expectedTotalCents && aiScanDocuments.every((inputDoc, index) => {
-    const doc = returned.get(index); return doc && aiMoneyCents(doc.subtotalExVat) === aiMoneyCents(inputDoc.amount);
-  });
-  // v34 תנובה: אין מונה יחידות על הנייר — העד השני הוא מונה "פריטים" (שורות),
-  // אחרי שהמתאם הוציא החזרות וזיכויים. עוגן שלא הוקלד נחשב מסופק, כמו בכסף.
+  // v34/v122: מונה השורות של כל תעודה (אחרי שהמתאם הוציא החזרות וזיכויים).
+  // עוגן שלא הוקלד נחשב מסופק; עוגן היחידות חייב להיות מוקלד.
   const unitsVerified = tnuvaLinesVerified(returned, aiScanDocuments);
-  // v43 תנובה: סד ההנחה המודפס הוא חומר-אימות בלבד — הוא כבר שירת את בדיקת
-  // ברוטו−הנחה=נטו של השורות למעלה. המחירים באפליקציה כוללים את המבצעים,
-  // ולכן ההנחה לעולם לא נגררת קדימה: לא לבדיקת הסגירה (הבאג מהטבילה —
-  // "צפוי 92.29, נמצא 72.77", ההנחה 19.52 נספרה פעמיים) ולא לתעודה שתישמר
-  // (calculatedEx היה מוריד אותה שוב מהתשלום). אפס כאן מרפא את כל הצרכנים.
-  const supplierDiscount = 0;
-  const closure = aiFindingsClosure({ aggregates, findings, supplierDiscount }, findings);
-  if (findingsReady && !closure.ok) errors.push(closure.reason || 'הממצאים אינם סוגרים את פער היחידות והסכום');
+  const anchorsVerified = aiScanDocuments.length > 0 && unitsAnchorsOk && unitsVerified;
+  const closure = aiFindingsClosure({ aggregates, findings }, findings);
+  if (findingsReady && !closure.ok) errors.push(closure.reason || 'הממצאים אינם סוגרים את פער היחידות');
   const uniqueErrors = Array.from(new Set(errors));
   const uniqueWarnings = Array.from(new Set(warnings.concat(Array.isArray(scan.warnings) ? scan.warnings : [])));
-  return { valid: uniqueErrors.length === 0 && barcodeSuggestions.length === 0 && findingsReady && aggregates.size > 0 && totalVerified && unitsVerified && closure.ok, totalVerified, unitsVerified, closure, errors: uniqueErrors, warnings: uniqueWarnings, findings, barcodeSuggestions, allRowsMapped, findingsReady, basketComplete, missingDocuments, residuals, autoResolutions, aggregates, docSummaries, extractedTotal: extractedTotalCents / 100, extractedUnits, rowTotal: rowTotalCents / 100, supplierDiscount, depositRows };
-}
-function aiRotationRetryDocumentIndexes(evaluation) {
-  if (!evaluation || !Array.isArray(evaluation.docSummaries)) return [];
-  // אם סכום הנטו וכל היחידות כבר נקראו בדיוק, סיבוב נוסף לא יכול לשפר את
-  // עוגני החשבון ורק יוצר פענוח שני שעלול להחליף התאמות נכונות.
-  if (evaluation.totalVerified && evaluation.unitsVerified) return [];
-  const summaries = new Map(evaluation.docSummaries.map(s => [Number(s.noteIndex), s]));
-  const indexes = [];
-  aiScanDocuments.forEach((doc, index) => {
-    const summary = summaries.get(index);
-    const expectedUnits = doc.units == null ? null : Number(doc.units);
-    const expectedSubtotalCents = aiMoneyCents(doc.amount);
-    const actualSubtotalCents = summary ? aiMoneyCents(summary.subtotal) : null;
-    const rowsMissing = !summary || !(Number(summary.rows) > 0) || !(Number(summary.units) > 0);
-    const unitsPartial = expectedUnits != null && isFinite(expectedUnits) && (!summary || Number(summary.units) !== expectedUnits);
-    const subtotalPartial = expectedSubtotalCents != null && (!summary || actualSubtotalCents !== expectedSubtotalCents);
-    if (rowsMissing || unitsPartial || subtotalPartial) indexes.push(index);
-  });
-  return indexes;
-}
-function aiEvaluationRank(evaluation) {
-  const summaries = evaluation && Array.isArray(evaluation.docSummaries) ? evaluation.docSummaries : [];
-  const byIndex = new Map(summaries.map(s => [Number(s.noteIndex), s]));
-  let exactDocuments = 0, positiveDocuments = 0, confidenceTotal = 0;
-  aiScanDocuments.forEach((doc, index) => {
-    const summary = byIndex.get(index); if (!summary) return;
-    const units = Number(summary.units) || 0, rows = Number(summary.rows) || 0;
-    if (units > 0 && rows > 0) positiveDocuments++;
-    if (doc.units != null && units === Number(doc.units)) exactDocuments++;
-    confidenceTotal += Number(summary.confidence) || 0;
-  });
-  const expectedUnits = Number(receiptNoteUnits);
-  const unitDistance = isFinite(expectedUnits) ? Math.abs((Number(evaluation && evaluation.extractedUnits) || 0) - expectedUnits) : 0;
-  const aggregateCount = evaluation && evaluation.aggregates && typeof evaluation.aggregates.size === 'number' ? evaluation.aggregates.size : 0;
-  const errorCount = evaluation && Array.isArray(evaluation.errors) ? evaluation.errors.length : 9999;
-  const pendingCount = evaluation && Array.isArray(evaluation.barcodeSuggestions) ? evaluation.barcodeSuggestions.length : 9999;
-  return [
-    evaluation && evaluation.valid ? 1 : 0,
-    evaluation && evaluation.unitsVerified ? 1 : 0,
-    evaluation && evaluation.totalVerified ? 1 : 0,
-    evaluation && evaluation.closure && evaluation.closure.ok ? 1 : 0,
-    exactDocuments,
-    positiveDocuments,
-    -pendingCount,
-    -errorCount,
-    -unitDistance,
-    aggregateCount,
-    confidenceTotal
-  ];
-}
-function aiEvaluationIsBetter(candidate, currentBest) {
-  if (!currentBest) return true;
-  const a = aiEvaluationRank(candidate), b = aiEvaluationRank(currentBest);
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] > b[i]) return true;
-    if (a[i] < b[i]) return false;
-  }
-  return false;
-}
-function aiReceivedProductIds() {
-  const ids = new Set();
-  (reconcileData || []).forEach(line => {
-    const id = String(line && line.productId != null ? line.productId : '').trim();
-    if (id && (Number(line && line.received) || 0) > 0) ids.add(id);
-  });
-  return Array.from(ids);
-}
-async function aiRequestInvoiceScan(token, documents) {
-  if (!aiAllPagesOrientationConfirmed(documents)) throw new Error('לא כל התמונות אושרו כישרות — שום תמונה לא נשלחה ל-AI.');
-  const response = await fetch(AI_SCAN_WORKER_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-    body: JSON.stringify({
-      // v13 ברמן: עוגני הסריקה הם "סה"כ כללי" (יחידות) ו"שורות" — לא כסף.
-      // המחיר המודפס על הנייר של ברמן הוא מחירון מלא וההנחות חבויות, ולכן
-      // השרת סוגר יחידות ושורות; סגירת הכסף נשארת כאן בלקוח, שמכיר את ההנחות.
-      documents: documents.map(d => ({
-        noteIndex: d.noteIndex,
-        pages: d.pages.map(p => p.dataUrl),
-        expectedUnits: Number.isFinite(Number(d.units)) && Number(d.units) > 0 ? Math.round(Number(d.units)) : null,
-        expectedLines: Number.isFinite(Number(d.lines)) && Number(d.lines) > 0 ? Math.round(Number(d.lines)) : null
-      })),
-      // שלב ההתאמה הראשון בשרת משתמש רק במוצרים שנסרקו והגיעו. נשלחים
-      // מזהים בלבד; השרת בוחר מתוכם רשומות מהקטלוג המקומי ואינו סומך על
-      // שם או ברקוד שמגיעים מרשימת המשנה.
-      receivedProductIds: aiReceivedProductIds(),
-      // השרת מחליף מזהים אמיתיים בכינויים זמניים. בשלב הראשון מוצגים למודל
-      // רק שמות המוצרים שהגיעו; רק בקריאה חוזרת של שורות בעייתיות הוא מקבל
-      // שמות+ברקודים כמועמדים. הראיה החזותית נשמרת בשדה נפרד ונבדקת מקומית.
-      catalog: products.map(p => ({ id: p.id, name: p.name || '', barcode: normalizeBarcode(p.barcode || '') })).filter(p => /^\d{6,20}$/.test(p.barcode))
-    })
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload.ok) {
-    const code = payload.error || '';
-    if (code === 'rate_limited') throw new Error('בוצעו יותר מדי ניסיונות. המתן 10 דקות ונסה שוב.');
-    if (code === 'invalid_auth' || code === 'auth_required') throw new Error('האימות המאובטח נכשל. רענן את האפליקציה ונסה שוב.');
-    if (code === 'incomplete_model_output' || code === 'model_refusal' || code === 'invalid_model_output') throw new Error('ה-AI לא החזיר פענוח מלא ובטוח. שום נתון לא שונה — צלם שוב את כל הדפים.');
-    if (code === 'openai_error' && payload.message) throw new Error('שירות ה-AI החזיר שגיאה: ' + payload.message);
-    throw new Error('הסריקה החכמה לא הצליחה. נסה שוב או עבור לבדיקה ידנית.');
-  }
-  return payload;
+  return { valid: uniqueErrors.length === 0 && barcodeSuggestions.length === 0 && findingsReady && aggregates.size > 0 && anchorsVerified && closure.ok, anchorsVerified, unitsVerified, closure, errors: uniqueErrors, warnings: uniqueWarnings, findings, barcodeSuggestions, allRowsMapped, findingsReady, basketComplete, missingDocuments, residuals, autoResolutions, aggregates, docSummaries, extractedUnits };
 }
 // ===== v132: סריקה מקבילית — בקשה נפרדת לכל תעודה =====
 // תעודה אחת לבקשה = משימת קריאה קטנה וממוקדת למודל, כשל בתעודה אחת אינו
@@ -14066,29 +13610,6 @@ function aiAnalyzePaperDocuments(ev) {
     };
   });
 }
-// v23 ברמן: יישור פער הכסף למנתח לרשת המחירים של הקטלוג. הפער מחושב מהסכום
-// שהוקלד ("נטו לחיוב" המעוגל בשיטת הספק), אבל הטענות של המנתח מתומחרות
-// ממחירי הקטלוג המדויקים — ולכן אגורת העיגול (394.43 מול 394.42 בתעודה
-// האמיתית הראשונה) הפילה את חוק הסגירה-לאגורה שלו והוא סירב בצדק. כשהפער
-// בין המוקלד לסכום השורות המחושב נמצא בגבולות סבילות העיגול, מפחיתים אותו
-// מהפער הנשלח — והטענות נסגרות בדיוק. מעבר לסבילות — אין נגיעה בפער.
-function aiAnalyzeRoundingAlignedGap(ev, closure) {
-  const base = closure.expectedAmountDelta;
-  if (base == null || !ev || !Array.isArray(ev.docSummaries) || !ev.docSummaries.length) return base;
-  let typedCents = 0, rowsCents = 0, slackCents = 0, usable = true;
-  ev.docSummaries.forEach(summary => {
-    const typed = aiMoneyCents(summary.subtotal);
-    const rows = aiMoneyCents(summary.rowsSum);
-    if (typed == null || rows == null) { usable = false; return; }
-    const sign = summary.credit ? -1 : 1; // v51: פער העיגול נמדד על הנטו, לא על סכום המגודלים
-    typedCents += sign * typed; rowsCents += sign * rows;
-    slackCents += Math.min(15, Math.max(2, Number(summary.rows) || 0));
-  });
-  if (!usable) return base;
-  const roundingCents = typedCents - rowsCents;
-  if (roundingCents === 0 || Math.abs(roundingCents) > slackCents) return base;
-  return r2(base - roundingCents / 100);
-}
 function aiAnalyzePayload(ev) {
   const day = todayStr();
   const closure = aiFindingsClosure(ev, Array.isArray(ev && ev.findings) ? ev.findings : []);
@@ -14110,7 +13631,7 @@ function aiAnalyzePayload(ev) {
         units: receiptNoteUnits == null ? null : Number(receiptNoteUnits),
         documents: aiScanDocuments.map((d, i) => ({ doc: i + 1, kind: d.kind === 'credit' ? 'credit' : 'charge', amount: d.amount == null ? null : Number(d.amount), units: d.units == null ? null : Number(d.units) }))
       },
-      gap: { units: closure.expectedUnitsDelta, amountExVat: aiAnalyzeRoundingAlignedGap(ev, closure) }
+      gap: { units: closure.expectedUnitsDelta, amountExVat: null } // v122: הסגירה ביחידות בלבד
     }
   };
 }
@@ -14119,15 +13640,6 @@ function aiAnalyzeProductName(productId) {
   if (p && p.name) return p.name;
   const line = (reconcileData || []).find(l => String(l.productId) === String(productId));
   return (line && line.name) || '';
-}
-function aiAnalyzeExpectedPrice(productId, ev) {
-  // אותו מחיר צפוי שהמנוע כבר הכריע עליו — כולל מבצע שהופעל על הנייר.
-  const prior = (ev && Array.isArray(ev.findings) ? ev.findings : []).find(f => f && String(f.productId) === String(productId) && Number(f.expectedPrice) > 0);
-  if (prior) return Number(prior.expectedPrice);
-  const line = (reconcileData || []).find(l => String(l.productId) === String(productId));
-  if (line && Number(line.price) > 0) return Number(line.price);
-  const p = products.find(x => x.id === productId);
-  return r2(Number(p && p.price) || 0);
 }
 function aiClaimsToFindings(claims, ev) {
   // פירוק לטענות שהשער הקיים יודע לשקול. החלפה = חוסר של מה שחויב ועודף של
@@ -14138,31 +13650,27 @@ function aiClaimsToFindings(claims, ev) {
     const claimId = 'claim-' + index;
     const qty = Math.max(0, Math.round(Number(claim.quantity) || 0));
     const name = aiAnalyzeProductName(claim.productId);
-    const expected = aiAnalyzeExpectedPrice(claim.productId, ev);
     if (claim.kind === 'shortage' && qty > 0) {
-      out.push({ type: 'shortage', productId: claim.productId, name, qty, expectedPrice: expected, claimId, text: 'חסר ' + qty + ' × ' + name });
+      out.push({ type: 'shortage', productId: claim.productId, name, qty, claimId, text: 'חסר ' + qty + ' × ' + name });
     } else if (claim.kind === 'surplus' && qty > 0) {
-      out.push({ type: 'surplus', productId: claim.productId, name, qty, expectedPrice: expected, claimId, text: 'עודף ' + qty + ' × ' + name });
+      out.push({ type: 'surplus', productId: claim.productId, name, qty, claimId, text: 'עודף ' + qty + ' × ' + name });
     } else if (claim.kind === 'substitution' && qty > 0 && claim.substituteProductId) {
       const substituteName = aiAnalyzeProductName(claim.substituteProductId);
-      out.push({ type: 'shortage', productId: claim.productId, name, qty, expectedPrice: expected, claimId, claimPart: 'billed', text: 'חויב ולא סופק: ' + qty + ' × ' + name });
-      out.push({ type: 'surplus', productId: claim.substituteProductId, name: substituteName, qty, expectedPrice: aiAnalyzeExpectedPrice(claim.substituteProductId, ev), claimId, claimPart: 'delivered', text: 'סופק במקומו: ' + qty + ' × ' + substituteName });
-    } else if (claim.kind === 'price') {
-      const paperPrice = Number(claim.billedUnitPriceExVat);
-      out.push({ type: 'price', productId: claim.productId, name, qty: qty || null, expectedPrice: expected, paperPrice: isFinite(paperPrice) ? paperPrice : null, amount: Number(claim.amountExVat) || 0, claimId, text: 'מחיר שונה: ' + name });
+      out.push({ type: 'shortage', productId: claim.productId, name, qty, claimId, claimPart: 'billed', text: 'חויב ולא סופק: ' + qty + ' × ' + name });
+      out.push({ type: 'surplus', productId: claim.substituteProductId, name: substituteName, qty, claimId, claimPart: 'delivered', text: 'סופק במקומו: ' + qty + ' × ' + substituteName });
     }
+    // v122: טענת מחיר אינה עניין של הקליטה — הכסף נבדק במרכזת.
   });
   return out;
 }
 function aiAnalyzeClaimText(claim) {
+  // v122: טענות בכמויות בלבד — הכסף נבדק במרכזת
   const name = aiAnalyzeProductName(claim.productId);
   const qty = Math.max(0, Math.round(Number(claim.quantity) || 0));
-  const money = Number(claim.amountExVat);
-  const moneyText = isFinite(money) && money !== 0 ? ' · ₪' + fmtMoney(Math.abs(money)) : '';
-  if (claim.kind === 'shortage') return 'חוסר: ' + qty + ' × ' + name + moneyText;
-  if (claim.kind === 'surplus') return 'עודף: ' + qty + ' × ' + name + moneyText;
-  if (claim.kind === 'price') return 'מחיר: ' + name + ' — חויב ₪' + fmtMoney(Number(claim.billedUnitPriceExVat) || 0) + ' במקום ₪' + fmtMoney(Number(claim.expectedUnitPriceExVat) || aiAnalyzeExpectedPrice(claim.productId, aiScanEvaluation)) + moneyText;
-  return 'החלפה: חויב ' + qty + ' × ' + name + ', סופק ' + aiAnalyzeProductName(claim.substituteProductId) + moneyText;
+  if (claim.kind === 'shortage') return 'חוסר: ' + qty + ' × ' + name;
+  if (claim.kind === 'surplus') return 'עודף: ' + qty + ' × ' + name;
+  if (claim.kind === 'price') return 'מחיר: ' + name + ' — נבדק במרכזת החודשית, לא בקליטה';
+  return 'החלפה: חויב ' + qty + ' × ' + name + ', סופק ' + aiAnalyzeProductName(claim.substituteProductId);
 }
 function aiAnalyzeClaimsPlainText() {
   if (!aiAnalyzeResult || !aiAnalyzeResult.accepted) return '';
@@ -14244,7 +13752,7 @@ function aiAdoptAnalyzerResult(ev, result) {
     && (Array.isArray(ev.barcodeSuggestions) ? ev.barcodeSuggestions.length === 0 : true)
     && ev.findingsReady === true
     && ev.aggregates instanceof Map && ev.aggregates.size > 0
-    && ev.totalVerified === true && ev.unitsVerified === true
+    && ev.anchorsVerified === true
     && result.closure.ok === true;
   return true;
 }
@@ -14258,13 +13766,12 @@ function tidyAiMoneyText(t) {
   });
 }
 function aiAnalyzeClaimCardHtml(claim, siblings) {
-  if (claim && claim.kind === 'price' && !priceAuditLegacyVisible({ type: 'price', productId: claim.productId })) return '';
+  if (claim && claim.kind === 'price') return ''; // v122: הכסף אינו עניין של הקליטה
   const style = claim.kind === 'shortage' ? { box: 'bg-rose-50 border-rose-200', head: 'text-rose-800', icon: 'fa-circle-minus', title: 'חוסר' }
     : (claim.kind === 'surplus' ? { box: 'bg-amber-50 border-amber-200', head: 'text-amber-800', icon: 'fa-circle-plus', title: 'עודף' }
       : (claim.kind === 'substitution' ? { box: 'bg-indigo-50 border-indigo-200', head: 'text-indigo-800', icon: 'fa-right-left', title: 'החלפה' }
         : { box: 'bg-blue-50 border-blue-200', head: 'text-blue-900', icon: 'fa-shekel-sign', title: 'מחיר' }));
-  const money = Number(claim.amountExVat);
-  const moneyHtml = isFinite(money) && money !== 0 ? '<span class="shrink-0 text-sm font-black ' + style.head + '">₪' + fmtMoney(Math.abs(money)) + '</span>' : '';
+  const moneyHtml = ''; // v122: בלי כסף בקליטה
   // v104: חוסר/עודף של המנתח מקבל את אותו פירוט כמו שורת המנוע — כמה חויב
   // בתעודה, כמה נסרק בפועל וכמה חסר. רק כשכמות הטענה היא בדיוק ההפרש בין
   // הנייר לסריקה, ורק כשזו הטענה היחידה על המוצר (siblings = הטענות כממצאים,
@@ -14302,7 +13809,7 @@ function aiAnalyzeHtml(ev) {
       '<span class="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[10px] font-black">נסגר בדיוק ✓</span></div>' +
       (result.summary ? '<div class="text-[11px] font-bold text-violet-800 mb-2">' + htmlEscape(tidyAiMoneyText(result.summary)) + '</div>' : '') +
       '<div class="space-y-2">' + result.claims.map(claim => aiAnalyzeClaimCardHtml(claim, claimFindings)).join('') + '</div>' +
-      '<div class="text-[10px] font-bold text-slate-500 mt-2">המנתח הוביל' + (result.closure.expectedUnitsDelta == null ? '' : ' · יחידות ' + result.closure.actualUnitsDelta + '/' + result.closure.expectedUnitsDelta) + ' · כסף ₪' + fmtMoney(result.closure.actualAmountDelta) + '/₪' + fmtMoney(result.closure.expectedAmountDelta) + (result.droppedClaims ? ' · ' + result.droppedClaims + ' טענות נדחו בשרת' : '') + '</div>' +
+      '<div class="text-[10px] font-bold text-slate-500 mt-2">המנתח הוביל' + (result.closure.expectedUnitsDelta == null ? '' : ' · יחידות ' + result.closure.actualUnitsDelta + '/' + result.closure.expectedUnitsDelta) + (result.droppedClaims ? ' · ' + result.droppedClaims + ' טענות נדחו בשרת' : '') + '</div>' +
       '<div class="flex gap-2 mt-2">' +
         '<button data-role="ai-analyze-copy" class="btn-tap flex-1 bg-white border border-violet-300 text-violet-700 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-copy"></i> העתק לטענות מול הספק</button>' +
         '' /* v34: כפתור המנתח הוסר — המצב לא קיים בשרת תנובה */ +
@@ -14310,7 +13817,7 @@ function aiAnalyzeHtml(ev) {
   }
   // לא נסגר, נכשל, או שעדיין לא רץ — הממצאים שמוצגים הם של מנוע הסריקה.
   const note = aiAnalyzeError ? aiAnalyzeError
-    : (result ? (result.unexplained || (result.closure && result.closure.reason) || 'ההסבר של המנתח לא נסגר על הכסף והיחידות') : '');
+    : (result ? (result.unexplained || (result.closure && result.closure.reason) || 'ההסבר של המנתח לא נסגר על היחידות') : '');
   return '<div class="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-2.5">' +
     '<div class="text-[11px] font-black text-slate-600"><i class="fa-solid fa-scale-unbalanced ml-1"></i>' + (result || aiAnalyzeError ? 'המנתח לא סגר את הפער — הממצאים למעלה הם של מנוע הסריקה' : 'המנתח לא רץ על התעודה הזאת') + '</div>' +
     (note ? '<div class="text-[10px] font-bold text-slate-500 mt-1">' + htmlEscape(note) + '</div>' : '') +
@@ -14330,7 +13837,7 @@ function aiScanAllGood(ev) {
   return findings.length === 0 && residuals.length === 0 && unknown.length === 0;
 }
 function aiIsActionableFinding(finding) {
-  return !!finding && ['shortage', 'surplus', 'price', 'promo_missing'].includes(String(finding.type || ''));
+  return !!finding && ['shortage', 'surplus'].includes(String(finding.type || '')); // v122: כמויות בלבד
 }
 function aiIsPendingBarcodeChoice(suggestion) {
   if (!suggestion) return false;
@@ -14405,9 +13912,7 @@ function aiQuantityFindingDetailHtml(finding, shortage, label, headClass, siblin
   const partialLine = partial ? '<div class="mt-1 text-xs font-bold text-amber-700">לא כל התעודה נקראה — "חויב" כולל רק שורות שזוהו</div>' : '';
   const creditLine = credited > 0
     ? '<div class="mt-1 text-xs font-bold text-emerald-700">מתוכם ' + credited + ' יח׳ בזיכוי · ' +
-      (remainingQty > 0 ? 'נשארו ' + remainingQty + ' יח׳ ללא זיכוי'
-        : Number(finding.amount) > 0.01 ? 'כל היחידות בזיכוי, נותרה יתרה של ₪' + fmtMoney(Number(finding.amount))
-        : 'כל החוסר מכוסה') + '</div>'
+      (remainingQty > 0 ? 'נשארו ' + remainingQty + ' יח׳ ללא זיכוי' : 'כל החוסר מכוסה') + '</div>'
     : '';
   return '<div class="mt-1.5 grid grid-cols-3 gap-1.5 text-center">' +
       cell(partial ? 'חויב (שורות שזוהו)' : 'חויב בתעודה', billed, 'text-slate-800') +
@@ -14450,13 +13955,13 @@ function aiScanDiagnosticsHtml(ev) {
     // השגיאות ריקה — כי valid נשען על שערים בוליאניים שקטים. בלי השורה הזאת
     // כל אבחון של נעילה הוא ניחוש מרחוק (7.8 בשטח).
     const gate = b => b === true ? 'כן' : 'לא';
-    lines.push('שערי סגירה · תקין: ' + gate(ev.valid) + ' · סכומים: ' + gate(ev.totalVerified) +
-      ' · שורות: ' + gate(ev.unitsVerified) + ' · ממצאים מוכנים: ' + gate(ev.findingsReady) +
+    lines.push('שערי סגירה · תקין: ' + gate(ev.valid) + ' · עוגנים (יחידות ושורות לכל תעודה): ' + gate(ev.anchorsVerified) +
+      ' · ממצאים מוכנים: ' + gate(ev.findingsReady) +
       ' · סגירת ממצאים: ' + gate(ev.closure && ev.closure.ok) +
       ' · שגיאות: ' + ((ev.errors || []).length) + ' · הצעות ברקוד: ' + ((ev.barcodeSuggestions || []).length) +
       (ev.closure && !ev.closure.ok ? ' · ' + String(ev.closure.reason || '') : ''));
     lines.push('אבחון v189 · סל שלם: ' + (ev.basketComplete ? 'כן' : 'לא') + ' · כל השורות שויכו: ' + (ev.allRowsMapped ? 'כן' : 'לא') + ' · תעודות שלא נקראו: ' + (Number(ev.missingDocuments) || 0) + ' מתוך ' + aiScanDocuments.length);
-    (Array.isArray(ev.docSummaries) ? ev.docSummaries : []).forEach(summary => lines.push('תעודה ' + (Number(summary.noteIndex) + 1) + ': שורות ' + summary.rows + ' · יח׳ ' + summary.units + ' · סכום שנקרא ₪' + fmtMoney(Number(summary.subtotal) || 0) + ' · סכום השורות ₪' + fmtMoney(Number(summary.rowsSum) || 0)));
+    (Array.isArray(ev.docSummaries) ? ev.docSummaries : []).forEach(summary => lines.push('תעודה ' + (Number(summary.noteIndex) + 1) + ': שורות ' + summary.rows + (summary.typedLines != null ? '/' + summary.typedLines : '') + ' (מודפס ' + (summary.printedLines == null ? '—' : summary.printedLines) + ') · יח׳ ' + summary.units + (summary.typedUnits != null ? '/' + summary.typedUnits : '') + ' (מודפס ' + (summary.printedUnits == null ? '—' : summary.printedUnits) + ')'));
     // v180: המספרים הגולמיים כפי שה-AI קרא אותם, לכל שורה תקועה. בלי זה
     // כשל חשבון הוא ניחוש מרחוק; עם זה צילום מסך אחד מספיק כדי לראות איזה
     // תא נקרא לא נכון (ומה הסימן שלו).
@@ -14578,64 +14083,6 @@ function aiActiveFixedPromoFor(productId, dateStr) {
   }
   return null;
 }
-function aiPriceBreakdownRows() {
-  const documents = aiScanResponse && aiScanResponse.scan && Array.isArray(aiScanResponse.scan.documents)
-    ? aiScanResponse.scan.documents : [];
-  const out = [];
-  documents.forEach(doc => {
-    // The same per-document proof serves photo-first and manually anchored scans.
-    bermanPaperAnchorCheck(doc);
-    // v89: סיווג התעודה נלקח מהסיווג שהוקלד — אותו מקור שממנו לוקחים גם
-    // aiApplyScanEvaluation וגם docSummaries. עד כאן נקרא כאן doc.docType
-    // (מה שה-AI קרא בכותרת) בזמן ש"נטו הנייר" השתמש ב-kind, ושני הצדדים של
-    // אותו חיסור יכלו לסווג את אותה תעודה הפוך.
-    const inputDoc = (aiScanDocuments || [])[Number(doc && doc.noteIndex)] || null;
-    const docCredit = inputDoc && inputDoc.kind != null ? inputDoc.kind === 'credit' : doc.docType === 'credit';
-    (Array.isArray(doc && doc.rows) ? doc.rows : []).forEach((row, rowIndex) => {
-      const resolution = aiResolveInvoiceBarcode(row);
-      const product = resolution && !resolution.error ? resolution.product : null;
-      const qty = row && row.quantity == null ? null : Number(row.quantity);
-      if (!product || qty == null || !isFinite(qty) || qty <= 0) return;
-      const printedList = row.printedListUnitPrice == null || row.printedListUnitPrice === '' ? null : Number(row.printedListUnitPrice);
-      const catalogList = productListPrice(product);
-      const net = Number(product.price) || 0;
-      // v36: המחיר שהאפליקציה מחשבת בו הוא p.price — שדה נפרד מהמחירון ומאחוז
-      // ההנחה, ולא נגזר מהם בכל קריאה. saveReconciledReceipt כותב אותו בחזרה
-      // ("save price from reconcile") בלי לגעת ב-listPrice או ב-discountPct,
-      // ולכן הוא יכול לסטות מהם בשקט: ההנחה עדיין אומרת 30% בזמן שהחישוב רץ
-      // על מחיר אחר לגמרי. זו הסטייה היחידה שאינה סותרת "ההנחות לא משתנות".
-      const expectedNet = catalogList > 0 ? finalUnitPrice(catalogList, productDiscountPct(product)) : null;
-      const activePromo = aiActiveFixedPromoFor(product.id, bermanScanDocumentDate(doc));
-      // v47: המקרה ההפוך לשורה שהגיעה במחירון מלא — שורה שהגיעה כבר במחיר
-      // המבצע. המחיר המודפס שווה למחיר המבצע הפעיל (±2 אגורות), כלומר הספק
-      // הוריד את המבצע בתעודה עצמה במקום להשאיר אותו לקיזוז במרכזת. זו אינה
-      // אי-התאמת מחירון, ואסור שתוצג ככזאת.
-      const promoFixed = activePromo ? promoFixedPrice(activePromo) : 0;
-      // v89: הצורה נקראת מההכרעה שכבר נעשתה במתאם, ולא נגזרת כאן מחדש — כך
-      // ההסבר, בדיקת הסכום והכסף אינם יכולים לומר דברים שונים על אותה שורה.
-      const priceForm = String(row.__bermanPriceForm || BERMAN_FORM_REGULAR);
-      const promoOnPaper = priceForm === BERMAN_FORM_PROMO_ON_PAPER;
-      // המחיר שהשורה חויבה בו בפועל, לפי הצורה שהוכרעה לה.
-      const billedUnit = row.unitPriceExVat == null || !isFinite(Number(row.unitPriceExVat))
-        ? net : Number(row.unitPriceExVat);
-      out.push({
-        product, qty, printedList, catalogList, net, expectedNet, activePromo, promoFixed, promoOnPaper,
-        priceForm, billedUnit,
-        fullListOnPaper: (doc.__bermanFullListRowIndexes || []).includes(rowIndex),
-        credit: docCredit,
-        pct: productDiscountPct(product),
-        lineTotal: lineTotalFromUnit(billedUnit, qty),
-        netDrift: expectedNet != null && Math.abs(net - expectedNet) > 0.005 ? r2((net - expectedNet) * qty) : 0,
-        listMismatch: !promoOnPaper && printedList != null && isFinite(printedList) && catalogList > 0
-          && Math.abs(aiMoneyCents(printedList) - aiMoneyCents(catalogList)) > 2
-      });
-    });
-  });
-  return out;
-}
-// v39: ההקשר המשותף של פער המחירים — סכומים, עוגן הכמויות, והשורה שנראה
-// שהגיעה במחירון מלא. חושב פעם אחת ומשמש גם את הפירוט וגם את כרטיס ההסבר,
-// כדי ששניהם לא יוכלו לומר דברים שונים על אותה תעודה.
 // v41: עוטף כרטיס תצוגה. חישוב שנופל מחזיר פתק קטן במקומו במקום להפיל את
 // כל הרינדור — כי הרינדור הזה נקרא מתוך ה-finally של הסריקה, ונפילה בו
 // משאירה את המשתמש מול ספינר נצחי בלי שום דרך להתקדם.
@@ -14646,216 +14093,6 @@ function aiSafeBlock(label, build) {
     return '<div class="rounded-xl border border-slate-300 bg-slate-50 p-2 text-[10px] font-bold text-slate-500">' +
       htmlEscape(label) + ': התצוגה נכשלה (' + htmlEscape(String((blockError && blockError.message) || 'שגיאה')) + '). שאר המסך תקין.</div>';
   }
-}
-// v50: העוגן שהוקלד מול הסכום שנקרא מהנייר. שתי הבדיקות האלה חיו עד היום
-// בשני עולמות נפרדים: הסבר הפער השווה את מה שה-AI קרא מול חישוב הקטלוג
-// והכריז "הכול בסדר", בזמן ש"נקרא ₪738.93 במקום ₪871.95" ישב כשגיאה
-// מקופלת מתחת ל"רוצה הסבר?". התוצאה: תעודה שנסגרה בביטחון ונשמרה פתוחה עם
-// פער של ₪133.01. מעכשיו אי-התאמת העוגן היא עובדה בכותרת, עם תיקון בלחיצה.
-function aiAnchorMismatchState(ev) {
-  const summaries = Array.isArray(ev && ev.docSummaries) ? ev.docSummaries : [];
-  if (!summaries.length || !summaries.every(s => s && s.subtotal != null)) return null;
-  // v51: כל סכומי הנייר נספרים עם הסימן של התעודה, כדי שההשוואה מול הנטו
-  // שהוקלד (וזיהוי מלכודת המע״מ) תישאר תקפה גם כשיש זיכוי במקבץ.
-  const sSign = s => (s && s.credit ? -1 : 1);
-  const paperTotal = r2(summaries.reduce((sum, s) => sum + sSign(s) * Number(s.subtotal || 0), 0));
-  const typed = receiptNoteTotal == null ? null : r2(Number(receiptNoteTotal) || 0);
-  if (typed == null || moneyDiffCents(typed, paperTotal) === 0) return null;
-  // v50: הראיה החזקה ביותר — שורת "סה הכל תעודה לחיוב" נקראה מהנייר עצמו,
-  // והמספר שהוקלד זהה לה לאגורה. כאן כבר לא מסיקים לפי שיעור מע״מ אלא
-  // אומרים לחנות איזו שורה מתוך שלוש היא לקחה. (שרת ישן אינו מחזיר את
-  // השורה הזאת — ואז נשארת ההשוואה לשיעור המע״מ.)
-  const printedInclusive = summaries.every(s => s.printedInclusive != null)
-    ? r2(summaries.reduce((sum, s) => sum + sSign(s) * Number(s.printedInclusive || 0), 0)) : null;
-  const typedIsPrintedInclusive = printedInclusive != null && moneyDiffCents(typed, printedInclusive) === 0;
-  const vat = vatOnlyGapNet(typed, paperTotal, vatRateForNewDocument(activeReceiptDate()));
-  return {
-    typed, paperTotal, gap: r2(typed - paperTotal), summaries,
-    vat, printedInclusive, typedIsPrintedInclusive, vatLine: !!(vat || typedIsPrintedInclusive)
-  };
-}
-function aiAnchorMismatchHtml(state) {
-  if (!state) return '';
-  const fixBtn = '<button data-role="ai-fix-note-total" class="btn-tap w-full mt-2 bg-rose-600 text-white rounded-xl py-3 font-black text-base">' +
-    '<i class="fa-solid fa-wand-magic-sparkles ml-1"></i>' + (state.vatLine ? 'תקן ל-₪' + fmtMoney(state.paperTotal) + ' (נטו לחיוב)' : 'עדכן לסכום שנקרא מהנייר: ₪' + fmtMoney(state.paperTotal)) + '</button>';
-  if (state.vatLine) {
-    // כשגם שורת המע״מ נקראה מהנייר, מציגים את שלוש השורות כפי שהן מודפסות
-    // ומסמנים איזו מהן הוקלדה. זו אינה הערכה — זו התעודה עצמה.
-    const threeLines = state.typedIsPrintedInclusive
-      ? '<div class="mt-2 bg-white/80 rounded-lg p-2 text-[13px] font-black text-slate-800">' +
-        '<div class="flex justify-between"><span>נטו לחיוב (ללא מע״מ)</span><span class="text-emerald-700">₪' + fmtMoney(state.paperTotal) + ' ← זה המספר</span></div>' +
-        (state.summaries.every(s => s.printedVat != null)
-          ? '<div class="flex justify-between text-slate-500"><span>מע״מ</span><span>₪' + fmtMoney(r2(state.summaries.reduce((sum, s) => sum + (s.credit ? -1 : 1) * Number(s.printedVat || 0), 0))) + '</span></div>' : '') +
-        '<div class="flex justify-between"><span>סה״כ לתשלום (כולל מע״מ)</span><span class="text-rose-700">₪' + fmtMoney(state.printedInclusive) + ' ← הוקלד</span></div></div>'
-      : '';
-    return '<div class="rounded-2xl border-2 border-rose-400 bg-rose-50 p-4 mt-3">' +
-      '<div class="text-lg font-black text-rose-900 leading-tight"><i class="fa-solid fa-circle-exclamation ml-2"></i>הוקלד הסכום <u>כולל</u> מע״מ</div>' +
-      '<div class="text-sm font-bold text-rose-900 mt-2 leading-relaxed">' + (state.typedIsPrintedInclusive
-        ? 'הסכום שהוקלד (₪' + fmtMoney(state.typed) + ') הוא בדיוק שורת "סה הכל תעודה לחיוב" שנקראה מהתעודה — היא כוללת מע״מ.'
-        : 'בתחילת הקליטה הוקלד ₪' + fmtMoney(state.typed) + ' — זה "סה״כ לתשלום" שבתחתית התעודה, כולל מע״מ.') +
-        ' השורה שצריך להקליד היא "נטו לחיוב", והיא ₪' + fmtMoney(state.paperTotal) + '.</div>' +
-      threeLines +
-      '<div class="text-sm font-bold text-rose-900 mt-2 leading-relaxed">ההפרש ₪' + fmtMoney(Math.abs(state.gap)) +
-        ' הוא המע״מ' + (state.vat ? ' (' + state.vat.pctTxt + ')' : '') + ' — <b>לא חסרה סחורה</b>. אם תיקלט כך, התעודה תישמר פתוחה עם פער שאין מה לעשות איתו.</div>' +
-      fixBtn + '</div>';
-  }
-  return '<div class="rounded-2xl border-2 border-rose-400 bg-rose-50 p-4 mt-3">' +
-    '<div class="text-lg font-black text-rose-900 leading-tight"><i class="fa-solid fa-circle-exclamation ml-2"></i>הסכום שהוקלד אינו הסכום שבתעודה</div>' +
-    '<div class="text-sm font-bold text-rose-900 mt-2 leading-relaxed">בתחילת הקליטה הוקלד ₪' + fmtMoney(state.typed) +
-      ', ומהנייר נקרא "נטו לחיוב" ₪' + fmtMoney(state.paperTotal) + ' — הפרש של ₪' + fmtMoney(Math.abs(state.gap)) + '.' +
-      ' כל השוואה נוספת נמדדת מול המספר שהוקלד, ולכן כדאי לתקן אותו לפני הקליטה.</div>' +
-    fixBtn + '</div>';
-}
-// v50: תיקון העוגן בלחיצה — סכומי התעודות נלקחים ממה שנקרא בנייר, והמסך
-// כולו מחושב מחדש מאותה קריאת AI (בלי צילום מחדש ובלי קריאה נוספת לשרת).
-function aiApplyReadNoteTotals(confirmed) {
-  const state = aiAnchorMismatchState(aiScanEvaluation);
-  if (!state) { showToast('אין מה לתקן — הסכום שהוקלד תואם לנייר', null, null, 2400); return; }
-  // כשהפער אינו המע״מ, אין לאפליקציה דרך לדעת מי צודק — ההקלדה או הקריאה.
-  // לכן היא לא מחליפה מספר שהוקלד ביד בלי אישור מפורש.
-  if (!state.vatLine && !confirmed) {
-    showConfirm('להחליף את הסכום שהוקלד?',
-      'הוקלד ₪' + fmtMoney(state.typed) + ' ומהנייר נקרא ₪' + fmtMoney(state.paperTotal) +
-      '. ודא מול "נטו לחיוב" שבתחתית התעודה מי מהם נכון — ההחלפה משנה את הסכום שהכול נמדד מולו.',
-      'החלף ל-₪' + fmtMoney(state.paperTotal), function () { aiApplyReadNoteTotals(true); });
-    return;
-  }
-  const bySummary = new Map();
-  state.summaries.forEach(s => bySummary.set(Number(s.noteIndex), r2(Number(s.subtotal) || 0)));
-  const before = r2(Number(receiptNoteTotal) || 0);
-  receiptNotes = receiptNotes.map((raw, i) => {
-    const n = normNote(raw);
-    return bySummary.has(i) ? { amount: bySummary.get(i), units: n.units, lines: n.lines, kind: n.kind } : n; // v51: תיקון הסכום אינו משנה את סוג התעודה
-  });
-  recomputeNoteTotal();
-  (aiScanDocuments || []).forEach((doc, i) => { if (doc && bySummary.has(i)) doc.amount = bySummary.get(i); });
-  saveReceiptDraft();
-  aiRefreshScanEvaluation();
-  renderReconcile();
-  showToast('סכום התעודה תוקן: ₪' + fmtMoney(before) + ' ← ₪' + fmtMoney(receiptNoteTotal), null, null, 3200);
-}
-function aiPriceGapContext(ev) {
-  const rows = aiPriceBreakdownRows();
-  if (!rows.length) return null;
-  // v89: הסכום שהאפליקציה תובעת — לפי הצורה שהוכרעה לכל שורה, ועם הסימן של
-  // התעודה. עד כאן שורת זיכוי נספרה כאן בפלוס בזמן ש"נטו הנייר" מתחתיה
-  // הפחית אותה, ולכן כל זיכוי במקבץ הזיז את הפער בכפל ערכו — ₪9.03 הפכו
-  // לשארית של ₪18.05 שאף הסבר לא יכול היה לסגור, וכל שלוש צורות המחיר
-  // קרסו בחזרה ל"הנחה קבועה" על תעודה תקינה לחלוטין.
-  const appTotal = r2(rows.reduce((sum, r) => sum + (r.credit ? -1 : 1) * r.lineTotal, 0));
-  const summaries = Array.isArray(ev && ev.docSummaries) ? ev.docSummaries : [];
-  const paperTotal = summaries.length && summaries.every(s => s && s.subtotal != null)
-    ? r2(summaries.reduce((sum, s) => sum + (s.credit ? -1 : 1) * Number(s.subtotal || 0), 0)) // v51: נטו הנייר, אחרי זיכויים
-    : null;
-  const gap = paperTotal == null ? null : r2(paperTotal - appTotal);
-  const readUnits = rows.reduce((sum, r) => sum + r.qty, 0);
-  const docs = aiScanDocuments || [];
-  const unitsKnown = docs.length > 0 && docs.every(d => d && d.units != null);
-  const linesKnown = docs.length > 0 && docs.every(d => d && d.lines != null);
-  const anchorUnits = unitsKnown ? docs.reduce((sum, d) => sum + Number(d.units), 0) : null;
-  const anchorLines = linesKnown ? docs.reduce((sum, d) => sum + Number(d.lines), 0) : null;
-  const unitsMatch = anchorUnits == null ? null : readUnits === anchorUnits;
-  const linesMatch = anchorLines == null ? null : rows.length === anchorLines;
-  const quantitiesAnchored = unitsMatch === true && linesMatch !== false;
-  const anchorText = (unitsMatch == null ? 'לא הוקלד מונה יחידות' : ('יחידות ' + readUnits + '/' + anchorUnits))
-    + (linesMatch == null ? '' : ' · שורות ' + rows.length + '/' + anchorLines);
-  // v47: סיבולת עיגול. כל שורה מעוגלת לאגורה גם באפליקציה וגם בנייר, ולכן
-  // הסבר נכון עד האגורה יכול לפספס את הפער בכמה אגורות על תעודה ארוכה
-  // (16 שורות: הסבר של ₪26.60 מול פער של ₪26.58). אגורה לשורה, ולפחות 5.
-  const roundingTol = Math.max(0.05, 0.01 * rows.length);
-  // v89: שורות שהמבצע ירד בהן כבר בתעודה מוכרעות בשורה עצמה (bermanPriceForm)
-  // ואינן תלויות עוד בסגירת סכום המסמך — המחיר המודפס שווה למחיר המבצע ושונה
-  // מהמחירון, וזו ראיה שלמה. עד v88 הן הוכרעו רק אם כל הפער נסגר, ולכן פגם
-  // כלשהו בחשבון הכולל ביטל גם אותן. הן כבר מתומחרות במחיר המבצע בתוך
-  // appTotal, ולכן הרשימה כאן היא הסבר למשתמש — לא תנאי לסגירה.
-  const promoOnPaperRows = rows.filter(r => r.promoOnPaper && r.qty > 0 && !r.credit && r.net > r.promoFixed + 0.005);
-  const promoOnPaperTotal = r2(promoOnPaperRows.reduce((sum, r) => sum + r2((r.promoFixed - r.net) * r.qty), 0));
-  // v68: Multiple full-list rows are accepted only when each document has its
-  // own unique monetary/quantity/line-count proof. Never cancel mismatches
-  // across different documents or attribute a credit to a delivery rebate.
-  // מצב 2 ("מחירון מלא, המבצע יקוזז במרכזת") נשאר מוכרע מהחשבון: אצל ברמן
-  // עמודת "מחיר" מדפיסה את המחירון בכל שורה, ולכן "מודפס = מחירון" אינו
-  // מבדיל אותו מהמצב הרגיל — רק הסכום מבדיל.
-  const provenFullRows = rows.filter(r => r.fullListOnPaper && r.activePromo && !r.credit);
-  const provenFullGap = r2(provenFullRows.reduce((s, r) => s + lineTotalFromUnit(r.printedList, r.qty) - r.lineTotal, 0));
-  if (quantitiesAnchored && provenFullRows.length
-      && gap != null && Math.abs(gap - provenFullGap) <= roundingTol) {
-    return { rows, appTotal, paperTotal, gap, quantitiesAnchored, anchorText, roundingTol,
-      fullListRows: provenFullRows, fullListRow: provenFullRows[0], fullListGap: gap,
-      promoOnPaperRows, promoOnPaperTotal, gapExplained: true };
-  }
-  // מה שנשאר מהפער אחרי שכל שורה תומחרה בצורה שלה. שורה בודדת שהפרש
-  // המחירון-פחות-הנחה שלה שווה בדיוק לשארית: היא הגיעה במחירון מלא.
-  const fullListGap = gap;
-  const fullListRow = (fullListGap == null || Math.abs(fullListGap) <= 0.05 || !quantitiesAnchored) ? null
-    : rows.find(r => !r.credit && r.catalogList > 0 && r.qty > 0 && r.net < r.catalogList
-        && Math.abs(r2((r.catalogList - r.net) * r.qty) - fullListGap) <= roundingTol) || null;
-  const gapExplained = !!fullListRow
-    || (promoOnPaperRows.length > 0 && gap != null && Math.abs(gap) <= roundingTol);
-  return {
-    rows, appTotal, paperTotal, gap, quantitiesAnchored, anchorText, roundingTol,
-    fullListRow, fullListGap,
-    promoOnPaperRows, promoOnPaperTotal,
-    gapExplained
-  };
-}
-// v47: המשפט האחד שהמשתמש רואה למעלה כשהפער מוסבר. נבנה מאותו הקשר שבונה
-// את כרטיסי ההסבר, כדי שהכותרת והפירוט לעולם לא יאמרו דברים שונים.
-function aiGapExplainedLine(ctx) {
-  if (!ctx || !ctx.gapExplained) return '';
-  const fullRows = ctx.fullListRows || (ctx.fullListRow ? [ctx.fullListRow] : []);
-  const fullListLine = fullRows.filter(r => r.activePromo).map(r =>
-    String(r.product.name || '') + ' הגיע בלי ההנחה הרגילה, ויש עליו מבצע חודשי — ההפרש יישמר למעקב מול המרכזת.').join(' ');
-  // המקרה של אתמול לבדו — בדיוק המשפט של v46, מילה במילה.
-  if (!ctx.promoOnPaperRows.length) return fullListLine ? fullListLine + ' אפשר לקלוט.' : '';
-  const names = ctx.promoOnPaperRows.map(r => String(r.product.name || '')).join(', ');
-  const promoLine = names + ' ' + (ctx.promoOnPaperRows.length > 1 ? 'הגיעו' : 'הגיע') + ' בתעודה כבר במחיר המבצע — שילמת פחות עכשיו, ולכן לא יהיה על זה קיזוז בסוף החודש.';
-  return (fullListLine ? promoLine + ' ' + fullListLine : promoLine) + ' הכול תקין, אפשר לקלוט.';
-}
-// v39: כשהפער כולו מוסבר בשורה אחת שהגיעה במחירון מלא — אומרים את זה בגדול,
-// למעלה, לפני כל רשימת בעיות. משתמש שרואה פער של ₪41 ולא מבין למה נעצר;
-// משתמש שקורא "השורה הזאת הגיעה בלי ההנחה, המבצע יקזז את זה במרכזת, המחיר
-// הסופי שלך זהה" — סוגר את התעודה בביטחון וממשיך לעבוד.
-// v40: תיעוד ההסבר על התעודה עצמה. בלעדיו התעודה נשמרת עם פער לא מוסבר
-// והופכת ל"בעיה פתוחה" ברשימה — בזמן שהיא כלל אינה בעיה אלא ממתינה לקיזוז
-// המרכזת. הרשומה נבנית מאותו aiPriceGapContext שמייצר את ההסבר במסך, כך
-// ששניהם לעולם לא יוכלו לומר דברים שונים.
-function aiMonthEndPendingRecord(ev) {
-  const ctx = aiPriceGapContext(ev);
-  if (!ctx || !ctx.fullListRow) return null;
-  if (ctx.fullListRows && ctx.fullListRows.length > 1) {
-    const items = ctx.fullListRows.map(r => ({
-      productId: String(r.product.id), name: String(r.product.name || '').slice(0, 160),
-      qty: r.qty, listPrice: r.printedList, expectedNet: r.net,
-      gap: r2(lineTotalFromUnit(r.printedList, r.qty) - r.lineTotal),
-      promoName: String(r.activePromo.name || '').slice(0, 160),
-      promoFixedPrice: r.promoFixed, finalUnitPrice: r.promoFixed,
-      expectedRebate: r2(lineTotalFromUnit(r.printedList, r.qty) - lineTotalFromUnit(r.promoFixed, r.qty))
-    }));
-    return { items, gap: ctx.fullListGap,
-      expectedRebate: r2(items.reduce((s, r) => s + r.expectedRebate, 0)), recordedAt: Date.now() };
-  }
-  const r = ctx.fullListRow.fullListOnPaper
-    ? Object.assign({}, ctx.fullListRow, { catalogList: ctx.fullListRow.printedList }) : ctx.fullListRow;
-  const promo = r.activePromo;
-  if (!promo) return null; // בלי מבצע אין קיזוז צפוי — זו באמת בעיה פתוחה
-  const fixed = promoFixedPrice(promo);
-  if (!(fixed > 0)) return null;
-  return {
-    productId: String(r.product.id),
-    name: String(r.product.name || '').slice(0, 160),
-    qty: Number(r.qty) || 0,
-    listPrice: r2(r.catalogList),
-    expectedNet: r2(r.net),
-    // v47: הפער שהשורה הזאת מסבירה — אחרי ששורות במחיר-מבצע-בתעודה כבר
-    // נסגרו במחיר הנייר שלהן. בתעודה רגילה זה כל הפער, כמו קודם.
-    gap: r2(ctx.fullListGap != null ? ctx.fullListGap : ctx.gap),
-    promoName: String(promo.name || '').slice(0, 160),
-    promoFixedPrice: r2(fixed),
-    expectedRebate: r2((r.catalogList - fixed) * r.qty),
-    finalUnitPrice: r2(fixed),
-    recordedAt: Date.now()
-  };
 }
 // v43: המסך שמשתמש רגיל רואה. משפט אחד גדול שאומר מה קרה, רשימה קצרה
 // בכתב גדול אם יש הבדלים, וזהו. כל השאר — מאזן, מחירים, אבחון — נשאר
@@ -14905,10 +14142,9 @@ function aiRecordFindingsAsPaperQty(ev) {
       if (!(entry.delta > 0) || !entry.shortage) return;
       const finding = entry.shortage;
       const product = (products || []).find(item => item && String(item.id) === id);
-      const unitPrice = Number(finding.expectedPrice) > 0
-        ? Number(finding.expectedPrice)
-        : (product ? Number(product.price) || 0 : 0);
-      if (!product || !(unitPrice > 0)) return;
+      if (!product) return;
+      // v122: המחיר על השורה הוא תצוגה בלבד — הכסף מחושב במרכזת.
+      const unitPrice = r2(Number(product.price) || 0);
       line = {
         productId: String(product.id), name: String(product.name || finding.name || ''),
         barcode: product.barcode || '', received: 0, noteQty: 0,
@@ -14925,61 +14161,18 @@ function aiRecordFindingsAsPaperQty(ev) {
   if (written) reconcilePaperEntered = true;
   return written;
 }
-// v47: שורה שהגיעה כבר במחיר המבצע נקלטת במחיר שמודפס בנייר — כי זה מה
-// שהספק באמת חייב. כך התעודה נסגרת על "נטו לחיוב" בלי הפרש פתוח, וקיזוז
-// המרכזת על השורה יוצא אפס מעצמו (מחיר השורה = מחיר המבצע). aiPaperPriceOnly
-// שומר שהמחיר הזה יישאר בתעודה בלבד ולא ידרוס את מחיר המוצר במאגר — המחירון
-// וההנחה לא השתנו, רק התעודה הזאת. שום שורה אחרת לא נגעת.
-function aiRecordPromoOnPaperPrices(ev) {
-  if (!ev || !Array.isArray(reconcileData)) return 0;
-  let ctx = null;
-  try { ctx = aiPriceGapContext(ev); } catch (ctxError) { ctx = null; }
-  if (!ctx || !ctx.promoOnPaperRows.length) return 0;
-  let written = 0;
-  ctx.promoOnPaperRows.forEach(r => {
-    const line = reconcileData.find(l => l && !l.isDeposit && String(l.productId) === String(r.product.id));
-    if (!line || !(r.promoFixed > 0)) return;
-    line.promoOnPaper = {
-      expectedNet: r2(r.net), promoFixedPrice: r2(r.promoFixed),
-      promoName: String((r.activePromo && r.activePromo.name) || '').slice(0, 160),
-      recordedAt: Date.now()
-    };
-    line.price = r.promoFixed;
-    line.promoOn = false; line.promoPct = 0;
-    line.aiPaperPriceOnly = true;
-    line.checked = true;
-    written++;
-  });
-  return written;
-}
 function aiSimpleSummaryHtml(ev, opts) {
   opts = opts || {};
   const findings = (Array.isArray(ev && ev.findings) ? ev.findings : []).filter(aiIsActionableFinding);
   const shortages = findings.filter(f => String(f.type) === 'shortage');
   const surpluses = findings.filter(f => String(f.type) === 'surplus');
-  const explained = !!opts.gapExplained;
   const allGood = !!opts.allGood;
-  const anchor = opts.anchor || null;
   let tone, icon, title, subtitle;
-  // v50: כשהסכום שהוקלד אינו הסכום שבנייר, שום דבר אחר אינו "תקין" — כל
-  // ההשוואות נמדדות מול מספר שגוי. הכותרת אומרת את זה ראשונה, כי המשפט
-  // "הכול בסדר, אפשר לקלוט" מעל פער של ₪133 הוא בדיוק מה שגרם לתעודה
-  // להיסגר בביטחון ולהישמר פתוחה.
-  if (anchor) {
-    tone = { box: 'bg-rose-50 border-rose-300', head: 'text-rose-900', sub: 'text-rose-800' };
-    icon = 'fa-circle-exclamation';
-    title = anchor.vatLine ? 'הוקלד סכום כולל מע״מ' : 'הסכום שהוקלד לא תואם לתעודה';
-    subtitle = anchor.vatLine
-      ? 'הוקלד ₪' + fmtMoney(anchor.typed) + ' (סה״כ לתשלום) במקום ₪' + fmtMoney(anchor.paperTotal) + ' (נטו לחיוב). תקן למטה — הסחורה עצמה תואמת.'
-      : 'הוקלד ₪' + fmtMoney(anchor.typed) + ' ובנייר כתוב ₪' + fmtMoney(anchor.paperTotal) + '. תקן את הסכום למטה לפני הקליטה.';
-  } else if (allGood) {
+  // v122: הסיכום הוא כמויות בלבד — חוסר/עודף מול הנייר. הכסף נבדק במרכזת.
+  if (allGood) {
     tone = { box: 'bg-emerald-50 border-emerald-300', head: 'text-emerald-900', sub: 'text-emerald-800' };
     icon = 'fa-circle-check'; title = 'הכול תקין';
-    subtitle = 'כל מה שקיבלת תואם לתעודה של ברמן. אפשר לקלוט.';
-  } else if (explained && !findings.length) {
-    tone = { box: 'bg-emerald-50 border-emerald-300', head: 'text-emerald-900', sub: 'text-emerald-800' };
-    icon = 'fa-circle-check'; title = 'הכול בסדר';
-    subtitle = opts.explainedLine || 'ההפרש בתעודה מוסבר. אפשר לקלוט.';
+    subtitle = 'כל מה שקיבלת תואם לכמויות שבתעודה של ברמן. אפשר לקלוט.';
   } else if (findings.length) {
     tone = { box: 'bg-amber-50 border-amber-300', head: 'text-amber-900', sub: 'text-amber-800' };
     icon = 'fa-triangle-exclamation'; title = 'יש הבדלים מול הנייר';
@@ -14987,7 +14180,7 @@ function aiSimpleSummaryHtml(ev, opts) {
   } else {
     tone = { box: 'bg-amber-50 border-amber-300', head: 'text-amber-900', sub: 'text-amber-800' };
     icon = 'fa-circle-question'; title = 'צריך בדיקה';
-    subtitle = 'החשבון של התעודה לא נסגר. פתח את ההסבר למטה כדי לראות למה.';
+    subtitle = 'הכמויות שנקראו מהנייר לא נסגרו מול "סה"כ כללי" ו"סה"כ שורות". פתח את ההסבר למטה כדי לראות למה.';
   }
   const rowHtml = findings.slice(0, 8).map(f => {
     const isShort = String(f.type) === 'shortage';
@@ -15008,206 +14201,14 @@ function aiSimpleSummaryHtml(ev, opts) {
       '</div>' + detail +
     '</div>';
   }).join('');
-  const priceNote = findings.some(f => ['price', 'promo_missing'].includes(String(f.type)))
-    ? '<div class="text-sm font-bold ' + tone.sub + ' mt-2">יש גם הבדל במחיר — הפירוט בהסבר למטה.</div>' : '';
-  // פער כסף מוסבר לצד חוסרים אמיתיים: שתי אמירות נפרדות, כדי שאחת לא תבטל
-  // את השנייה. הכסף בסדר; החוסר עדיין חוסר.
-  const explainedNote = (explained && findings.length && opts.explainedLine)
-    ? '<div class="rounded-xl bg-emerald-50 border border-emerald-300 p-3 mt-3 text-sm font-bold text-emerald-900 leading-relaxed"><i class="fa-solid fa-circle-check ml-1"></i>' + htmlEscape(String(opts.explainedLine)) + '</div>'
-    : '';
   return '<div class="rounded-2xl border-2 ' + tone.box + ' p-4">' +
     '<div class="text-2xl font-black ' + tone.head + ' leading-tight"><i class="fa-solid ' + icon + ' ml-2"></i>' + title + '</div>' +
     '<div class="text-base font-bold ' + tone.sub + ' mt-1 leading-relaxed">' + htmlEscape(subtitle) + '</div>' +
-    rowHtml + priceNote + explainedNote +
+    rowHtml +
     (shortages.length || surpluses.length
       ? '<div class="text-sm font-bold ' + tone.sub + ' mt-3 leading-relaxed">אם זה נכון — לחץ על הכפתור למטה וקלוט את התעודה. ההפרש יישמר ותוכל לטפל בו מול ברמן.</div>'
       : '') +
   '</div>';
-}
-// v47: המקרה ההפוך — הספק הוריד את מחיר המבצע כבר בתעודה. אתמול "ברמן
-// אקטיב" הגיע בלי ההנחה ואמרנו "המבצע יקזז במרכזת"; היום "לחמניות 10 בשקית"
-// הגיעו ב-₪8.50 (מחיר המבצע) במקום ₪10.40 (מחירון פחות הנחה), והמסך אמר
-// "המחירון התעדכן" ורשם קיזוז של ₪26.60 למרכזת שלעולם לא יגיע. האמת פשוטה:
-// שילמת פחות עכשיו במקום לקבל את זה בחזרה בסוף החודש. אותו כסף, מוקדם יותר.
-function aiPromoOnPaperExplanationHtml(ctx) {
-  if (!ctx || !ctx.promoOnPaperRows.length) return '';
-  const rowsHtml = ctx.promoOnPaperRows.map(r => {
-    const perUnit = r2(r.net - r.promoFixed);
-    const saved = r2(perUnit * r.qty);
-    return '<div class="text-[12px] font-bold mt-2 leading-relaxed">' +
-        '<b>' + htmlEscape(String(r.product.name || '')) + '</b> הגיע בתעודה כבר במחיר המבצע: ₪' + fmt3(r.promoFixed) +
-        ' ליח׳ במקום ₪' + fmt3(r.net) + ' (מחירון ₪' + fmtMoney(r.catalogList) + ' פחות ' + pctTxt(r.pct) + '%).<br>' +
-        r.qty + ' יח׳ × ₪' + fmtMoney(perUnit) + ' = <b>₪' + fmtMoney(saved) + '</b> פחות בתעודה.' +
-      '</div>' +
-      '<div class="text-[12px] font-bold mt-2 bg-white/80 rounded-lg p-2 leading-relaxed">' +
-        '<div class="font-black text-emerald-900 mb-1">למה זה בסדר: זה אותו מבצע, רק מוקדם יותר</div>' +
-        'בדרך כלל ברמן מחייב בתעודה את המחיר הרגיל ומחזיר את המבצע בקיזוז בסוף החודש. הפעם המבצע ירד כבר בתעודה — ולכן על השורה הזאת <b>לא יהיה קיזוז במרכזת</b>, כי כבר קיבלת אותו.' +
-        '<div class="mt-1 font-black text-slate-800">' +
-          '<div class="flex justify-between"><span>בתעודה · ' + r.qty + ' × ₪' + fmt3(r.promoFixed) + '</span><span>₪' + fmtMoney(r2(r.promoFixed * r.qty)) + '</span></div>' +
-          '<div class="flex justify-between text-emerald-800"><span>קיזוז במרכזת</span><span>₪0.00</span></div>' +
-          '<div class="flex justify-between border-t border-emerald-200 mt-1 pt-1"><span>תשלם בסוף</span><span>₪' + fmtMoney(r2(r.promoFixed * r.qty)) + ' (₪' + fmt3(r.promoFixed) + ' ליח׳)</span></div>' +
-        '</div>' +
-        '<div class="text-[11px] font-bold text-emerald-800 mt-1">בדיוק אותו סכום שהיית משלם אילו המבצע היה יורד במרכזת. המחירון במאגר לא השתנה ואין מה לתקן.</div>' +
-      '</div>';
-  }).join('');
-  // v89: השורות האלה כבר מתומחרות במחיר המבצע בתוך appTotal, ולכן "הפער כולו
-  // מוסבר" פירושו שלא נשאר פער — ולא עוד שהפער שווה לחיסכון מהמבצע.
-  const whole = ctx.gap != null && Math.abs(ctx.gap) <= ctx.roundingTol;
-  return '<div class="rounded-xl border-2 border-emerald-400 bg-emerald-50 p-3">' +
-    '<div class="font-black text-base text-emerald-900"><i class="fa-solid fa-circle-check ml-1"></i>' + (whole ? 'הפער מוסבר — אפשר לסגור את התעודה' : 'חלק מהפער מוסבר — מבצע שירד כבר בתעודה') + '</div>' +
-    rowsHtml +
-    '<div class="text-[11px] font-bold text-emerald-900 mt-2">' + (whole
-      ? 'התעודה תיקלט בסכום שמודפס בנייר (₪' + fmtMoney(ctx.paperTotal) + '), בלי הפרש פתוח ובלי קיזוז צפוי על השורה הזאת.'
-      : 'השורה הזאת תיקלט במחיר שמודפס בנייר; מה שנשאר מהפער מוסבר בכרטיס הבא.') + '</div>' +
-  '</div>';
-}
-function aiFullListExplanationHtml(ev) {
-  const ctx = aiPriceGapContext(ev);
-  if (!ctx) return '';
-  const promoOnPaperHtml = aiSafeBlock('מבצע שירד בתעודה', () => aiPromoOnPaperExplanationHtml(ctx));
-  if (!ctx.fullListRow) return promoOnPaperHtml;
-  if (ctx.fullListRows && ctx.fullListRows.length > 1) {
-    return promoOnPaperHtml + '<div class="rounded-xl border-2 border-emerald-400 bg-emerald-50 p-3">' +
-      '<div class="font-black text-base text-emerald-900">מוצרי מבצע חויבו במחיר מלא — ממתינים למרכזת</div>' +
-      ctx.fullListRows.map(r => '<div class="text-sm mt-2">' + htmlEscape(String(r.product.name || '')) +
-        ': ' + r.qty + ' יח׳ במחיר ₪' + fmtMoney(r.printedList) +
-        ', מחיר המבצע הצפוי במרכזת ₪' + fmtMoney(r.promoFixed) + ' ליח׳.</div>').join('') +
-      '<div class="font-bold mt-2">ההפרש ₪' + fmtMoney(ctx.fullListGap) + ' יישמר למעקב מול המרכזת. אפשר להמשיך בקליטה.</div></div>';
-  }
-  const r = ctx.fullListRow.fullListOnPaper
-    ? Object.assign({}, ctx.fullListRow, { catalogList: ctx.fullListRow.printedList }) : ctx.fullListRow;
-  const promo = r.activePromo;
-  const perUnitGap = r2(r.catalogList - r.net);
-  const explainedGap = ctx.fullListGap != null ? ctx.fullListGap : ctx.gap;
-  const head = htmlEscape(String(r.product.name || ''));
-  const factsHtml =
-    '<div class="text-[12px] font-bold mt-2 leading-relaxed">' +
-      '<b>' + head + '</b> הגיע בתעודה בלי ההנחה הקבועה: מחירון מלא ₪' + fmtMoney(r.catalogList) +
-      ' ליח׳ במקום ₪' + fmt3(r.net) + ' (הנחה ' + pctTxt(r.pct) + '%).<br>' +
-      r.qty + ' יח׳ × ₪' + fmtMoney(perUnitGap) + ' = <b>₪' + fmtMoney(explainedGap) + '</b> — ' + (ctx.promoOnPaperRows.length ? 'כל מה שנשאר מהפער' : 'כל הפער, עד האגורה') + '.' +
-    '</div>';
-  if (!promo) {
-    return promoOnPaperHtml + '<div class="rounded-xl border-2 border-rose-300 bg-rose-50 p-3">' +
-      '<div class="font-black text-base text-rose-900"><i class="fa-solid fa-circle-exclamation ml-1"></i>שורה אחת הגיעה בלי ההנחה הקבועה</div>' +
-      factsHtml +
-      '<div class="text-[11px] font-bold text-rose-900 mt-2 bg-white/70 rounded-lg p-2">המוצר הזה <b>אינו במבצע החודש</b>, ולכן אין קיזוז צפוי במרכזת. כדאי לברר מול הספק לפני שסוגרים — ייתכן שחויבת ביתר ב-₪' + fmtMoney(explainedGap) + '.</div>' +
-    '</div>';
-  }
-  const fixed = promoFixedPrice(promo);
-  const paperLine = r2(r.catalogList * r.qty);
-  const rebate = r2((r.catalogList - fixed) * r.qty);
-  const finalLine = r2(fixed * r.qty);
-  return promoOnPaperHtml + '<div class="rounded-xl border-2 border-emerald-400 bg-emerald-50 p-3">' +
-    '<div class="font-black text-base text-emerald-900"><i class="fa-solid fa-circle-check ml-1"></i>הפער מוסבר — אפשר לסגור את התעודה</div>' +
-    factsHtml +
-    '<div class="text-[12px] font-bold mt-2 bg-white/80 rounded-lg p-2 leading-relaxed">' +
-      '<div class="font-black text-emerald-900 mb-1">למה זה בסדר: המוצר במבצע החודש (₪' + fmt3(fixed) + ' ליח׳)</div>' +
-      'קיזוז המרכזת מחושב מהמחיר שבתעודה, ולכן דווקא בגלל שחויבת במחירון מלא — הקיזוז יהיה גדול יותר בדיוק באותו סכום:' +
-      '<div class="mt-1 font-black text-slate-800">' +
-        '<div class="flex justify-between"><span>בתעודה · ' + r.qty + ' × ₪' + fmtMoney(r.catalogList) + '</span><span>₪' + fmtMoney(paperLine) + '</span></div>' +
-        '<div class="flex justify-between text-emerald-800"><span>קיזוז במרכזת</span><span>−₪' + fmtMoney(rebate) + '</span></div>' +
-        '<div class="flex justify-between border-t border-emerald-200 mt-1 pt-1"><span>תשלם בסוף</span><span>₪' + fmtMoney(finalLine) + ' (₪' + fmt3(fixed) + ' ליח׳)</span></div>' +
-      '</div>' +
-      '<div class="text-[11px] font-bold text-emerald-800 mt-1">בדיוק אותו סכום שהיית משלם אילו ההנחה כן הייתה מופיעה בתעודה.</div>' +
-    '</div>' +
-    '<div class="text-[11px] font-bold text-emerald-900 mt-2">סגור את התעודה עם ההפרש — הוא יירשם כפתוח וייסגר מול המרכזת.</div>' +
-  '</div>';
-}
-function aiPriceBreakdownHtml(ev) {
-  if (receiptPriceAudit().rows.length) return ""; // dedicated source-based review above
-  const ctx = aiPriceGapContext(ev);
-  if (!ctx) return '';
-  const rows = ctx.rows, appTotal = ctx.appTotal, paperTotal = ctx.paperTotal, gap = ctx.gap;
-  const listMismatches = rows.filter(r => r.listMismatch);
-  const open = ev.valid !== true;
-  // ההנחה שהייתה סוגרת את כל הפער אילו השורה הזאת לבדה אחראית לו. אין בזה
-  // הכרעה — זו רשימת חשודים לבדיקה מול מה שסוכם עם הספק, לא קביעה.
-  const suspects = [];
-  if (gap != null && Math.abs(gap) > 0.05) {
-    rows.forEach(r => {
-      if (!(r.catalogList > 0) || !(r.qty > 0)) return;
-      const neededNet = r.net + gap / r.qty;
-      const neededPct = (1 - neededNet / r.catalogList) * 100;
-      if (!isFinite(neededPct) || neededPct < -0.5 || neededPct > 70) return;
-      suspects.push({ name: r.product.name, from: r.pct, to: neededPct, qty: r.qty, promo: !!r.activePromo, round: Math.abs(neededPct - Math.round(neededPct)) < 0.15 });
-    });
-    suspects.sort((a, b) => Math.abs(a.to - Math.round(a.to)) - Math.abs(b.to - Math.round(b.to)));
-  }
-  const rowHtml = rows.map(r => {
-    const printed = r.printedList == null || !isFinite(r.printedList) ? '—' : '₪' + fmtMoney(r.printedList);
-    return '<div class="py-1.5 border-t border-black/5 first:border-t-0">' +
-      '<div class="flex items-start justify-between gap-2">' +
-        '<span class="min-w-0 text-[12px] font-black text-slate-800">' + htmlEscape(String(r.product.name || '')) + '</span>' +
-        '<span class="shrink-0 text-[12px] font-black text-slate-700">' + r.qty + ' יח׳ · ₪' + fmtMoney(r.lineTotal) + '</span>' +
-      '</div>' +
-      '<div class="text-[10px] font-bold mt-0.5 ' + (r.listMismatch ? 'text-rose-700' : 'text-slate-500') + '">' +
-        (r.listMismatch ? '⚠ ' : '') + 'נייר ' + printed + ' · מחירון ' + (r.catalogList > 0 ? '₪' + fmtMoney(r.catalogList) : '—') +
-        ' · הנחה ' + pctTxt(r.pct) + '% → ₪' + fmt3(r.net) + ' ליח׳' +
-      '</div>' +
-      (r.promoOnPaper
-        ? '<div class="text-[10px] font-black text-emerald-700 mt-0.5"><i class="fa-solid fa-tag ml-1"></i>\u05de\u05d1\u05e6\u05e2 \u05e4\u05e2\u05d9\u05dc: \u20aa' + fmt3(r.promoFixed) + ' \u05dc\u05d9\u05d7\u05f3 \u2014 \u05d5\u05d4\u05d5\u05d0 \u05d9\u05e8\u05d3 \u05db\u05d1\u05e8 \u05d1\u05ea\u05e2\u05d5\u05d3\u05d4 \u05e2\u05e6\u05de\u05d4 (\u05d4\u05de\u05d7\u05d9\u05e8 \u05d4\u05de\u05d5\u05d3\u05e4\u05e1 \u05d4\u05d5\u05d0 \u05de\u05d7\u05d9\u05e8 \u05d4\u05de\u05d1\u05e6\u05e2). \u05d0\u05d9\u05df \u05e7\u05d9\u05d6\u05d5\u05d6 \u05e6\u05e4\u05d5\u05d9 \u05d1\u05de\u05e8\u05db\u05d6\u05ea \u05e2\u05dc \u05d4\u05e9\u05d5\u05e8\u05d4 \u05d4\u05d6\u05d0\u05ea, \u05d5\u05d4\u05de\u05d7\u05d9\u05e8\u05d5\u05df \u05d1\u05de\u05d0\u05d2\u05e8 \u05dc\u05d0 \u05d4\u05e9\u05ea\u05e0\u05d4.</div>'
-        : (r.activePromo ? '<div class="text-[10px] font-black text-violet-700 mt-0.5"><i class="fa-solid fa-tag ml-1"></i>\u05de\u05d1\u05e6\u05e2 \u05e4\u05e2\u05d9\u05dc: \u20aa' + fmt3(promoFixedPrice(r.activePromo)) + ' \u05dc\u05d9\u05d7\u05f3. \u05d4\u05e9\u05d5\u05e8\u05d4 \u05d1\u05ea\u05e2\u05d5\u05d3\u05d4 \u05e0\u05e9\u05d0\u05e8\u05ea \u05d1\u05de\u05d7\u05d9\u05e8 \u05d4\u05d4\u05e0\u05d7\u05d4 \u05d4\u05e8\u05d2\u05d9\u05dc, \u05d5\u05d4\u05e4\u05e8\u05e9 \u05e2\u05d3 \u05de\u05d7\u05d9\u05e8 \u05d4\u05de\u05d1\u05e6\u05e2 \u05e0\u05e8\u05e9\u05dd \u05db\u05e7\u05d9\u05d6\u05d5\u05d6 \u05dc\u05de\u05e8\u05db\u05d6\u05ea: \u20aa' + fmtMoney(Math.max(0, r2((r.net - promoFixedPrice(r.activePromo)) * r.qty))) + ' \u05d1\u05e9\u05d5\u05e8\u05d4 \u05d4\u05d6\u05d0\u05ea.</div>' : '')) +
-      (r.netDrift ? '<div class="text-[10px] font-black text-rose-700 mt-0.5">⚠ המחיר במאגר אינו מחירון פחות הנחה: לפי ' + pctTxt(r.pct) + '% היה צריך לצאת ₪' + fmt3(r.expectedNet) + ', ובפועל מחושב ₪' + fmt3(r.net) + ' (' + (r.netDrift > 0 ? '+' : '−') + '₪' + fmtMoney(Math.abs(r.netDrift)) + ' בשורה)</div>' : '') +
-    '</div>';
-  }).join('');
-  // v35: מה שחותך בין "טעות בקריאה" ל"טעות במחיר" אינו השוואת ההנחות —
-  // ההנחה שבנייר וההנחה שבמאגר נגזרות שתיהן מאותן שורות, וההפרש ביניהן
-  // שווה תמיד, אלגברית, לפער עצמו. זו אינה בדיקה אלא הד.
-  // מה שכן חותך הוא העוגן שהוקלד מהנייר עצמו: מונה השורות ומונה היחידות.
-  // נקראו בדיוק כמו שמודפס → הכמויות מאומתות והפער חייב לשבת במחיר.
-  // לא נקראו כך → קודם כול יש לתקן את הקריאה, ואין טעם לחשוד במחירים.
-  const grossKnown = rows.every(r => r.printedList != null && isFinite(r.printedList));
-  const paperGross = grossKnown ? r2(rows.reduce((sum, r) => sum + lineTotalFromUnit(r.printedList, r.qty), 0)) : null;
-  const catalogDiscount = r2(rows.reduce((sum, r) => sum + lineTotalFromUnit(r.catalogList, r.qty), 0) - appTotal);
-  const quantitiesAnchored = ctx.quantitiesAnchored, anchorText = ctx.anchorText;
-  // v41: הגוש הזה אבד בריפקטור של v39 (נמחק יחד עם חישוב העוגן שעבר
-  // ל-aiPriceGapContext), אבל driftHtml ו-driftRows נשארו בשימוש למטה.
-  // התוצאה: ReferenceError בכל רינדור של תוצאות סריקה, ומסך תקוע על הספינר.
-  const driftRows = rows.filter(r => r.netDrift);
-  const driftMoney = r2(driftRows.reduce((sum, r) => sum + r.netDrift, 0));
-  const driftHtml = driftRows.length
-    ? '<div class="rounded-lg bg-rose-50 border-2 border-rose-300 p-2 mt-2 text-[11px] font-bold text-rose-900">' +
-      '<div class="font-black">' + driftRows.length + ' שורות שבהן המחיר במאגר אינו מחירון פחות ההנחה</div>' +
-      '<div class="mt-1">ההנחות עצמן לא השתנו — המחיר המחושב הוא שדה נפרד, והוא נדרס בשלב כלשהו. בשורות האלה זה שווה <b>' + (driftMoney > 0 ? '+' : '\u2212') + '\u20aa' + fmtMoney(Math.abs(driftMoney)) + '</b> בתעודה הזאת.</div>' +
-      '<div class="mt-1 text-[10px]">התיקון: פתח כל מוצר כזה במסך המוצרים והחזר את המחיר לפי המחירון והאחוז.</div></div>'
-    : '';
-  const verdictHtml = (paperTotal == null || Math.abs(gap) <= 0.05) ? '' :
-    '<div class="rounded-lg border p-2 mt-2 ' + (quantitiesAnchored ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-rose-50 border-rose-200 text-rose-900') + '">' +
-      '<div class="text-[11px] font-black">' + (quantitiesAnchored
-        ? '✓ הכמויות מאומתות מול המודפס בנייר (' + anchorText + ') — לכן הפער יושב במחיר'
-        : '✗ הכמויות שנקראו אינן תואמות את המודפס בנייר (' + anchorText + ') — הפער הוא בקריאה, לא במחיר') + '</div>' +
-      '<div class="text-[10px] font-bold mt-1 opacity-90">' + (quantitiesAnchored
-        ? 'כל שורה נקראה בכמות הנכונה, ולכן ההפרש של ₪' + fmtMoney(Math.abs(gap)) + ' יכול לבוא רק ממחירון או מהנחה שאינם מה שהספק מחייב בפועל.'
-        : 'צלם את התעודה מחדש בחדות. כל עוד הכמויות אינן נסגרות מול המונים המודפסים, כל חשד למחיר הוא ניחוש.') + '</div>' +
-    '</div>';
-  const totalsHtml = '<div class="mt-2 pt-2 border-t-2 border-slate-300 text-[12px] font-black text-slate-800">' +
-    (paperGross == null ? '' : '<div class="flex items-center justify-between text-slate-500"><span>גרוס לפי הנייר (לפני הנחה)</span><span>₪' + fmtMoney(paperGross) + '</span></div>' +
-      '<div class="flex items-center justify-between text-slate-500"><span>סך ההנחה לפי המאגר</span><span>₪' + fmtMoney(catalogDiscount) + '</span></div>') +
-    '<div class="flex items-center justify-between"><span>סכום לפי המאגר</span><span>₪' + fmtMoney(appTotal) + '</span></div>' +
-    (paperTotal == null ? '' :
-      '<div class="flex items-center justify-between"><span>"נטו לחיוב" בנייר</span><span>₪' + fmtMoney(paperTotal) + '</span></div>' +
-      '<div class="flex items-center justify-between ' + (Math.abs(gap) <= 0.05 ? 'text-emerald-700' : 'text-rose-700') + '"><span>' + (gap >= 0 ? 'הספק מחייב יותר' : 'הספק מחייב פחות') + '</span><span>₪' + fmtMoney(Math.abs(gap)) + '</span></div>') +
-    verdictHtml + driftHtml +
-  '</div>';
-  const listNote = listMismatches.length
-    ? '<div class="rounded-lg bg-rose-50 border border-rose-200 p-2 mt-2 text-[11px] font-bold text-rose-800">' + listMismatches.length + ' שורות שבהן המחיר המודפס בנייר אינו מחיר המחירון שבמאגר — שם המחירון עצמו התעדכן, וזה התיקון הראשון שצריך לעשות.</div>'
-    : '';
-  // v35: רשימת החשודים בהנחה מוצגת רק כשהמבחן המכריע אכן הצביע על ההנחות.
-  // כשההנחות תקינות היא הייתה שולחת לחפש במקום הלא נכון.
-  // v47: וכשהפער כבר מוסבר במלואו (מבצע שירד בתעודה / שורה במחירון מלא),
-  // רשימת חשודים רק מפחידה — היא הציעה "פיתות ענן 55.8%" כשהתשובה הייתה
-  // לחמניות במחיר מבצע.
-  const suspectHtml = (suspects.length && quantitiesAnchored && !driftRows.length && !ctx.gapExplained)
-    ? '<div class="mt-2"><div class="text-[11px] font-black text-slate-600 mb-1">איזו הנחה הייתה סוגרת את הפער — אם שורה אחת בלבד אחראית לו:</div>' +
-      suspects.slice(0, 5).map(s => '<div class="flex items-center justify-between gap-2 py-1 border-t border-black/5 text-[11px] font-bold text-slate-700"><span class="min-w-0">' + htmlEscape(String(s.name || '')) + ' <span class="text-slate-400">(' + s.qty + ' יח׳)</span></span><span class="shrink-0 font-black">' + pctTxt(s.from) + '% ← ' + pctTxt(s.to) + '%</span></div>' + (s.promo && s.round ? '<div class="text-[10px] font-black text-violet-800 bg-violet-50 border border-violet-200 rounded p-1.5 mt-1">\u25c0 המוצר הזה במבצע פעיל והאחוז שיוצא עגול. ייתכן שהספק חרג והשורה הגיעה במחירון מלא. הכסף לא אובד — קיזוז המרכזת גדל בהתאם והמחיר הסופי ליחידה זהה — אבל שווה לברר מולו.</div>' : '')).join('') +
-      '<div class="text-[10px] font-bold text-slate-400 mt-1">רשימת חשודים לבדיקה מול מה שסוכם — לא קביעה. אחוז "עגול" הוא הסימן החזק ביותר.</div></div>'
-    : '';
-  return '<details class="rounded-xl border border-slate-300 bg-white p-3"' + (open ? ' open' : '') + '>' +
-    '<summary class="cursor-pointer list-none flex items-center justify-between gap-2">' +
-      '<span class="font-black text-slate-800 text-sm"><i class="fa-solid fa-shekel-sign ml-1"></i>איפה הפער במחירים — שורה מול שורה</span>' +
-      '<span class="shrink-0 text-[10px] font-black text-slate-500">' + rows.length + ' שורות</span>' +
-    '</summary>' +
-    '<div class="mt-2">' + rowHtml + totalsHtml + listNote + suspectHtml + '</div></details>';
 }
 // v42: רוב ההערות שחוזרות מהקריאה הן רעש טכני — "ביטחון קריאה בינוני",
 // קמטים, סימוני עט. הן נכונות ואין להן שום משמעות כספית, ובכל זאת הוצגו
@@ -15252,44 +14253,24 @@ function aiScanWarningsHtml(ev) {
   '</details>';
 }
 function aiFindingsBalanceHtml(ev) {
+  // v122: המאזן ביחידות בלבד — הממצאים חייבים להסביר את פער "סה"כ כללי" מול הספירה.
   const closure = ev && ev.closure;
   if (!closure) return '';
   const ok = closure.ok === true;
   const unitsLine = closure.expectedUnitsDelta == null
-    ? '<div class="text-[11px] font-bold mt-1">אין עוגן יחידות בתעודה — הסגירה נבדקת בכסף בלבד</div>'
+    ? '<div class="text-[11px] font-bold mt-1">אין עוגן יחידות בתעודה — אין מה לסגור</div>'
     : '<div class="text-[11px] font-bold mt-1">' + (closure.unitsOk ? '✓' : '✗') + ' יחידות: הממצאים מסבירים ' + closure.actualUnitsDelta + ' מתוך ' + closure.expectedUnitsDelta + '</div>';
-  const moneyGap = r2(Number(closure.expectedAmountDelta || 0) - Number(closure.actualAmountDelta || 0));
-  const moneyTail = closure.amountOk
-    ? ''
-    : (moneyGap > 0
-      ? ' — נשארו ₪' + fmtMoney(Math.abs(moneyGap)) + ' בלי הסבר'
-      : ' — ₪' + fmtMoney(Math.abs(moneyGap)) + ' יותר ממה שהפער מצדיק');
-  const moneyLine = '<div class="text-[11px] font-bold mt-1">' + (closure.amountOk ? '✓' : '✗') + ' כסף: הממצאים מסבירים ₪' + fmtMoney(closure.actualAmountDelta) + ' מתוך ₪' + fmtMoney(closure.expectedAmountDelta) + moneyTail + '</div>';
-  // v29: כשהשורות שנקראו מהנייר אינן מסתכמות ל"נטו לחיוב" המודפס, זה מקור
-  // הפער האמיתי — ולא שום ממצא ברשימה. השורה הזאת אומרת אותו בכסף, כי בלעדיה
-  // המשתמש מחפש את הטעות בין ארבעה ממצאים נכונים.
-  const paperGaps = (Array.isArray(ev && ev.docSummaries) ? ev.docSummaries : []).map(summary => {
-    if (!summary || summary.subtotal == null) return '';
-    const missing = r2(Number(summary.subtotal) - Number(summary.rowsSum || 0));
-    if (Math.abs(missing) < 0.05) return '';
-    const label = (Array.isArray(ev.docSummaries) && ev.docSummaries.length > 1 ? 'תעודה ' + (Number(summary.noteIndex) + 1) + ': ' : '');
-    return '<div class="text-[11px] font-bold mt-1">✗ ' + label + (summary.rows || 0) + ' השורות שנקראו מהנייר מסתכמות ב-₪' + fmtMoney(summary.rowsSum || 0) + ', והנייר אומר ₪' + fmtMoney(summary.subtotal) + ' — ' + (missing > 0 ? '₪' + fmtMoney(missing) + ' בתעודה לא נקראו' : '₪' + fmtMoney(Math.abs(missing)) + ' נקראו פעמיים או בכמות גדולה מדי') + '</div>';
-  }).join('');
-  const hint = ok ? '' : '<div class="text-[10px] font-bold mt-2 opacity-80">' + (paperGaps
-    ? 'כלומר הבעיה אינה ברשימה שלמעלה אלא בקריאת הנייר עצמו: שורה, כמות או מחיר שלא נקראו נכון. צלם מחדש את התעודה בחדות (או את העמוד החסר) והרץ שוב.'
-    : 'כלומר הרשימה שלמעלה אינה התמונה המלאה: יש עוד שורה בתעודה שלא נקראה נכון, מחיר שונה מהקטלוג, או פריט שנסרק בקליטה תחת מוצר אחר. "הרץ את המנתח" למטה מנסה לסגור בדיוק את השארית הזאת.') + '</div>';
+  const hint = ok ? '' : '<div class="text-[10px] font-bold mt-2 opacity-80">כלומר הרשימה שלמעלה אינה התמונה המלאה: יש עוד שורה בתעודה שלא נקראה נכון, או פריט שנסרק בקליטה תחת מוצר אחר. "הרץ את המנתח" למטה מנסה לסגור בדיוק את השארית הזאת.</div>';
   return '<div class="rounded-xl border p-3 ' + (ok ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-slate-100 border-slate-300 text-slate-700') + '">' +
-    '<div class="font-black text-sm"><i class="fa-solid fa-scale-balanced ml-1"></i>' + (ok ? 'הממצאים סוגרים את כל הפער' : 'הממצאים אינם סוגרים את כל הפער') + '</div>' +
-    unitsLine + moneyLine + paperGaps + hint + '</div>';
+    '<div class="font-black text-sm"><i class="fa-solid fa-scale-balanced ml-1"></i>' + (ok ? 'הממצאים סוגרים את כל פער היחידות' : 'הממצאים אינם סוגרים את פער היחידות') + '</div>' +
+    unitsLine + hint + '</div>';
 }
 function aiActionableFindingsHtml(findings) {
-  const actionable = (Array.isArray(findings) ? findings : []).filter(aiIsActionableFinding).filter(priceAuditLegacyVisible);
+  const actionable = (Array.isArray(findings) ? findings : []).filter(aiIsActionableFinding);
   if (!actionable.length) return '';
   return '<div class="mt-3"><div class="font-black text-base text-slate-800 mb-2">אלה הבעיות שנמצאו:</div><div class="space-y-2">' +
     aiCompactFindingGroupHtml('shortage', 'חוסרים', actionable) +
     aiCompactFindingGroupHtml('surplus', 'עודפים', actionable) +
-    aiCompactFindingGroupHtml('price', 'בעיות מחיר', actionable) +
-    aiCompactFindingGroupHtml('promo_missing', 'מבצע קיים במערכת אך לא בתעודה', actionable) +
   '</div></div>';
 }
 function aiInformationalFindingsHtml(findings) {
@@ -15306,7 +14287,7 @@ function aiRecognizedProductsHtml(evaluation) {
     const proof = methods.every(method => method === 'exact_full') ? 'ברקוד מלא' : (methods.some(method => method === 'user_confirmed') ? 'אושר ידנית' : 'ברקוד/סיומת ייחודיים');
     return '<div class="rounded-xl border border-emerald-200 bg-white p-2.5 flex items-center justify-between gap-3">' +
       '<div class="min-w-0"><div class="font-black text-slate-800 truncate">' + htmlEscape(entry.product && entry.product.name || '') + '</div><div class="text-[10px] font-bold text-emerald-700"><i class="fa-solid fa-shield-halved ml-1"></i>' + proof + '</div></div>' +
-      '<div class="text-left shrink-0"><div class="font-black text-slate-800">' + Number(entry.qty || 0) + ' יח׳</div><div class="text-[10px] font-bold text-slate-500">₪' + fmtMoney(Number(entry.totalCents || 0) / 100) + '</div></div>' +
+      '<div class="text-left shrink-0"><div class="font-black text-slate-800">' + Number(entry.qty || 0) + ' יח׳</div></div>' +
     '</div>';
   }).join('');
   return '<div class="mt-3 rounded-2xl border-2 border-emerald-200 bg-emerald-50 p-3">' +
@@ -15447,7 +14428,6 @@ function aiConfirmNameCandidate(documentIndex, rowIndex, candidateProductId) {
   }
   const qtyRaw = row.quantity == null || row.quantity === '' ? NaN : Number(row.quantity);
   const quantity = Number.isFinite(qtyRaw) ? qtyRaw : null;
-  const lineTotal = aiLineTotal(row, quantity);
   const confirmedItem = aiScanEvaluation && aiScanEvaluation.aggregates instanceof Map ? aiScanEvaluation.aggregates.get(selectedId) : null;
   const receivedLine = (reconcileData || []).find(line => String(line.productId) === selectedId);
   const paperQtyIfChosen = quantity == null ? null : Number(confirmedItem && confirmedItem.qty || 0) + quantity;
@@ -15459,13 +14439,10 @@ function aiConfirmNameCandidate(documentIndex, rowIndex, candidateProductId) {
   row.barcodeUserConfirmedCandidateIds = candidates.map(candidate => String(candidate.product.id));
   row.barcodeUserConfirmedCrossCheck = {
     quantity,
-    lineTotalExVat: lineTotal == null ? null : r2(lineTotal),
-    arithmeticVerified: quantity != null && aiRowHasArithmeticProof(row, quantity),
     paperQtyIfChosen,
     receivedQty,
     quantityMatchesReceived: paperQtyIfChosen != null && paperQtyIfChosen === receivedQty,
-    totalVerifiedAtChoice: !!(aiScanEvaluation && aiScanEvaluation.totalVerified),
-    unitsVerifiedAtChoice: !!(aiScanEvaluation && aiScanEvaluation.unitsVerified)
+    anchorsVerifiedAtChoice: !!(aiScanEvaluation && aiScanEvaluation.anchorsVerified)
   };
   row.barcode = selected.barcode;
   row.barcodeMatchMethod = 'user_confirmed';
@@ -15593,9 +14570,9 @@ function aiInvoiceCaptureHtml() {
     const unknownCards = (Array.isArray(ev.barcodeSuggestions) ? ev.barcodeSuggestions : []).filter(suggestion => suggestion && suggestion.unknownProduct === true).map(aiUnknownProductSuggestionHtml).join('');
     const blockingReasonsHtml = (Array.isArray(ev.errors) ? ev.errors : []).slice(0, 6).map(error => '<li>' + htmlEscape(error) + '</li>').join('');
     // v133: שורת שארית אינה קופסה טכנית נפרדת אלא שורת בעיה רגילה ברשימה.
-    // ₪ שלא שויכו הם בעיה לכל דבר — הם חוסמים סגירה, ולכן חייבים להיראות.
+    // שורה שלא שויכה היא בעיה לכל דבר — היא חוסמת סגירה, ולכן חייבת להיראות.
     const residualLines = residuals.map(residual => {
-      const meta = [(residual.qty != null ? residual.qty + ' יח׳' : ''), (residual.amount != null ? '₪' + fmtMoney(residual.amount) : '')].filter(Boolean).join(' · ');
+      const meta = residual.qty != null ? residual.qty + ' יח׳' : '';
       return '<details class="rounded-xl border p-2.5 text-sm font-black bg-slate-50 border-slate-300 text-slate-700"><summary class="cursor-pointer list-none">🔎 נקראה אך לא שויכה: ' + htmlEscape(residual.description || ('שורה בתעודה ' + residual.docNumber)) + (meta ? ' — ' + htmlEscape(meta) : '') + '</summary>' +
         '<div class="mt-1 text-[10px] font-bold text-slate-500">תעודה ' + residual.docNumber + (residual.lineNumber != null ? ', שורה ' + residual.lineNumber : '') + ' · ' + htmlEscape(residual.reason || 'לא נקראה בוודאות') + ' · אינה נתבעת ואינה משתתפת בחישוב.</div>' +
         aiBarcodeSuggestionPreviewHtml(residual) + '</details>';
@@ -15608,62 +14585,46 @@ function aiInvoiceCaptureHtml() {
     // v41: כל תוספת תצוגה כאן נכנסת דרך aiSafeBlock. באג בכרטיס אחד הפיל את
     // renderReconcile כולו מתוך ה-finally של הסריקה, והמסך נשאר תקוע על
     // הספינר בלי דרך החוצה. מעכשיו כרטיס שנופל מדווח על עצמו והשאר ממשיך.
-    const gapExplanationHtml = analyzerLed ? '' : aiSafeBlock('הסבר הפער', () => aiFullListExplanationHtml(ev));
-    const findingsHtml = gapExplanationHtml + (!analyzerLed && actionableFindings.length ? aiActionableFindingsHtml(actionableFindings) : '') + balanceHtml + aiSafeBlock('הערות הקריאה', () => aiScanWarningsHtml(ev)) + aiSafeBlock('פירוט המחירים', () => aiPriceBreakdownHtml(ev)) + residualLines + unknownCards + aiSafeBlock('המנתח', () => aiAnalyzeHtml(ev)) + aiSafeBlock('נתוני אבחון', () => aiScanDiagnosticsHtml(ev));
+    // v122: בלי הסבר פער כסף ובלי פירוט מחירים — הקליטה היא כמויות בלבד.
+    const findingsHtml = (!analyzerLed && actionableFindings.length ? aiActionableFindingsHtml(actionableFindings) : '') + balanceHtml + aiSafeBlock('הערות הקריאה', () => aiScanWarningsHtml(ev)) + residualLines + unknownCards + aiSafeBlock('המנתח', () => aiAnalyzeHtml(ev)) + aiSafeBlock('נתוני אבחון', () => aiScanDiagnosticsHtml(ev));
     const allGood = aiScanAllGood(ev);
     const statusHtml = allGood
-      ? '<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-3 font-black text-emerald-800"><i class="fa-solid fa-circle-check ml-1"></i>הכול תואם — לא נמצאו חוסר, עודף או בעיית מחיר/מבצע.</div>'
+      ? '<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-3 font-black text-emerald-800"><i class="fa-solid fa-circle-check ml-1"></i>הכול תואם — לא נמצאו חוסר או עודף.</div>'
       : (ev.valid ? '' :
-        '<div class="rounded-xl bg-amber-50 border border-amber-300 p-3"><div class="font-black text-amber-900 text-sm"><i class="fa-solid fa-triangle-exclamation ml-1"></i>הסריקה לא נסגרה במלואה — סגירת התעודה נעולה עד תיקון.' + (ev.basketComplete ? '' : ' עודפים ובעיות מחיר/מבצע יוצגו כשכל השורות ייקראו.') + '</div>' +
+        '<div class="rounded-xl bg-amber-50 border border-amber-300 p-3"><div class="font-black text-amber-900 text-sm"><i class="fa-solid fa-triangle-exclamation ml-1"></i>הסריקה לא נסגרה במלואה — סגירת התעודה נעולה עד תיקון.' + (ev.basketComplete ? '' : ' עודפים יוצגו כשכל השורות ייקראו.') + '</div>' +
         (blockingReasonsHtml ? '<details class="mt-2 text-right"><summary class="cursor-pointer text-[11px] font-black text-amber-800">מה לא נסגר?</summary><ul class="list-disc pr-5 mt-2 space-y-1 text-[10px] font-bold text-amber-800">' + blockingReasonsHtml + '</ul></details>' : '') + '</div>');
     const autoNote = Array.isArray(ev.autoResolutions) && ev.autoResolutions.length
-      ? '<div class="text-[10px] font-bold text-slate-500 text-center">' + ev.autoResolutions.length + ' שורות הותאמו אוטומטית לפי קוד/שם/מחיר/מבצע/כמות — מתועד ביומן.</div>'
+      ? '<div class="text-[10px] font-bold text-slate-500 text-center">' + ev.autoResolutions.length + ' שורות הותאמו אוטומטית לפי קוד/שם/כמות — מתועד ביומן.</div>'
       : '';
     // v44: שלב האישור הנפרד הוסר. הוא נולד ב-v133 כשהמסך היה רשימת ממצאים
     // בלי הסבר, והיה בו היגיון: המשתמש אישר שהבין לפני שהתוצאות הוחלו.
     // מאז הסיכום הפשוט אומר בדיוק מה יקרה ומציג את ההבדלים בכתב גדול, ולכן
     // "כן, זה נכון" ואחריו "קלוט את התעודה" הם אותה לחיצה על אותו מסך פעמיים.
     // כפתור אחד עושה את שניהם; "לא נכון — צלם שוב" נשאר הדרך אחורה.
-    // v50: אי-התאמה בין הסכום שהוקלד לסכום שבנייר מורידה את הכפתור הירוק.
-    // "קלוט את התעודה" בירוק הוא הבטחה שהתעודה תיסגר; כשהעוגן שגוי היא לא
-    // תיסגר, ולכן הכפתור אומר את האמת — קליטה עם הפרש פתוח.
-    const anchorState = (function () { try { return aiAnchorMismatchState(ev); } catch (anchorError) { return null; } })();
+    // v122: "קלוט את התעודה" בירוק הוא הבטחה שהכמויות נסגרו מול הנייר;
+    // אחרת — קליטה עם הפרש פתוח ביחידות.
     const primaryHtml = ev.valid
       ? '<button data-role="ai-apply" class="btn-tap w-full bg-emerald-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-check ml-1"></i>קלוט את התעודה</button>'
-      : ((gapExplanationHtml && !anchorState)
-        ? '<button data-role="ai-close-receipt" class="btn-tap w-full bg-emerald-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-circle-check ml-1"></i>קלוט את התעודה</button>'
-        : '<button data-role="ai-close-receipt" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-file-circle-exclamation ml-1"></i>קלוט ותטפל בהפרש אחר כך</button>');
+      : '<button data-role="ai-close-receipt" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 font-black text-lg"><i class="fa-solid fa-file-circle-exclamation ml-1"></i>קלוט ותטפל בהפרש אחר כך</button>';
     const actionsHtml = '<div class="mt-4 space-y-2">' + primaryHtml +
       '<button data-role="ai-edit-images" class="btn-tap w-full bg-white border border-slate-200 text-slate-500 rounded-2xl py-3 font-black text-sm"><i class="fa-solid fa-camera-rotate ml-1"></i>לא נכון — צלם שוב</button></div>';
     // v43: שתי שכבות. למעלה — משפט אחד גדול וכפתור אחד גדול, וזה כל מה שרוב
-    // המשתמשים צריכים לראות. כל הפירוט (מאזן, מחירים, הערות, אבחון) יורד אל
+    // המשתמשים צריכים לראות. כל הפירוט (מאזן, הערות, אבחון) יורד אל
     // מאחורי "רוצה הסבר מה קרה בתעודה?" ונפתח רק בלחיצה.
-    // v47: המשפט נבנה מההקשר המשותף — גם לשורה במחירון מלא, גם למבצע שירד
-    // כבר בתעודה, וגם לשניהם יחד.
-    const explainedLine = (function () {
-      try { return aiGapExplainedLine(aiPriceGapContext(ev)); }
-      catch (lineError) { return ''; }
-    })();
-    const simpleHtml = aiSafeBlock('סיכום', () => aiSimpleSummaryHtml(ev, {
-      allGood: allGood && !anchorState,
-      gapExplained: !!gapExplanationHtml,
-      explainedLine,
-      anchor: anchorState
-    }));
-    const anchorHtml = aiSafeBlock('סכום התעודה שהוקלד', () => aiAnchorMismatchHtml(anchorState));
+    const simpleHtml = aiSafeBlock('סיכום', () => aiSimpleSummaryHtml(ev, { allGood }));
     const detailsToggle = '<button data-role="ai-toggle-details" class="btn-tap w-full mt-3 bg-white border-2 border-slate-200 text-slate-600 rounded-2xl py-3 font-black text-base flex items-center justify-center gap-2">' +
       '<i class="fa-solid fa-circle-question"></i>' + (aiDetailsOpen ? 'סגור את ההסבר' : 'רוצה הסבר מה קרה בתעודה? לחץ כאן') + '</button>';
     const detailsBody = aiDetailsOpen
       ? '<div class="space-y-2 mt-3 pt-3 border-t-2 border-slate-100">' + statusHtml + findingsHtml + autoNote + '</div>'
       : '';
-    return '<div class="bg-white rounded-2xl border-2 ' + (anchorState ? 'border-rose-300' : (ev.valid ? 'border-violet-300' : 'border-amber-300')) + ' p-4 shadow-sm mb-24">' +
-      simpleHtml + anchorHtml + actionsHtml + detailsToggle + detailsBody + '</div>';
+    return '<div class="bg-white rounded-2xl border-2 ' + (ev.valid ? 'border-violet-300' : 'border-amber-300') + ' p-4 shadow-sm mb-24">' +
+      simpleHtml + actionsHtml + detailsToggle + detailsBody + '</div>';
   }
   const docCards = aiScanDocuments.map((doc, i) => {
     // v51: תעודת זיכוי מסומנת בכרטיס עצמו — המצלם צריך לדעת איזה נייר הוא
     // מצמיד לאיזו משבצת, והסכום הצפוי בה הוא המגודל המודפס (חיובי).
     const docCredit = doc.kind === 'credit';
-    const noteText = (docCredit ? 'זיכוי · ' : '') + 'סכום צפוי: ₪' + fmtMoney(doc.amount || 0) + (doc.units != null ? ' · ' + doc.units + ' יחידות' : '');
+    const noteText = (docCredit ? 'זיכוי · ' : '') + (doc.units != null ? doc.units + ' יחידות' : 'יחידות: ייקראו מהנייר') + (doc.lines != null ? ' · ' + doc.lines + ' שורות' : '') + (Number(doc.amount) > 0 ? ' · ₪' + fmtMoney(doc.amount) + ' (לזיהוי)' : '');
     const pages = doc.pages.map((p, pi) => '<div class="relative w-28 h-28 shrink-0 rounded-lg overflow-hidden border-2 ' + (p.orientationConfirmed ? 'border-emerald-400' : 'border-amber-400') + ' bg-white"><button data-role="ai-review-page" data-doc="' + i + '" data-page="' + pi + '" class="absolute inset-0 w-full h-full"><img src="' + p.dataUrl + '" class="w-full h-full object-contain" alt="פתח בדיקת כיוון"></button><button data-role="ai-remove-page" data-doc="' + i + '" data-page="' + pi + '" aria-label="מחק עמוד" class="absolute top-1 left-1 w-7 h-7 rounded-full bg-rose-600 text-white text-xs shadow z-10"><i class="fa-solid fa-xmark"></i></button><button data-role="ai-review-page" data-doc="' + i + '" data-page="' + pi + '" aria-label="פתח תמונה גדולה וסובב" class="absolute top-1 right-1 w-7 h-7 rounded-full bg-blue-600 text-white text-xs shadow z-10"><i class="fa-solid fa-expand"></i></button><div class="absolute bottom-0 inset-x-0 ' + (p.orientationConfirmed ? 'bg-emerald-700/90' : 'bg-amber-600/95') + ' text-white text-[9px] font-black text-center py-1 pointer-events-none">' + (p.orientationConfirmed ? '✓ הכיוון אושר' : 'דרוש אישור') + ' · עמוד ' + (pi + 1) + ((Number(p.rotation) || 0) ? ' · ' + (Number(p.rotation) || 0) + '°' : '') + (p.cropped ? ' · נחתך' : '') + '</div></div>').join('');
     return '<div class="rounded-2xl border-2 ' + (docCredit ? 'border-rose-200' : 'border-slate-200') + ' p-3 mb-3"><div class="flex items-center justify-between gap-2"><div><div class="font-black ' + (docCredit ? 'text-rose-700' : 'text-slate-800') + '">' + (docCredit ? '<i class="fa-solid fa-rotate-left text-xs"></i> תעודת זיכוי ' : 'תעודה ') + (i + 1) + '</div><div class="text-[11px] font-bold ' + (docCredit ? 'text-rose-500' : 'text-slate-500') + '">' + noteText + '</div></div><span class="text-xs font-black ' + (doc.pages.length ? 'text-emerald-700' : 'text-rose-600') + '">' + doc.pages.length + ' עמודים</span></div>' +
       (pages ? '<div class="flex gap-2 overflow-x-auto py-3">' + pages + '</div>' : '<div class="rounded-xl bg-amber-50 border border-amber-200 p-2 text-xs font-bold text-amber-800 my-3">צלם את כל דפי התעודה. צילום אחד ברור לכל דף.</div>') +
@@ -15686,7 +14647,7 @@ function aiInvoiceCaptureHtml() {
   return '<div class="bg-white rounded-2xl border-2 border-violet-200 p-4 shadow-sm mb-24"><div class="font-black text-xl text-slate-800"><i class="fa-solid fa-camera-retro text-violet-600"></i> סריקה חכמה של התעודות</div><div class="rounded-xl bg-emerald-50 border-2 border-emerald-300 p-2.5 text-[12px] font-black text-emerald-800 mt-2"><i class="fa-solid fa-circle-check"></i> הסריקה פעילה ומחוברת לשירות הפענוח.</div>' + (detectiveStrictNote ? '<div class="rounded-xl bg-rose-50 border-2 border-rose-300 p-2.5 text-[12px] font-black text-rose-800 mt-2"><i class="fa-solid fa-user-secret"></i> הבלש ויתר בקול: ' + htmlEscape(detectiveStrictNote) + '</div>' : '') + '<div class="text-xs text-slate-500 font-bold leading-relaxed mt-1 mb-2">הבלש הפשוט לא פתר את הפער. צלם פעם אחת כל עמוד מכל תעודה. התמונות נשלחות לפענוח בלבד ואינן נשמרות באפליקציה.</div><div class="rounded-xl bg-blue-50 border border-blue-200 p-2 text-[11px] font-black text-blue-800 mb-3"><i class="fa-solid fa-expand"></i> כל צילום נפתח בגודל גדול. סובב עד שהכותרת למעלה והכתב ישר, ואז אשר. ללא אישור התמונה לא תישלח.</div>' +
     (aiScanError ? '<div class="rounded-xl bg-rose-50 border border-rose-300 p-2.5 text-xs font-black text-rose-700 mb-3">' + htmlEscape(aiScanError) + '</div>' : '') + keptNote + docCards +
     '<button data-role="ai-run" ' + (ready ? '' : 'disabled') + ' class="btn-tap w-full rounded-xl py-3.5 font-black ' + (ready ? 'bg-violet-600 text-white' : 'bg-slate-200 text-slate-400') + '"><i class="fa-solid fa-wand-magic-sparkles"></i> פענח את כל התעודות ב-AI</button>' +
-    '<div class="text-[10px] text-slate-400 font-bold text-center mt-2">בדרך כלל מתבצעת קריאת AI אחת. אם הקריאה חסרה או אינה נסגרת מול הסכום והיחידות, המערכת עשויה לנסות עד שתי זוויות נוספות.</div><button data-role="rc-goto-manual" class="btn-tap w-full bg-white border border-slate-200 text-slate-500 rounded-xl py-2 font-bold text-xs mt-2">או: בדיקה ידנית בלי סריקה</button><button data-role="rc-goto-manual" class="btn-tap w-full text-slate-400 py-2 font-black text-xs underline">המשך בלי AI — בדיקה ידנית</button></div>';
+    '<div class="text-[10px] text-slate-400 font-bold text-center mt-2">בדרך כלל מתבצעת קריאת AI אחת. אם הקריאה חסרה או אינה נסגרת מול "סה"כ כללי" ו"סה"כ שורות", המערכת עשויה לנסות עד שתי זוויות נוספות.</div><button data-role="rc-goto-manual" class="btn-tap w-full bg-white border border-slate-200 text-slate-500 rounded-xl py-2 font-bold text-xs mt-2">או: בדיקה ידנית בלי סריקה</button><button data-role="rc-goto-manual" class="btn-tap w-full text-slate-400 py-2 font-black text-xs underline">המשך בלי AI — בדיקה ידנית</button></div>';
 }
 function aiAutomaticNamePriceMappingsAudit() {
   const documents = aiScanResponse && aiScanResponse.scan && Array.isArray(aiScanResponse.scan.documents)
@@ -15713,17 +14674,9 @@ function aiAutomaticNamePriceMappingsAudit() {
         catalogHintId: String(row.catalogHintId == null ? '' : row.catalogHintId).slice(0, 160) || null,
         printedDescription: String(row.description || '').slice(0, 160),
         quantity: proof.quantity != null ? proof.quantity : (row.quantity == null ? null : Number(row.quantity)),
-        basePrice: proof.basePrice != null ? proof.basePrice : (Number(resolution.product.price) || null),
-        unitPriceExVat: proof.unitPrice != null ? proof.unitPrice : (row.unitPriceExVat == null ? null : Number(row.unitPriceExVat)),
-        grossLineTotalExVat: proof.grossLineTotal != null ? proof.grossLineTotal : (row.grossLineTotalExVat == null ? null : Number(row.grossLineTotalExVat)),
-        lineDiscountExVat: proof.lineDiscount != null ? proof.lineDiscount : (row.lineDiscountExVat == null ? null : Number(row.lineDiscountExVat)),
-        lineTotalExVat: proof.lineTotal != null ? proof.lineTotal : (row.lineTotalExVat == null ? null : Number(row.lineTotalExVat)),
-        expectedGrossExVat: proof.expectedGross != null ? proof.expectedGross : null,
-        grossDeltaCents: proof.grossDeltaCents != null ? proof.grossDeltaCents : null,
-        toleranceCents: proof.toleranceCents != null ? proof.toleranceCents : null,
+        printedUnitPrice: row.unitPriceExVat == null ? null : Number(row.unitPriceExVat), // v122: עדות זהות בלבד
         proofModel: proof.proofModel,
         knownBarcodeDigits: proof.knownDigits != null ? proof.knownDigits : null,
-        arithmeticVerified: partialBarcodeMethod ? aiRowHasArithmeticProof(row, Number(row.quantity)) : proof.arithmeticVerified === true,
         rowConfidence: proof.rowConfidence != null ? proof.rowConfidence : Number(row.confidence)
       });
     });
@@ -15743,7 +14696,6 @@ function aiConfirmedMappingsAudit() {
       const sourceMethod = String(row.barcodeUserConfirmedFromMethod || '');
       const qtyRaw = row.quantity == null || row.quantity === '' ? NaN : Number(row.quantity);
       const qty = isFinite(qtyRaw) ? qtyRaw : null;
-      const lineTotal = aiLineTotal(row, qty);
       const multipleNameChoice = sourceMethod === 'suggested_name_multiple';
       const currentCandidateIds = multipleNameChoice
         ? aiLocalSuggestedNameCandidates(row).map(candidate => String(candidate.product.id))
@@ -15759,13 +14711,10 @@ function aiConfirmedMappingsAudit() {
         : null;
       const choiceCrossCheck = rawCrossCheck ? {
         quantity: rawCrossCheck.quantity != null && Number.isFinite(Number(rawCrossCheck.quantity)) ? Number(rawCrossCheck.quantity) : null,
-        lineTotalExVat: rawCrossCheck.lineTotalExVat != null && Number.isFinite(Number(rawCrossCheck.lineTotalExVat)) ? r2(Number(rawCrossCheck.lineTotalExVat)) : null,
-        arithmeticVerified: rawCrossCheck.arithmeticVerified === true,
         paperQtyIfChosen: rawCrossCheck.paperQtyIfChosen != null && Number.isFinite(Number(rawCrossCheck.paperQtyIfChosen)) ? Number(rawCrossCheck.paperQtyIfChosen) : null,
         receivedQty: rawCrossCheck.receivedQty != null && Number.isFinite(Number(rawCrossCheck.receivedQty)) ? Number(rawCrossCheck.receivedQty) : null,
         quantityMatchesReceived: rawCrossCheck.quantityMatchesReceived === true,
-        totalVerifiedAtChoice: rawCrossCheck.totalVerifiedAtChoice === true,
-        unitsVerifiedAtChoice: rawCrossCheck.unitsVerifiedAtChoice === true
+        anchorsVerifiedAtChoice: rawCrossCheck.anchorsVerifiedAtChoice === true
       } : null;
       output.push({
         documentIndex: Number.isInteger(Number(doc.noteIndex)) ? Number(doc.noteIndex) : documentIndex,
@@ -15785,7 +14734,6 @@ function aiConfirmedMappingsAudit() {
         choiceCrossCheck,
         printedDescription: String(row.description || '').slice(0, 160),
         quantity: qty,
-        lineTotalExVat: lineTotal == null ? null : r2(lineTotal),
         confirmedAt: Number(row.userConfirmedAt) || null
       });
     });
@@ -15794,75 +14742,30 @@ function aiConfirmedMappingsAudit() {
 }
 function aiApplyInvoiceResult() {
   const ev = aiScanEvaluation; if (!ev || !ev.valid || !reconcileData) return;
-  // ההחלה היא עסקה מקומית: אם אפילו אגורה או יחידה אינן נסגרות, מחזירים את
-  // המצב הקודם ולא משאירים חצי פענוח בתוך התעודה.
-  const before = {
-    data: cloneSafe(reconcileData),
-    discount: reconcileSupplierDiscount,
-    supplierPromoItems: cloneSafe(reconcileSupplierPromoItems),
-    promoMismatchItems: cloneSafe(reconcilePromoMismatchItems),
-    creditClaim: reconcileSupplierCreditClaim ? cloneSafe(reconcileSupplierCreditClaim) : null,
-    audit: reconcileAiAudit ? cloneSafe(reconcileAiAudit) : null
-  };
-  // v166: שורות פיקדון קודמות מוסרות — ייבנו מחדש מהפענוח הנוכחי.
+  // v122: ההחלה כותבת לכל שורה את הכמות שחויבה בנייר (noteQty) ומסמנת אותה
+  // כנבדקת — ותו לא. אין מחירים, אין הנחת ספק, אין תביעת זיכוי: הכסף מחושב
+  // במרכזת. ההחלה היא עסקה מקומית: אם היחידות אינן נסגרות מול העוגן, מחזירים
+  // את המצב הקודם ולא משאירים חצי פענוח בתוך התעודה.
+  const before = { data: cloneSafe(reconcileData), audit: reconcileAiAudit ? cloneSafe(reconcileAiAudit) : null };
+  // v166: שורות פיקדון קודמות מוסרות — הפיקדון אינו חלק מהשוואת הכמויות.
   reconcileData = (reconcileData || []).filter(l => !l.isDeposit && String(l.productId || '').indexOf('deposit-') !== 0);
   reconcileData.forEach(l => { l.noteQty = 0; l.aiPaperPriceOnly = false; });
   reconcilePaperEntered = true; // v178: מכאן noteQty באמת מגיע מהנייר
   ev.aggregates.forEach(a => {
     let line = (reconcileData || []).find(l => l.productId === a.product.id);
-    const day = activeReceiptDate();
-    const base = r2(Number(a.product.price) || 0), pr = promoForProduct(a.product.id, day), on = promoTriggered(pr, day), pct = on ? promoPctOf(pr, base) : 0;
-    // v48: בתנובה השורה מחויבת במחיר מלא וסד ההנחה יורד פעם אחת בתחתית
-    // המסמך. כתיבת מחיר-הנייר המלא לשורות שברה את זהות העוגן (סכום השורות
-    // חייב להיסגר על הסכום שהוקלד, שכולל את המבצעים — הזהות שהוכחה בשטח
-    // בקליטה הידנית) ונעלה כל סגירה של תעודה עם מבצעים בדיוק בגובה ההנחה.
-    // התיקון: כשהנייר מאשר את מחיר המחירון והמבצע אומת בסד ההנחה, השורה
-    // נכתבת במחיר האפליקציה (כולל מבצע) — בדיוק כמו קליטה ידנית. מחיר
-    // שונה באמת (ממצא מחיר/מבצע-חסר) נשאר מחיר-הנייר, והפער בתביעת הזיכוי.
-    const hasPriceIssue = (Array.isArray(ev.findings) ? ev.findings : []).some(f => f && (f.type === 'price' || f.type === 'promo_missing') && f.productId === a.product.id);
-    const paperMatchesList = a.paperUnitPrice > 0 && Math.abs(a.paperUnitPrice - base) <= 0.02;
-    const lineUnitPrice = (!hasPriceIssue && paperMatchesList && Number(a.expectedUnitPrice) > 0) ? Number(a.expectedUnitPrice) : a.paperUnitPrice;
-    if (!line) { line = { productId: a.product.id, name: a.product.name, barcode: a.product.barcode || '', received: 0, noteQty: 0, price: lineUnitPrice, basePrice: base, promoPct: pct, promoOn: on, checked: true }; reconcileData.unshift(line); }
-    line.noteQty = a.qty; line.price = lineUnitPrice; line.basePrice = base; line.promoPct = pct; line.promoOn = on; line.checked = true; line.aiPaperPriceOnly = true;
-    // v89: מסלול ההחלה המלאה מתעד "המבצע ירד בתעודה" בדיוק כמו מסלול
-    // הקליטה-עם-הפרש. בלעדיו תעודה תקינה לגמרי נשמרה בלי התיעוד, והתחזית
-    // למרכזת המשיכה לצפות לקיזוז על שורה שכבר קיבלה את המבצע. הקריאה מהנייר
-    // גוברת על סימון מוקדם, ולכן סימון שאינו נתמך בנייר מוסר.
-    // תוקף המבצע נקרא מאותו מקור שממנו קוראת בדיקת המחירים — במסלול הצילום
-    // activeReceiptDate() נשאר ריק, ולפי היום השגוי המבצע לא היה נמצא כלל.
-    const lineForm = bermanAggregateForm(a);
-    if (lineForm === BERMAN_FORM_PROMO_ON_PAPER && lineUnitPrice > 0 && base > lineUnitPrice + 0.005) {
-      line.promoOnPaper = promoOnPaperStamp(base, lineUnitPrice, promoTitle(aiActiveFixedPromoFor(a.product.id, priceAuditPromoDay())));
-    } else if (lineForm) delete line.promoOnPaper;
+    if (!line) { line = { productId: a.product.id, name: a.product.name, barcode: a.product.barcode || '', received: 0, noteQty: 0, price: r2(Number(a.product.price) || 0), basePrice: r2(Number(a.product.price) || 0), promoPct: 0, promoOn: false, checked: true }; reconcileData.unshift(line); }
+    line.noteQty = a.qty; line.checked = true;
+    delete line.promoOnPaper;
   });
-  // v166: הפיקדון נכנס כשורה נפרדת בתעודה — כמות מאושרת מראש (אין מה
-  // לסרוק פיזית), מחיר יחידה לא מעוגל כדי שסכום השורה ייסגר באגורה
-  // (lineTotalFromUnit מעגל את המכפלה, לא את המחיר).
-  (ev.depositRows || []).forEach((dep, depositIndex) => {
-    const depositUnit = dep.qty > 0 ? dep.cents / 100 / dep.qty : dep.cents / 100;
-    const depositLabel = dep.productName ? ('פיקדון · ' + dep.productName) : (/^[\s*]*פ.?קדון[\s*]*$/.test(dep.description) ? 'פיקדון' : ('פיקדון · ' + dep.description));
-    reconcileData.push({ productId: 'deposit-' + dep.document + '-' + depositIndex + '-' + Date.now(), name: depositLabel + (dep.document && aiScanDocuments.length > 1 ? ' (תעודה ' + dep.document + ')' : ''), barcode: '', received: dep.qty, noteQty: dep.qty, price: depositUnit, basePrice: depositUnit, promoPct: 0, promoOn: false, checked: true, isDeposit: true, aiPaperPriceOnly: true });
-  });
-  reconcileSupplierDiscount = r2(ev.supplierDiscount || 0);
-  reconcileSupplierPromoItems = [];
-  reconcilePromoMismatchItems = ev.findings.filter(f => f.type === 'promo_missing').map(f => ({ productId: f.productId, name: f.name, qty: f.qty, expectedPrice: f.expectedPrice, chargedPrice: f.paperPrice, expectedDiscount: Math.max(0, r2(f.amount || 0)) }));
-  const claims = ev.findings.filter(f => (f.type === 'promo_missing' || f.type === 'price') && Number(f.amount) > 0.02);
-  reconcileSupplierCreditClaim = claims.length ? { status: 'open', source: 'ai_invoice_scan', amount: r2(claims.reduce((sum, f) => sum + Number(f.amount || 0), 0)), items: claims.map(f => ({ productId: f.productId, name: f.name, qty: f.qty, expectedUnitPrice: f.expectedPrice, chargedUnitPrice: f.paperPrice, amount: r2(f.amount || 0), reason: f.type })) } : null;
-  const safeFindings = ev.findings.map(f => ({ type: f.type, productId: f.productId || null, name: f.name || '', qty: f.qty != null ? f.qty : null, amount: f.amount != null ? f.amount : null, expectedPrice: f.expectedPrice != null ? f.expectedPrice : null, paperPrice: f.paperPrice != null ? f.paperPrice : null, text: f.text || '' }));
+  const safeFindings = ev.findings.map(f => ({ type: f.type, productId: f.productId || null, name: f.name || '', qty: f.qty != null ? f.qty : null, text: f.text || '' }));
   const confirmedMappings = aiConfirmedMappingsAudit();
   const automaticMappings = aiAutomaticNamePriceMappingsAudit();
-  reconcileAiAudit = { version: 6, scannedAt: Date.now(), model: aiScanResponse && aiScanResponse.model || 'unknown', requestId: aiScanResponse && aiScanResponse.requestId || null, attempts: aiScanAttemptCount || 1, autoRotation: aiScanAutoRotationNote || '', totalVerified: !!ev.totalVerified, unitsVerified: !!ev.unitsVerified, documents: ev.docSummaries, confirmedMappings, automaticMappings, clientAutoResolutions: (Array.isArray(ev.autoResolutions) ? ev.autoResolutions : []).slice(0, 200), perDocument: (aiScanResponse && aiScanResponse.perDocument) || null, findings: safeFindings, hasDiscrepancy: safeFindings.some(f => ['shortage', 'surplus', 'price', 'promo_missing'].includes(f.type)) };
-  const exactUnits = reconcileUnitsBalanced();
-  const exactMoney = reconcileMoneyBalanced();
-  if (!exactMoney || !exactUnits) {
-    const failGap = Math.abs(reconcileGap()); // הפער כפי שנמדד לפני ההחזרה לאחור
+  reconcileAiAudit = { version: 7, scannedAt: Date.now(), model: aiScanResponse && aiScanResponse.model || 'unknown', requestId: aiScanResponse && aiScanResponse.requestId || null, attempts: aiScanAttemptCount || 1, autoRotation: aiScanAutoRotationNote || '', anchorsVerified: !!ev.anchorsVerified, documents: ev.docSummaries, confirmedMappings, automaticMappings, clientAutoResolutions: (Array.isArray(ev.autoResolutions) ? ev.autoResolutions : []).slice(0, 200), perDocument: (aiScanResponse && aiScanResponse.perDocument) || null, findings: safeFindings, hasDiscrepancy: safeFindings.some(f => ['shortage', 'surplus'].includes(f.type)) };
+  if (!reconcileUnitsBalanced()) {
+    const failGap = reconcileUnitsGap(); // הפער כפי שנמדד לפני ההחזרה לאחור
     reconcileData = before.data;
-    reconcileSupplierDiscount = before.discount;
-    reconcileSupplierPromoItems = before.supplierPromoItems;
-    reconcilePromoMismatchItems = before.promoMismatchItems;
-    reconcileSupplierCreditClaim = before.creditClaim;
     reconcileAiAudit = before.audit;
-    aiScanError = 'ההחלה לא נסגרה מול העוגן שהוקלד: פער ₪' + fmtMoney(failGap) + ' בין סכום שורות הנייר לסכום שהוקלד. שום נתון לא שונה.';
+    aiScanError = 'ההחלה לא נסגרה מול העוגן שהוקלד: פער של ' + failGap + ' יח׳ בין כמויות הנייר ל"סה"כ כללי". שום נתון לא שונה.';
     aiScanEvaluation.valid = false; renderReconcile(); return;
   }
   if (confirmedMappings.length) {
@@ -15874,10 +14777,9 @@ function aiApplyInvoiceResult() {
     });
   }
   rcStep = 'balanced'; buzz(24);
-  // v136: המשתמש כבר אישר את הבעיות בכרטיס הסריקה ("אלה אכן הבעיות" ואז
-  // "סגור תעודה עם החוסרים"). הבדיקות הטרנזקציוניות למעלה עברו — עוברים
-  // ישר לסיכום הסגירה הרגיל, בלי מסך ביניים. skipChecked מוצדק: כל שורה
-  // כבר נבדקה מול הנייר בידי הסריקה ואושרה בידי המשתמש.
+  // v136: המשתמש כבר אישר את הבעיות בכרטיס הסריקה. הבדיקה הטרנזקציונית
+  // למעלה עברה — עוברים ישר לסיכום הסגירה הרגיל, בלי מסך ביניים. skipChecked
+  // מוצדק: כל שורה כבר נבדקה מול הנייר בידי הסריקה ואושרה בידי המשתמש.
   saveReconciledReceipt({ skipChecked: true });
 }
 // ===== בדיקת תעודה — זרימה מודרכת (שלב אחד גלוי בכל רגע) =====
@@ -22741,8 +21643,7 @@ app.addEventListener('click', (e) => {
   if (role === 'ai-toggle-details') { aiDetailsOpen = !aiDetailsOpen; renderReconcile(); return; } // v43
   if (role === 'ai-apply') { aiApplyInvoiceResult(); return; }
   // v45: סגירה ממסך הסריקה — קודם מתעדים מה בדיוק חסר, ואז שומרים.
-  if (role === 'ai-fix-note-total') { aiApplyReadNoteTotals(); return; }
-  if (role === 'ai-close-receipt') { aiRecordFindingsAsPaperQty(aiScanEvaluation); aiRecordPromoOnPaperPrices(aiScanEvaluation); saveReconciledReceipt(); return; }
+  if (role === 'ai-close-receipt') { aiRecordFindingsAsPaperQty(aiScanEvaluation); saveReconciledReceipt(); return; }
   if (role === 'rc-history-filter') { receiptHistoryFilter = ['open', 'credit', 'done', 'all'].includes(t.dataset.filter) ? t.dataset.filter : 'all'; renderReceiptsHistory(); return; }
   if (role === 'clear-order') showConfirm('ניקוי הזמנה', 'לנקות את כל הכמויות שהוזנו?', 'נקה', clearOrder);
   else if (role === 'go-contacts') setView('contacts');

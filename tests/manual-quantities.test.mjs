@@ -193,8 +193,10 @@ test(supplier+': a clean manual confirmation closes without asking the same ques
  assert.equal(r.run('commitReceiptQuantityReview()'),true);
  assert.equal(r.run('!!pendingReceipt'),true);
  // Whatever the quantities say, none of these is ever skipped.
- assert.equal(r.run("aiScanAllGood({valid:true,findings:[{type:'price'}],residuals:[],barcodeSuggestions:[]})"),false);
- assert.equal(r.run("aiScanAllGood({valid:true,findings:[{type:'promo_missing'}],residuals:[],barcodeSuggestions:[]})"),false);
+ assert.equal(r.run("aiScanAllGood({valid:true,findings:[{type:'shortage'}],residuals:[],barcodeSuggestions:[]})"),false);
+ assert.equal(r.run("aiScanAllGood({valid:true,findings:[{type:'surplus'}],residuals:[],barcodeSuggestions:[]})"),false);
+ // v122: money findings are not the receiving's business — only quantities decide.
+ assert.equal(r.run("aiScanAllGood({valid:true,findings:[{type:'price'}],residuals:[],barcodeSuggestions:[]})"),true);
  assert.equal(r.run("aiScanAllGood({valid:true,findings:[],residuals:[{}],barcodeSuggestions:[]})"),false);
  assert.equal(r.run("aiScanAllGood({valid:true,findings:[],residuals:[],barcodeSuggestions:[{unknownProduct:true}]})"),false);
  assert.equal(r.run("aiScanAllGood({valid:false,findings:[],residuals:[],barcodeSuggestions:[]})"),false);
