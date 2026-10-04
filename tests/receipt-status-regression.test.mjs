@@ -8,7 +8,8 @@
 //   • תעודת 4.10 נשארת פתוחה: לחמניות 10 בשקית נספרו 10 מול 8 בנייר (עודף 2),
 //     זוג לחמניות אצבע 9 מול 10 (חוסר 1).
 // הרצה:            node --test tests/receipt-status-regression.test.mjs
-// מול גיבוי אמיתי: node --test tests/receipt-status-regression.test.mjs -- --backup ~/backup.json
+// מול גיבוי אמיתי: node tests/receipt-status-regression.test.mjs --backup ~/backup.json
+// (ישירות ולא דרך node --test: הוא אינו מעביר ארגומנטים לקובץ הבדיקה)
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';

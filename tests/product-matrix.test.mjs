@@ -199,6 +199,61 @@ ok('סך החוסרים שטרם זוכו', mq.openUnits === 5 && Math.abs(mq.to
 ok('כולל מע״מ 18% על הצפוי', Math.abs(mq.totalInc - mq.total * 1.18) < 0.02);
 delete P.b101.priceHistory;
 
+head('[6ד] v123 — זיכוי חוסר ביחידות, וקישור זיכוי שלא נספר פעמיים');
+{
+  // (א) תעודה עם זיכוי ביחידות למוצר אחד וזיכוי כספי ישן למוצר אחר — שניהם נספרים
+  const PITA = byCode('401');
+  const both = rangeProductMatrixData({ recs: [{ docDate: '2026-09-06', items: [
+      line(PITA, 0, 10.96, { noteQty: 2 }), line(P.b101, 8, 5.7408, { noteQty: 10 })],
+    shortCreditUnits: [{ id: 'u1', productId: P.b101.id, qty: 2, source: 'credit-note' }],
+    shortCreditNotes: [{ amount: 21.88 }] }], rets: [] });
+  const bPita = both.list.find(r => r.pid === PITA.id), bLoaf = both.list.find(r => r.pid === P.b101.id);
+  ok('יחידות לאחיד: זוכו 2', bLoaf.credited === 2 && bLoaf.openUnits === 0);
+  ok('והזיכוי הכספי הישן על מה שנשאר — הפיתות: זוכו 2', bPita.credited === 2 && bPita.openUnits === 0);
+  // (ב) קישור 5.9 → 6.9: ההקצאה על תעודת החזרות והתאום על תעודת הקליטה — 401 זוכה 2, לא 4
+  const twinId = 'cs1|returns_84f367b7|receipt_6771fe19|x';
+  const linked = rangeProductMatrixData({
+    recs: [{ docDate: '2026-09-06', items: [line(PITA, 0, 10.96, { noteQty: 2 })],
+      shortCreditUnits: [{ id: twinId, productId: PITA.id, name: PITA.name, qty: 2, source: 'returns-note', fromReturnsId: 'returns_84f367b7' }] }],
+    rets: [{ docDate: '2026-09-05', credited: true, items: [line(P.b101, 6, 5.7408)],
+      creditAllocations: [{ id: twinId, receiptId: 'receipt_6771fe19', items: [{ productId: PITA.id, name: PITA.name, qty: 2 }] }] }] });
+  const lPita = linked.list.find(r => r.pid === PITA.id);
+  ok('401 זוכה פעמיים בדיוק — לא 4', lPita.credited === 2 && lPita.sent === 0 && lPita.openUnits === 0);
+  // אותו קישור ברישום הכספי הישן (כמו בגיבוי) — אותה תוצאה
+  const legacy = rangeProductMatrixData({
+    recs: [{ docDate: '2026-09-06', items: [line(PITA, 0, 10.96, { noteQty: 2 })], shortCreditNotes: [{ id: twinId, amount: 21.88, source: 'returns-note', items: [{ productId: PITA.id, qty: 2 }] }] }],
+    rets: [{ docDate: '2026-09-05', credited: true, items: [line(P.b101, 6, 5.7408)], creditAllocations: [{ id: twinId, amount: 21.88, receiptId: 'r', items: [{ productId: PITA.id, qty: 2 }] }] }] });
+  ok('ברישום הכספי הישן — גם 2', legacy.list.find(r => r.pid === PITA.id).credited === 2);
+  // (ג) שורת החזרה בלי מחיר (תעודה חדשה) נותנת בדיוק את אותו כסף כמו שורה עם מחיר ישן
+  const priced = rangeProductMatrixData({ recs: [], rets: [{ docDate: '2026-09-10', credited: true, items: [line(P.b101, 3, 5.7408, { lineTotal: 17.22 })] }] });
+  const plain = rangeProductMatrixData({ recs: [], rets: [{ docDate: '2026-09-10', credited: true, schemaVersion: 2, items: [{ productId: P.b101.id, name: P.b101.name, code: '101', qty: 3 }] }] });
+  ok('שורת החזרה בלי מחיר — אותו סכום', plain.total === priced.total && plain.list[0].credited === 3);
+  // (ד) שורה עם קידומת carry_ בלי דגל אינה נספרת כנשלחה
+  const carryNoFlag = rangeProductMatrixData({ recs: [], rets: [{ docDate: '2026-09-10', credited: true,
+    items: [{ productId: 'carry_77', name: P.b101.name, barcode: P.b101.barcode, qty: 2 }] }] });
+  ok('carry_ בלי דגל: זוכה 2, נשלח 0', carryNoFlag.list[0].credited === 2 && carryNoFlag.list[0].sent === 0);
+  // (ה) קישור בין שתי תעודות חזרות: היחידה שזוכתה בנייר החדש נספרת פעם אחת, ביום שלו
+  const older = { docDate: '2026-09-08', credited: true, creditStatus: 'open', items: [line(P.b101, 2, 5.7408, { noteQty: 0 })],
+    returnCreditNotes: [{ id: 'l1', fromReturnsId: 'n', items: [{ rowIndex: 0, productId: P.b101.id, name: P.b101.name, barcode: P.b101.barcode, qty: 1 }] }] };
+  const newer = { docDate: '2026-09-12', credited: true, creditStatus: 'ok', items: [line(P.b349, 3, 9.884)],
+    creditAllocations: [{ id: 'l1', targetType: 'return', returnId: 'o', items: [{ rowIndex: 0, productId: P.b101.id, name: P.b101.name, barcode: P.b101.barcode, qty: 1 }] }] };
+  const rr = rangeProductMatrixData({ recs: [], rets: [older, newer] });
+  const r101 = rr.list.find(r => r.pid === P.b101.id);
+  ok('קישור חזרות→חזרות: 101 נשלח 2, זוכה 1 — פעם אחת', r101.sent === 2 && r101.credited === 1);
+  ok('והזיכוי בתא של יום תעודת הזיכוי', r101.days['2026-09-12'] && r101.days['2026-09-12'].r === 1 && !(r101.days['2026-09-08'] && r101.days['2026-09-08'].r));
+  ok('תעודה שטרם אומתה אינה מזכה דרך קישור', rangeProductMatrixData({ recs: [], rets: [{ ...newer, credited: false }] }).list.every(r => r.credited === 0));
+  // (ו) שורה מועברת בלי מוצר קטלוג — לפי קוד הפריט לפני ברקוד (ברקוד משותף לכמה מוצרים)
+  const shared = { id: 'shared_bc', code: '9001', name: 'מוצר א', barcode: '777', price: 4 };
+  const shared2 = { id: 'shared_bc2', code: '9002', name: 'מוצר ב', barcode: '777', price: 6 };
+  products.push(shared, shared2);
+  const byCodeRow = rangeProductMatrixData({ recs: [], rets: [{ docDate: '2026-09-10', credited: true, items: [{ productId: 'carry_5', code: '9002', name: 'מוצר ב', barcode: '777', qty: 1, carried: true }] }] });
+  ok('carry_ עם קוד 9002 נספר על 9002 ולא על הראשון עם אותו ברקוד', byCodeRow.list.length === 1 && byCodeRow.list[0].pid === 'shared_bc2');
+  products.splice(products.indexOf(shared), 1); products.splice(products.indexOf(shared2), 1);
+  // (ז) מוצר ידני בלי מחיר במאגר — מסומן "ללא מחיר" ולא נעלם בשקט
+  const manual = rangeProductMatrixData({ recs: [], rets: [{ docDate: '2026-09-10', credited: true, items: [{ productId: 'manual_1', name: 'לחמניה משקית', qty: 4, manual: true }] }] });
+  ok('שורה ידנית: זוכה 4, מסומנת ללא מחיר', manual.list[0].credited === 4 && manual.list[0].unpriced === true);
+}
+
 head('[7] תקופה ריקה אינה מפילה');
 const empty = rangeProductMatrixData({ recs: [], rets: [], netEx: 0 });
 ok('בלי ימים ובלי שורות', empty.days.length === 0 && empty.list.length === 0 && empty.total === 0 && empty.promoEx === 0);

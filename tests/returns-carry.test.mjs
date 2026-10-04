@@ -1,14 +1,15 @@
 // v78 — החזרת פריטים מתעודת חזרות פתוחה לרשימת החזרות הפתוחה.
 // המקרה: החזרנו 4 יח׳ ברמן אסלי 5 פיתות, הספק זיכה רק 1, והבטיח להשלים
-// בהחזרה הבאה. עד היום התעודה נשארה אדומה לנצח ("הספק חייב לך") ואיש לא
-// זכר לתבוע שוב את שלוש היחידות. עכשיו הן חוזרות לרשימת החזרות הפתוחה,
-// נשלחות בתעודה הבאה, והתעודה המקורית נסגרת בלי שהכסף ייספר פעמיים.
+// בהחזרה הבאה. עד היום התעודה נשארה אדומה לנצח ואיש לא זכר לתבוע שוב את
+// שלוש היחידות. עכשיו הן חוזרות לרשימת החזרות הפתוחה, נשלחות בתעודה הבאה,
+// והתעודה המקורית נסגרת בלי שהיחידות ייספרו פעמיים.
+// v123: הכל ביחידות — בלי מחיר זיכוי נעול ובלי "פער כספי בלבד".
 //
 // הבדיקות רצות על הפונקציות האמיתיות מ-index.html (ראה extract.mjs).
 //
 // הרצה:            node tests/returns-carry.test.mjs
 // מול גיבוי אמיתי: node tests/returns-carry.test.mjs --backup ~/bermanbackup.json
-// (התעודות בתרחיש נבנות כאן בכל מקרה — מהגיבוי מגיעים רק מחירי הקטלוג.)
+// (התעודות בתרחיש נבנות כאן בכל מקרה — מהגיבוי מגיע רק הקטלוג.)
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -31,14 +32,12 @@ let products = productList, returns = [], VAT = 0.18;
 const htmlEscape = v => String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[ch]));
 
 const FNS = ['r2', 'lineTotalFromUnit', 'dDisp', 'fmtMoney', 'vatRateForDoc',
-  'amountIncForDoc', 'returnTotals', 'creditAllocationList', 'creditAllocatedEx',
-  'returnsCreditForReturns', 'returnsBalance', 'returnCreditNotes', 'returnLinkedCreditEx', 'consumeReturnLinkedCredit',
+  'amountIncForDoc', 'returnTotals', 'creditAllocationList', 'returnsBalance', 'returnCreditNotes', 'consumeReturnLinkedCredit',
   'returnCarriedNotes', 'retCarryKey', 'consumeReturnCarriedNotes', 'returnsDiscrepancyInfo',
-  'returnCarriedVal', 'retCarryDocLabel', 'retCarryPlan', 'retCarrySideText',
-  'retCarryBoxHtml', 'retCarryBtnHtml', 'buildReturnRow', 'anIsCarriedLine', 'anIsDepositLine'];
+  'retCarryPlan', 'retCarrySideText', 'retCarryBoxHtml', 'retCarryBtnHtml', 'buildReturnRow', 'anIsCarriedLine', 'anIsDepositLine'];
 // eslint-disable-next-line no-eval
 const api = eval(extractSource(FNS, []) + '\n({ ' + FNS.join(', ') + ' })');
-const { r2, returnsDiscrepancyInfo, returnsBalance, returnCarriedVal, retCarryPlan, retCarrySideText,
+const { r2, returnsDiscrepancyInfo, returnsBalance, retCarryPlan, retCarrySideText,
   retCarryBoxHtml, retCarryBtnHtml, buildReturnRow, anIsCarriedLine, anIsDepositLine,
   consumeReturnCarriedNotes, returnCarriedNotes, retCarryKey } = api;
 
@@ -69,134 +68,129 @@ function baseDoc(extra) {
 }
 const shortEx = r2(pitaUnit * 3); // שלוש הפיתות שלא זוכו
 
-head('[1] הפער לפני ההחזרה — התעודה אדומה והספק חייב');
+head('[1] הפער לפני ההחזרה — התעודה אדומה, 3 יח׳ לא זוכו');
 {
   const r = baseDoc();
   returns = [r];
   const di = returnsDiscrepancyInfo(r);
   ok('התעודה פתוחה', di.open === true);
   ok('שורה אחת חסרה', di.shortItems.length === 1);
-  ok('שלוש יחידות', di.shortItems[0].n === 3);
-  ok('הברקוד נשמר לשורה — לפיו נצרך הרישום', di.shortItems[0].barcode === (PITA.barcode || 'bc-pita'));
-  ok('מחיר הזיכוי נשמר לשורה', near(di.shortItems[0].price, pitaUnit));
-  ok('ערך החוסר', near(di.shortVal, shortEx));
-  ok('אין עדיין מה שהועבר', di.carried.length === 0 && di.carriedVal === 0);
-  ok('הספק חייב את ערך החוסר', near(di.owed, shortEx));
-  ok('גם המאזן הכולל אומר את זה', near(returnsBalance().bal, shortEx));
+  ok('שלוש יחידות', di.shortItems[0].n === 3 && di.shortUnits === 3);
+  ok('הברקוד נשמר לשורה — לפיו נצרך רישום ישן', di.shortItems[0].barcode === (PITA.barcode || 'bc-pita'));
+  ok('גם המוצר עצמו — לפיו נצרך רישום חדש', di.shortItems[0].productId === PITA.id);
+  ok('בלי מחיר ובלי "הספק חייב"', !('price' in di.shortItems[0]) && !('owed' in di) && !('shortVal' in di));
+  ok('אין עדיין מה שהועבר', di.carried.length === 0);
+  const bal = returnsBalance();
+  ok('המאזן הכולל: 3 יח׳ בתעודה אחת', bal.shortUnits === 3 && bal.openDocs === 1 && bal.overUnits === 0);
 }
 
-head('[2] התוכנית — בדיוק אותן שורות, במחיר הזיכוי המקורי');
+head('[2] התוכנית — בדיוק אותם מוצרים וכמויות');
 {
   const r = baseDoc();
   returns = [r];
   const plan = retCarryPlan(r);
   ok('יש תוכנית', !!plan);
   ok('שורה אחת', plan.items.length === 1);
-  ok('שלוש יחידות פיתה', plan.items[0].qty === 3);
-  ok('המחיר הוא מחיר הזיכוי מהתעודה, לא מחיר היום', near(plan.items[0].price, pitaUnit));
-  ok('לא שורת סכום', plan.items[0].amountOnly === false);
-  ok('שווי התוכנית', near(plan.val, shortEx));
+  ok('שלוש יחידות פיתה', plan.items[0].qty === 3 && plan.units === 3);
+  ok('עם המוצר', plan.items[0].productId === PITA.id && plan.items[0].name === PITA.name);
+  ok('בלי מחיר', !('price' in plan.items[0]) && !('val' in plan) && !('amountOnly' in plan.items[0]));
   ok('הטקסט לאישור מזכיר כמות ושם', retCarrySideText(plan.items).indexOf('3 × ') === 0);
 }
 
-head('[3] אין מה להחזיר — תעודה שממתינה לאימות, ותעודה שנסגרה בדיוק');
+head('[3] אין מה להחזיר — תעודה שממתינה לאימות, ותעודה שנסגרה');
 {
   const pending = baseDoc({ credited: false, creditStatus: null, creditNoteTotal: null });
   ok('תעודה שטרם אומתה — אין תוכנית', retCarryPlan(pending) === null);
   const exact = baseDoc();
   exact.items = exact.items.map(l => { const c = { ...l }; delete c.noteQty; return c; });
   exact.creditStatus = 'ok';
-  exact.creditNoteTotal = exact.totalExVat;
-  ok('תעודה שנסגרה בדיוק — אין תוכנית', retCarryPlan(exact) === null);
+  ok('תעודה שזוכתה במלואה — אין תוכנית', retCarryPlan(exact) === null);
   ok('וגם הכפתור לא נפלט', retCarryBtnHtml(exact) === '');
   ok('אבל על תעודה עם פער הכפתור כן נפלט', retCarryBtnHtml(baseDoc()).indexOf('data-role="ret-carry"') > -1);
+  // v123: סכום נייר שונה ממה שהוחזר כבר אינו פער
+  const moneyOnly = { ...exact, creditStatus: 'open', creditNoteTotal: r2(exact.totalExVat - 12) };
+  ok('פער כספי בלבד אינו פותח תעודה ואינו מציע החזרה', returnsDiscrepancyInfo(moneyOnly).open === false && retCarryPlan(moneyOnly) === null);
 }
 
-head('[4] אחרי ההחזרה — התעודה נסגרת, והכסף לא נספר בה פעמיים');
+head('[4] אחרי ההחזרה — התעודה נסגרת, והיחידות לא נספרות בה פעמיים');
 {
-  const r = baseDoc({ carriedNotes: [{ name: PITA.name, barcode: PITA.barcode || 'bc-pita', qty: 3, price: pitaUnit, amountOnly: false, at: Date.UTC(2026, 8, 9, 8, 0) }] });
+  const r = baseDoc({ carriedNotes: [{ productId: PITA.id, name: PITA.name, barcode: PITA.barcode || 'bc-pita', qty: 3, at: Date.UTC(2026, 8, 9, 8, 0) }] });
   returns = [r];
   const di = returnsDiscrepancyInfo(r);
-  ok('אין יותר שורת חוסר פתוחה', di.shortItems.length === 0);
+  ok('אין יותר שורת חוסר פתוחה', di.shortItems.length === 0 && di.shortUnits === 0);
   ok('הרישום נצרך', di.carried.length === 1 && di.carried[0].qty === 3);
-  ok('שווי מה שהועבר', near(di.carriedVal, shortEx));
-  ok('הספק כבר לא חייב על התעודה', near(di.owed, 0));
   ok('התעודה נסגרה — לא אדומה', di.open === false);
-  ok('גם המאזן הכולל התאפס', near(returnsBalance().bal, 0));
+  ok('גם המאזן הכולל התאפס', returnsBalance().shortUnits === 0 && returnsBalance().openDocs === 0);
   ok('אין תוכנית שנייה על אותו פער', retCarryPlan(r) === null);
   const box = retCarryBoxHtml(r);
-  ok('ההערה מספרת לאן הלכו הפריטים', box.indexOf('הוחזר לרשימת החזרות הפתוחה') > -1);
+  ok('ההערה מספרת לאן הלכו הפריטים', box.indexOf('3 יח׳ הוחזרו לרשימת החזרות הפתוחה') > -1);
+  ok('בלי ₪', box.indexOf('₪') === -1);
   ok('ואפשר לבטל מתוכה', box.indexOf('data-role="ret-carry-undo"') > -1);
+  // רישום ישן (לפני v123) בלי מזהה מוצר נצרך לפי ברקוד ושם
+  const legacy = baseDoc({ carriedNotes: [{ name: PITA.name, barcode: PITA.barcode || 'bc-pita', qty: 3, price: pitaUnit, amountOnly: false, at: 1 }] });
+  ok('רישום ישן לפי ברקוד ושם — נצרך באותה מידה', returnsDiscrepancyInfo(legacy).open === false);
 }
 
-head('[5] החזרה חלקית — מה שלא הוחזר נשאר חוב פתוח');
+head('[5] החזרה חלקית — מה שלא הוחזר נשאר פתוח');
 {
-  const r = baseDoc({ carriedNotes: [{ name: PITA.name, barcode: PITA.barcode || 'bc-pita', qty: 2, price: pitaUnit, amountOnly: false, at: 1 }] });
+  const r = baseDoc({ carriedNotes: [{ productId: PITA.id, name: PITA.name, barcode: PITA.barcode || 'bc-pita', qty: 2, at: 1 }] });
   returns = [r];
   const di = returnsDiscrepancyInfo(r);
   ok('נשארה יחידה אחת חסרה', di.shortItems.length === 1 && di.shortItems[0].n === 1);
-  ok('שתי יחידות נצרכו', near(di.carriedVal, r2(pitaUnit * 2)));
-  ok('החוב שנשאר הוא יחידה אחת', near(di.owed, pitaUnit));
+  ok('שתי יחידות נצרכו', di.carried[0].qty === 2);
   ok('התעודה עדיין פתוחה', di.open === true);
   ok('ותוכנית ההחזרה הבאה היא על היחידה שנשארה', retCarryPlan(r).items[0].qty === 1);
 }
 
 head('[6] רישום שאינו מתאים לשום שורה — לא נצרך ולא מקזז');
 {
-  const r = baseDoc({ carriedNotes: [{ name: 'מוצר אחר לגמרי', barcode: 'bc-zzz', qty: 3, price: pitaUnit, amountOnly: false, at: 1 }] });
+  const r = baseDoc({ carriedNotes: [{ productId: 'code_zzz', name: 'מוצר אחר לגמרי', barcode: 'bc-zzz', qty: 3, at: 1 }] });
   returns = [r];
   const di = returnsDiscrepancyInfo(r);
   ok('שורת החוסר נשארה שלמה', di.shortItems.length === 1 && di.shortItems[0].n === 3);
-  ok('שום דבר לא נספר כהועבר', di.carried.length === 0 && di.carriedVal === 0);
-  ok('החוב לא הצטמצם', near(di.owed, shortEx));
+  ok('שום דבר לא נספר כהועבר', di.carried.length === 0);
   ok('רישום בכמות אפס נזרק', returnCarriedNotes({ carriedNotes: [{ name: 'x', qty: 0 }] }).length === 0);
-  ok('המפתח הוא ברקוד+שם', retCarryKey({ barcode: 'b', name: 'n' }) === 'b|n');
+  ok('המפתח לרישום ישן הוא ברקוד+שם', retCarryKey({ barcode: 'b', name: 'n' }) === 'b|n');
+  // אותו שם וברקוד אבל מוצר אחר — רישום חדש לא נצרך מהשורה
+  const sameKeyOtherProduct = baseDoc({ carriedNotes: [{ productId: 'code_zzz', name: PITA.name, barcode: PITA.barcode || 'bc-pita', qty: 3, at: 1 }] });
+  ok('רישום חדש נצרך לפי המוצר, לא לפי השם', returnsDiscrepancyInfo(sameKeyOtherProduct).shortItems[0].n === 3);
 }
 
-head('[7] פער כספי בלבד — בלי שורה חסרה, שורת סכום אחת');
+head('[7] רישום ישן של "השלמת סכום" — אינו פותח ואינו נצרך');
 {
-  // כל השורות זוכו במלואן, אבל הנייר קטן ב-₪12 ממה שהוחזר
+  // לפני v123: תעודה שכל שורותיה זוכו אבל הנייר היה קטן — הועברה שורת סכום אחת
   const r = baseDoc();
   r.items = r.items.map(l => { const c = { ...l }; delete c.noteQty; return c; });
-  r.creditNoteTotal = r2(r.totalExVat - 12);
-  returns = [r];
-  const di0 = returnsDiscrepancyInfo(r);
-  ok('אין שורות חסרות', di0.shortItems.length === 0 && di0.overItems.length === 0);
-  ok('אבל יש חוב של ₪12', near(di0.owed, 12));
-  ok('והתעודה פתוחה בגללו', di0.open === true);
-  const plan = retCarryPlan(r);
-  ok('התוכנית היא שורת סכום אחת', plan.items.length === 1 && plan.items[0].amountOnly === true);
-  ok('בסכום הפער', near(plan.items[0].price, 12) && plan.items[0].qty === 1);
-  ok('בשם שמצביע על התעודה המקורית', plan.items[0].name.indexOf('השלמת זיכוי') === 0 && plan.items[0].name.indexOf('8.9.2026') > -1);
-  ok('הטקסט לאישור מציג סכום', retCarrySideText(plan.items).indexOf('₪') === 0);
-  r.carriedNotes = plan.items.map(x => ({ ...x, at: 1 }));
-  const di1 = returnsDiscrepancyInfo(r);
-  ok('אחרי ההחזרה — אין חוב', near(di1.owed, 0));
-  ok('והתעודה נסגרה', di1.open === false);
-  ok('שווי ההחזרה ₪12', near(di1.carriedVal, 12));
+  r.carriedNotes = [{ name: 'השלמת זיכוי · חזרות 8.9.2026', barcode: '', qty: 1, price: 12, amountOnly: true, at: 1 }];
+  const di = returnsDiscrepancyInfo(r);
+  ok('התעודה סגורה', di.open === false && di.shortItems.length === 0);
+  ok('הרישום מוצג בכרטיס', di.carried.length === 1);
+  const box = retCarryBoxHtml(r);
+  ok('כהערה ניטרלית, בלי ₪', box.indexOf('השלמת זיכוי (רישום ישן)') > -1 && box.indexOf('₪') === -1);
+  // גם כשיש חוסר אמיתי — רישום הסכום אינו נצרך ממנו
+  const both = baseDoc({ carriedNotes: [{ name: 'השלמת זיכוי', barcode: '', qty: 1, price: 12, amountOnly: true, at: 1 }] });
+  ok('ואינו מכסה חוסר ביחידות', returnsDiscrepancyInfo(both).shortItems[0].n === 3);
 }
 
-head('[8] v66 — הפער נמדד על החלק ששייך לחזרות, גם עם החזרה');
+head('[8] שיוך זיכוי לחוסר בקליטה אינו משנה את הפער של החזרות');
 {
-  // ₪25 מהנייר שויכו לחוסר של תעודת קליטה אחרת
   const r = baseDoc();
-  r.creditNoteTotal = r2(pitaUnit * 1 + loafUnit + 25);
-  r.creditAllocations = [{ id: 'alloc1', amount: 25, receiptId: 'rc_9_9', receiptDate: '2026-09-09', items: [] }];
+  r.creditAllocations = [{ id: 'alloc1', receiptId: 'rc_9_9', receiptDate: '2026-09-09', items: [{ productId: 'code_349', name: 'x', qty: 2 }] }];
   returns = [r];
-  const di0 = returnsDiscrepancyInfo(r);
-  ok('השיוך לא מנפח את הזיכוי לחזרות', near(di0.owed, shortEx));
-  r.carriedNotes = [{ name: PITA.name, barcode: PITA.barcode || 'bc-pita', qty: 3, price: pitaUnit, amountOnly: false, at: 1 }];
-  const di1 = returnsDiscrepancyInfo(r);
-  ok('ואחרי ההחזרה שני הניכויים חיים יחד', near(di1.owed, 0) && di1.open === false);
-  ok('המאזן הכולל נקי', near(returnsBalance().bal, 0));
+  ok('החוסר נשאר 3 יח׳', returnsDiscrepancyInfo(r).shortUnits === 3);
+  r.carriedNotes = [{ productId: PITA.id, name: PITA.name, barcode: PITA.barcode || 'bc-pita', qty: 3, at: 1 }];
+  ok('ואחרי ההחזרה התעודה נסגרת', returnsDiscrepancyInfo(r).open === false);
+  ok('המאזן הכולל נקי', returnsBalance().shortUnits === 0);
 }
 
-head('[9] השורה שחזרה לרשימה — מסומנת, ולא נספרת שוב כסחורה');
+head('[9] השורה שחזרה לרשימה — מסומנת, בלי מחיר, ולא נספרת שוב כסחורה');
 {
-  const row = buildReturnRow({ productId: 'carry_123', name: PITA.name, barcode: PITA.barcode || 'bc-pita', qty: 3, unitPrice: pitaUnit, manual: true, carried: true, carriedFrom: 'ret_8_9' });
+  const row = buildReturnRow({ productId: 'carry_123', name: PITA.name, barcode: PITA.barcode || 'bc-pita', qty: 3, manual: true, carried: true, carriedFrom: 'ret_8_9' });
   ok('הסימון "הוחזר מפער זיכוי" מופיע', row.indexOf('הוחזר מפער זיכוי') > -1);
-  ok('ולא הסימון הידני הרגיל', row.indexOf('fa-pen"></i> ידני') === -1);
-  ok('מחיר הזיכוי הנעול מוצג', row.indexOf('ליח׳ (ללא מע״מ)') > -1);
+  ok('ולא הסימון הידני הרגיל', row.indexOf('מוצר ידני') === -1);
+  ok('בלי מחיר', row.indexOf('₪') === -1 && row.indexOf('ללא מע״מ') === -1);
+  const manual = buildReturnRow({ productId: 'manual_1', name: 'לחמניה משקית', qty: 2, manual: true });
+  ok('שורה ידנית — בלי מחיר', manual.indexOf('מוצר ידני') > -1 && manual.indexOf('₪') === -1);
   const plain = buildReturnRow({ productId: 'p1', name: LOAF.name, barcode: 'bc-loaf', qty: 2 });
   ok('שורה רגילה נשארה עם כפתור הברקוד', plain.indexOf('data-role="edit-barcode"') > -1);
   ok('שורת החזרה נספרת כסחורה? לא', anIsCarriedLine({ carried: true }) === true);
@@ -242,23 +236,23 @@ head('[11] מקצה לקצה — הכפתור, האישור, הרשימה והב
   await rt.events.get('confirmOk:click')();
   const write = rt.writes[rt.writes.length - 1];
   ok('נכתב רישום ההחזרה על התעודה', !!write && write.path.slice(-2).join('/') === 'returns/ret_8_9' && write.data.carriedNotes.length === 1);
-  ok('הרישום נושא כמות, מחיר וברקוד', write.data.carriedNotes[0].qty === 3 && near(write.data.carriedNotes[0].price, pitaUnit));
+  ok('הרישום נושא מוצר, כמות וברקוד — בלי מחיר', write.data.carriedNotes[0].qty === 3 && write.data.carriedNotes[0].productId === PITA.id && !('price' in write.data.carriedNotes[0]) && !('amountOnly' in write.data.carriedNotes[0]));
   const listed = rt.run('JSON.parse(JSON.stringify(returnsList))');
   ok('הפריטים עומדים ברשימת החזרות הפתוחה', listed.length === 1 && listed[0].qty === 3);
   ok('מסומנים כמוחזרים מפער, עם התעודה שמהן באו', listed[0].carried === true && listed[0].carriedFrom === 'ret_8_9');
-  ok('ובמחיר הזיכוי הנעול', near(listed[0].unitPrice, pitaUnit) && listed[0].manual === true);
+  ok('בלי מחיר על השורה', !('unitPrice' in listed[0]) && listed[0].manual === true);
   ok('הרשימה עדיין אותו מערך שיושב בסלוט', rt.run('returnsSlots.weekly === returnsList'));
   ok('הטיוטה נשמרה במכשיר', !!rt.storage.get('bermanReturnsDraft_v1') || [...rt.storage.keys()].some(k => /returns/i.test(k)));
 
   const sent = rt.run('openReturnsSend(); JSON.parse(JSON.stringify(sendCtx.items))');
   ok('התעודה הבאה נושאת את השורה שחזרה', sent.length === 1 && sent[0].qty === 3);
-  ok('במחיר הזיכוי המקורי ולא במחיר היום', near(sent[0].unitPrice, pitaUnit) && near(sent[0].lineTotal, shortEx));
+  ok('בלי מחיר — רק כמות', !('unitPrice' in sent[0]) && !('lineTotal' in sent[0]) && !('sentUnitPrice' in sent[0]));
   ok('מסומנת כתביעת פער — הניתוח לא יספור את היחידות פעמיים', sent[0].carried === true && sent[0].carriedFrom === 'ret_8_9');
   ok('ואין עליה שורת פיקדון נוספת', sent.filter(l => l.isDeposit).length === 0);
 
   const after = rt.run('renderReceiptsHistory(); document.getElementById("app").innerHTML');
   ok('התעודה נסגרה — אין יותר חוסר זיכוי פתוח', !rt.run('returnsDiscrepancyInfo(returns[0]).open') && after.indexOf('פתוח — חסר זיכוי') === -1);
-  ok('ובמקומה הערה שקטה על מה שהוחזר', after.indexOf('הוחזר לרשימת החזרות הפתוחה') > -1);
+  ok('ובמקומה הערה שקטה על מה שהוחזר', after.indexOf('3 יח׳ הוחזרו לרשימת החזרות הפתוחה') > -1);
   ok('הכפתור להחזרה כבר לא מוצע', after.indexOf('data-role="ret-carry" ') === -1);
 
   rt.click('ret-carry-undo', 'ret_8_9');
