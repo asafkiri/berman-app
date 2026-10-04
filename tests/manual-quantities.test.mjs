@@ -93,7 +93,8 @@ test(supplier+': real price differences remain visible and financial handling is
  manual.run('startReceiptQuantityReview(true)');closeNormal(manual);
  assert.deepEqual(finance(manual),finance(normal));
  assert.ok(json(manual,'receiptPriceAudit().rows').some(r=>r.result==='difference'));
- assert.ok(manual.run('!!pendingReceipt.supplierCreditClaim || pendingReceipt.status === "open"'));
+ // v120: הפרש מחיר אינו פותח תעודה — הסטטוס נגזר מכמויות בלבד, ושווה בשני המסלולים
+ assert.equal(manual.run('pendingReceipt.status'), normal.run('pendingReceipt.status'));
 });
 test(supplier+': final ordinary save records manual provenance and clears review with the draft',async()=>{
  const cloud=supplier==='berman'?null:harness.fakeCloud();

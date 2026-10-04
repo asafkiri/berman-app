@@ -8,7 +8,7 @@ import { runtime, fixture } from './receipt-scan-harness.mjs';
 
 const NUMBER = '244723990';
 const prior = (fields = {}) => ({ id: 'yesterday', timestamp: Date.UTC(2026, 8, 30, 15, 8), date: '2026-09-30', docDate: '2026-09-30',
-  status: 'ok', noteTotalInc: 691.13, totalExVat: 691.13, count: 16, items: [],
+  status: 'ok', noteTotalInc: 691.13, totalExVat: 691.13, count: 16, items: [{ productId: 'code_101', name: 'אחיד פרוס ברמן', qty: 60, unitPrice: 5.74 }, { productId: 'code_238', name: 'ברמן אסלי 5 פיתות', qty: 12, unitPrice: 4.91 }],
   priceAudit: { documents: [{ number: NUMBER, date: '2026-09-30' }] }, ...fields });
 async function scanned(receipts, number = NUMBER) {
   const data = fixture(); data.paper.scan.documents[0].docNumber = number;
@@ -26,11 +26,11 @@ test('a paper whose printed number was already received is flagged in receiving 
   assert.match(html, /data-duplicate-paper/);
   assert.match(html, /הנייר הזה כבר נקלט/);
   assert.match(html, /תעודה 244723990 כבר נקלטה ב־/);
-  assert.match(html, /₪691\.13/);
+  assert.match(html, /\(72 יח׳\)/); // v120: הזיהוי ביחידות, לא בכסף
   c.run('finishReceipt()');
   const [first] = confirms(c);
   assert.equal(first[0], 'התעודה כבר נקלטה');
-  assert.match(first[1], /^תעודה 244723990 כבר נקלטה ב־.* \(₪691\.13\)\. קליטה נוספת תספור אותה פעמיים\. לקלוט בכל זאת\?$/);
+  assert.match(first[1], /^תעודה 244723990 כבר נקלטה ב־.* \(72 יח׳\)\. קליטה נוספת תספור אותה פעמיים\. לקלוט בכל זאת\?$/);
   assert.equal(c.run('pendingReceipt'), null);
   assert.equal(c.writes.length, 0);
   c.run('confirms[0].fn()');

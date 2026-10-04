@@ -38,7 +38,7 @@ const FNS = ['r2', 'moneyDiffCents', 'lineTotalFromUnit', 'todayStr', 'storedRec
   'consumeReceiptDiffQty', 'consumeStoredReceiptOffsets', 'supplierCreditClaimOpen',
   'supplierCreditClaimDeferred', 'aiPriceFindingPromoMatch', 'promoForProduct', 'promoActive',
   'promoTriggered', 'promoFixedPrice', 'promoPctOf', 'basketQty', 'promoMinUnitsP',
-  'discountedUnitPrice', 'receiptDiscrepancyInfo',
+  'discountedUnitPrice', 'receiptDiscrepancyInfo', 'productListPrice', 'priceAt', 'receiptPaperLineCount',
   // v66
   'shortCreditToleranceCents', 'shortCreditFullyCovers', 'ymdDayDiff', 'receiptOpenShortEx',
   'shortageCreditCandidates', 'returnsCreditSourcesForShortage', 'creditAllocationList',
