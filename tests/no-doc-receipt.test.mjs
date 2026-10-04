@@ -11,7 +11,7 @@ const FNS = ['r2', 'moneyDiffCents', 'lineTotalFromUnit', 'todayStr', 'storedRec
   'supplierCreditClaimDeferred', 'aiPriceFindingPromoMatch', 'promoForProduct', 'promoActive',
   'promoTriggered', 'promoFixedPrice', 'promoPctOf', 'basketQty', 'promoMinUnitsP',
   'discountedUnitPrice', 'shortCreditToleranceCents', 'shortCreditFullyCovers',
-  'receiptDiscrepancyInfo'];
+  'receiptDiscrepancyInfo', 'receiptPaperLineCount', 'productListPrice', 'priceAt'];
 const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;'];
 let products = [], promos = [], receiptList = [];
 // eslint-disable-next-line no-eval

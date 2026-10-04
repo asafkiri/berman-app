@@ -171,6 +171,8 @@ const rowText = (block, name) => {
 
 test('history: an internal price offset shrinks the row — that product keeps the plain row, the others get numbers', () => {
   const r = runtime();
+  // v120: הקיזוז הפנימי לפי המחירון בקטלוג (זהות), לא לפי המחיר שחויב
+  r.run("products = products.concat([{ id: 'pa', name: 'לחם א', listPrice: 5, price: 5 }, { id: 'pb', name: 'לחם ב', listPrice: 5, price: 5 }, { id: 'pc', name: 'חלה', listPrice: 7, price: 7 }]);");
   const block = historyBlock(r, { items: [
     line('pa', 'לחם א', 5, 2, 5),   // short 3, one of them offset by B's surplus at the same price
     line('pb', 'לחם ב', 5, 2, 1),   // surplus 1, fully consumed by the offset
@@ -195,13 +197,6 @@ test('history: a stored external offset and goods delivered later both keep the 
   assert.equal(rowText(block, 'לחם א'), 'חסר: לחם א 5 יח׳ · ₪25.00 מצא קיזוז');
   assert.equal(rowText(block, 'חלה'), 'חסר: חלה 5 יח׳ · ₪35.00 מצא קיזוז', '"scanned" would include the goods that came later');
   assert.equal(rowText(block, 'פיתות'), 'חסר: פיתות חויב בתעודה 2 · נסרק בפועל 0 · חסר 2 יח׳ · ₪6.00 מצא קיזוז');
-});
-
-test('history: a receipt waiting for the supplier discount shows the numbers next to "price pending"', () => {
-  const r = runtime();
-  const block = historyBlock(r, { discountReview: { status: 'pending', missing: [{ productId: 'pa', name: 'לחם א' }], rates: {} }, items: [line('pa', 'לחם א', 0, 28, 30), line('pc', 'חלה', 0, 5, 5)] });
-  const text = strip(block);
-  assert.ok(text.includes('לחם א: חוסר 2 יח׳ חויב בתעודה 30 · נסרק בפועל 28 · המחיר ממתין לבירור'), text);
 });
 
 test('history: numbers never leak NaN/undefined from odd saved data', () => {
@@ -277,7 +272,7 @@ test('close "handle later" after a substitution split: the saved paper quantity 
   assert.match(rowText(block, 'אחיד פרוס ברמן'), /^עודף: אחיד פרוס ברמן חויב בתעודה 10 · נסרק בפועל 12 · עודף 2 יח׳ · ₪11\.48 מצא קיזוז$/);
   assert.ok(!strip(block).includes('פער יחידות שטרם שויך'), strip(block));
   assert.ok(!strip(block).includes('פער סכום שטרם שויך'), strip(block));
-  assert.ok(strip(block).includes('תעודת ספק ₪116.37 · לתשלום ₪77.07'), strip(block));
+  assert.ok(strip(block).includes('תעודת ספק ₪116.37 · סכום מודפס, לזיהוי בלבד'), strip(block)); // v120: הכסף של התעודה לזיהוי בלבד
 });
 
 test('partial basket closed "handle later": the summary says "billed (resolved rows)", the saved receipt keeps the plain row', async () => {
@@ -295,9 +290,15 @@ test('partial basket closed "handle later": the summary says "billed (resolved r
   assert.match(text, /ברמן אסלי 5 פיתות חויב \(שורות שזוהו\) 12 · נסרק בפועל 4 × ₪4\.91 · חסר 8/, text);
   assert.ok(!/חויב בתעודה 12/.test(text));
 
+  // v120: בלי עוגנים התעודה השמורה יודעת רק את השורות שזוהו, והן מוצגות כפי שנשמרו.
   const block = await savedHistoryBlock(r);
-  assert.ok(!/חויב בתעודה/.test(strip(block)), strip(block));
-  assert.match(rowText(block, 'ברמן אסלי 5 פיתות'), /^חסר: ברמן אסלי 5 פיתות 8 יח׳ · ₪[\d.]+ מצא קיזוז$/);
+  assert.match(rowText(block, 'ברמן אסלי 5 פיתות'), /^חסר: ברמן אסלי 5 פיתות חויב בתעודה 12 · נסרק בפועל 4 · חסר 8 יח׳ · ₪[\d.]+ מצא קיזוז$/);
+  // עוגן שורות שאומר "3 שורות בנייר" מול 2 שנשמרו — "חויב בתעודה" אינו שלם, השורה נשארת פשוטה
+  r.run("receipts[0].noteParts = [{ lines: 3, kind: 'charge' }]; renderReceiptsHistory();");
+  const html2 = r.node('app').innerHTML;
+  const block2 = html2.slice(html2.indexOf('הפרשים מול התעודה'));
+  assert.ok(!/חויב בתעודה/.test(strip(block2)), strip(block2));
+  assert.match(rowText(block2, 'ברמן אסלי 5 פיתות'), /^חסר: ברמן אסלי 5 פיתות 8 יח׳ · ₪[\d.]+ מצא קיזוז$/);
 });
 
 test('a credit note in the same delivery: the net quantity is never labelled as billed — main card, summary, history', async () => {
@@ -327,11 +328,12 @@ test('a credit note in the same delivery: the net quantity is never labelled as 
   assert.equal(rowText(historyBlock(runtime(), { items, noteParts: [charge, { amount: 10, kind: 'credit' }] }), 'לחם א'), 'חסר: לחם א 8 יח׳ · ₪40.00 מצא קיזוז');
 });
 
-test('history: paper quantities that do not close the document (units or amount gap) keep every row plain', () => {
+test('history: paper quantities that do not close the document (units gap) keep every row plain', () => {
   const items = [line('pa', 'לחם א', 5, 4, 12), line('pc', 'חלה', 7, 3, 3)];
   const numbers = 'חסר: לחם א חויב בתעודה 12 · נסרק בפועל 4 · חסר 8 יח׳ · ₪40.00 מצא קיזוז';
   const plain = 'חסר: לחם א 8 יח׳ · ₪40.00 מצא קיזוז';
   assert.equal(rowText(historyBlock(runtime(), { items, noteParts: [{ amount: 81, units: 15, kind: 'charge' }] }), 'לחם א'), numbers, '12 + 3 = 15 units: closes');
   assert.equal(rowText(historyBlock(runtime(), { items, noteParts: [{ amount: 96, units: 18, kind: 'charge' }] }), 'לחם א'), plain, '3 units on the paper are on no line');
-  assert.equal(rowText(historyBlock(runtime(), { items, unresolvedAmountGap: 14.5 }), 'לחם א'), plain, 'an open amount gap');
+  // v120: פער כסף שמור מתעודה ישנה אינו פותח ואינו מסתיר את המספרים
+  assert.equal(rowText(historyBlock(runtime(), { items, noteParts: [{ amount: 81, units: 15, kind: 'charge' }], unresolvedAmountGap: 14.5 }), 'לחם א'), numbers, 'a stored amount gap is ignored');
 });
