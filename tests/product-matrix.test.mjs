@@ -23,11 +23,13 @@ const promos = Object.entries(collections.promos).map(([id, v]) => ({ id, ...v }
 const byCode = c => products.find(p => String(p.code) === String(c));
 
 const FNS = ['r2', 'todayStr', 'storedReceiptDate', 'productCode', 'productListPrice',
-  'promoFixedPrice', 'promoActive', 'monthEndPromoForProduct', 'mtxQty', 'mtxReturnUnit',
-  'rangeProductMatrixData'];
+  'promoFixedPrice', 'promoActive', 'monthEndPromoForProduct', 'monthEndUnitRebate', 'mtxQty', 'mtxReturnUnit',
+  'mtxPromoUnit', 'rangeProductMatrixData'];
 // eslint-disable-next-line no-eval
 const api = eval(extractSource(FNS, []) + '\n({ ' + FNS.join(', ') + ' })');
-const { r2, rangeProductMatrixData, mtxQty } = api;
+const { r2, rangeProductMatrixData, mtxQty, monthEndPromoForProduct, monthEndUnitRebate } = api;
+// v116: המחיר שהחשבונית מדפיסה לשורה — מחיר המבצע כשיש מבצע מרכזת פעיל
+const invoiceUnit = (p, day, unit) => { const pr = monthEndPromoForProduct(p.id, day); return pr ? unit - monthEndUnitRebate(pr, unit) : unit; };
 
 let pass = 0, fail = 0;
 const ok = (name, cond) => { if (cond) { pass++; console.log('  ✓ ' + name); } else { fail++; console.log('  ✗ ' + name); } };
@@ -97,9 +99,11 @@ ok('שורה בלי productId מזוהה לפי שם ולא פותחת שורה 
   m.list.filter(r => r.code === '339').length === 1 && row('339').qty === 3);
 
 head('[5] הסכומים נסגרים');
+// v116: הכסף הצפוי הוא במחירי החשבונית — שורת 1231 יורדת ל-₪8.50 גם כשחויבה ב-₪10.40
 let expQty = 0, expAmt = 0;
-d.recs.forEach(r => (r.items || []).forEach(l => { if (!l.isDeposit) { expQty += l.qty; expAmt += l.qty * l.unitPrice; } }));
-d.rets.forEach(r => (r.items || []).forEach(l => { expQty -= l.qty; expAmt -= l.qty * l.unitPrice; }));
+const pOf = l => products.find(x => x.id === l.productId) || products.find(x => x.name === l.name);
+d.recs.forEach(r => (r.items || []).forEach(l => { if (!l.isDeposit) { expQty += l.qty; expAmt += l.qty * invoiceUnit(pOf(l), r.docDate, l.unitPrice); } }));
+d.rets.forEach(r => (r.items || []).forEach(l => { expQty -= l.qty; expAmt -= l.qty * invoiceUnit(pOf(l), r.docDate, l.unitPrice); }));
 const gotQty = m.list.reduce((s, r) => s + r.qty, 0);
 const dayQty = m.days.reduce((s, x) => s + m.dayAgg[x.day].q, 0);
 const dayAmt = m.days.reduce((s, x) => s + m.dayAgg[x.day].amount, 0);
@@ -115,9 +119,47 @@ ok('מבצע שהסתיים לפני התקופה אינו מסמן', row('349')
 ok('שינוי מחיר בתוך התקופה מסומן', row('101').prices.length === 2);
 ok('מחיר יציב אינו מסומן', row('349').prices.length === 1);
 
+head('[6ב] v116 — מבצע המרכזת יורד בשורת המוצר, כמו בחשבונית');
+// ברמן אקטיב (₪10 קבוע מ-1/9) הגיע בשלוש צורות: במחיר הרגיל 12.047, במחירון
+// המלא 17.21 (תעודת 1/9 האמיתית) ובמחיר המבצע עצמו. בחשבונית כולם 97 × ₪10.
+const dp = {
+  netEx: 0,
+  recs: [
+    { docDate: '2026-09-01', items: [line(P.b339, 8, 17.21), line(P.b1231, 15, 10.399818), line(P.b349, 4, 9.884)] },
+    { docDate: '2026-09-02', items: [line(P.b339, 8, 12.047), line(P.b1231, 14, 8.5)] },
+    { docDate: '2026-09-03', items: [line(P.b339, 4, 10)] },
+    // לפני תחילת המבצע — המחיר שחויב נשאר
+    { docDate: '2026-08-31', items: [line(P.b339, 3, 12.047)] }
+  ],
+  rets: [
+    { docDate: '2026-09-03', items: [line(P.b339, 2, 12.047)] },
+    { docDate: '2026-09-04', items: [{ name: P.b339.name, qty: 1 }] } // בלי מחיר ובלי productId — נופל למחיר המוצר
+  ]
+};
+const mp = rangeProductMatrixData(dp);
+const rp = code => mp.list.find(r => r.code === String(code));
+const r339 = rp('339');
+ok('כמות נטו', r339.qty === 20 && r339.rets === 3);
+ok('אספקה במחיר הרגיל יורדת ל-₪10', r2(r339.days['2026-09-02'].amt) === 80);
+ok('אספקה במחירון מלא יורדת ל-₪10', r2(r339.days['2026-09-01'].amt) === 80);
+ok('אספקה שכבר ירדה בתעודה אינה יורדת שוב', r2(r339.days['2026-09-03'].amt) === r2(40 - 2 * 10));
+ok('החזרה מזוכה במחיר המבצע (v57)', r2(r339.days['2026-09-04'].amt) === -10);
+ok('לפני המבצע — המחיר שחויב', r2(r339.days['2026-08-31'].amt) === r2(3 * 12.047));
+ok('סכום השורה = (20 − 3) × 10 + 3 × 12.047', Math.abs(r339.amount - (17 * 10 + 3 * 12.047)) < 0.001);
+ok('המחיר הממוצע של החלק שבמבצע הוא 10.000', Math.abs((r339.amount - 3 * 12.047) / 17 - 10) < 0.0001);
+ok('הקיזוז של השורה: 8×7.21 + 8×2.047 − 2×2.047 − 1×2.047', Math.abs(r339.rebate - r2(8 * 7.21 + 8 * 2.047 - 3 * 2.047)) < 0.011);
+ok('שלוש צורות החיוב אינן "שינוי מחיר" — בחשבונית מחיר אחד', r339.prices.filter(x => Math.abs(x - 10) < 0.001).length === 1 && r339.prices.length === 2);
+ok('מסומן כמבצע', r339.promo === true);
+const r1231 = rp('1231');
+ok('לחמניות: 15 × 10.40 + 14 × 8.50 יוצאים 29 × 8.50', r2(r1231.amount) === r2(29 * 8.5) && r2(r1231.rebate) === r2(15 * (10.399818 - 8.5)));
+ok('מבצע שהסתיים אינו נוגע במחיר', r2(rp('349').amount) === r2(4 * 9.884) && rp('349').rebate === 0);
+ok('promoEx = סך מה שירד מכל השורות', Math.abs(mp.promoEx - r2(r339.rebate + r1231.rebate)) < 0.011);
+ok('הסכום הכולל = סכום השורות', Math.abs(mp.total - r2(mp.list.reduce((s, r) => s + r.amount, 0))) <= 0.01);
+ok('סכום הימים = הסכום הכולל', Math.abs(r2(mp.days.reduce((s, x) => s + mp.dayAgg[x.day].amount, 0)) - mp.total) <= 0.01);
+
 head('[7] תקופה ריקה אינה מפילה');
 const empty = rangeProductMatrixData({ recs: [], rets: [], netEx: 0 });
-ok('בלי ימים ובלי שורות', empty.days.length === 0 && empty.list.length === 0 && empty.total === 0);
+ok('בלי ימים ובלי שורות', empty.days.length === 0 && empty.list.length === 0 && empty.total === 0 && empty.promoEx === 0);
 ok('mtxQty על ערך חסר מחזיר אפס', mtxQty(undefined) === '0' && mtxQty(null) === '0');
 
 console.log('\n' + (fail ? '✗ נכשלו ' + fail : '✓ הכל עבר') + ' (' + pass + '/' + (pass + fail) + ')' +
