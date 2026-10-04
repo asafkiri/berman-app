@@ -292,15 +292,14 @@ test('partial basket closed "handle later": the summary says "billed (resolved r
   assert.match(text, /ברמן אסלי 5 פיתות חויב \(שורות שזוהו\) 12 · נסרק בפועל 4 · חסר 8/, text);
   assert.ok(!/חויב בתעודה 12/.test(text));
 
-  // v120: בלי עוגנים התעודה השמורה יודעת רק את השורות שזוהו, והן מוצגות כפי שנשמרו.
+  // v122: העוגנים נקראים מהנייר בלי שער כסף — 25 יחידות ו-3 שורות, מהן רק 22
+  // יחידות ב-2 שורות שויכו. התעודה נשמרת פתוחה עם פער יחידות של 3 שטרם שויך,
+  // ולכן "חויב בתעודה" אינו שלם והשורה בהיסטוריה נשארת פשוטה.
   const block = await savedHistoryBlock(r);
-  assert.match(rowText(block, 'ברמן אסלי 5 פיתות'), /^חסר: ברמן אסלי 5 פיתות חויב בתעודה 12 · נסרק בפועל 4 · חסר 8 יח׳ · ₪[\d.]+ מצא קיזוז$/);
-  // עוגן שורות שאומר "3 שורות בנייר" מול 2 שנשמרו — "חויב בתעודה" אינו שלם, השורה נשארת פשוטה
-  r.run("receipts[0].noteParts = [{ lines: 3, kind: 'charge' }]; renderReceiptsHistory();");
-  const html2 = r.node('app').innerHTML;
-  const block2 = html2.slice(html2.indexOf('הפרשים מול התעודה'));
-  assert.ok(!/חויב בתעודה/.test(strip(block2)), strip(block2));
-  assert.match(rowText(block2, 'ברמן אסלי 5 פיתות'), /^חסר: ברמן אסלי 5 פיתות 8 יח׳ · ₪[\d.]+ מצא קיזוז$/);
+  assert.deepEqual(JSON.parse(r.run('JSON.stringify([receipts[0].noteParts[0].units, receipts[0].noteParts[0].lines, receipts[0].unresolvedUnitsGap, receipts[0].status])')), [25, 3, 3, 'open']);
+  assert.ok(!/חויב בתעודה/.test(strip(block)), strip(block));
+  assert.match(rowText(block, 'ברמן אסלי 5 פיתות'), /^חסר: ברמן אסלי 5 פיתות 8 יח׳ · ₪[\d.]+ מצא קיזוז$/);
+  assert.ok(strip(block).includes('פער יחידות שטרם שויך'), strip(block));
 });
 
 test('a credit note in the same delivery: the net quantity is never labelled as billed — main card, summary, history', async () => {

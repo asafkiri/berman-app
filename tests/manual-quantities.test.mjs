@@ -92,9 +92,10 @@ test(supplier+': real price differences remain visible and financial handling is
  normal.run('finishReceipt()');closeNormal(normal);
  manual.run('startReceiptQuantityReview(true)');closeNormal(manual);
  assert.deepEqual(finance(manual),finance(normal));
- assert.ok(json(manual,'receiptPriceAudit().rows').some(r=>r.result==='difference'));
- // v120: הפרש מחיר אינו פותח תעודה — הסטטוס נגזר מכמויות בלבד, ושווה בשני המסלולים
+ // v120/v122: הפרש מחיר אינו פותח תעודה ואינו נבדק בקליטה — הסטטוס נגזר מכמויות בלבד, ושווה בשני המסלולים
  assert.equal(manual.run('pendingReceipt.status'), normal.run('pendingReceipt.status'));
+ assert.equal(manual.run('pendingReceipt.status'),'ok');
+ assert.equal(manual.requests.length,1);
 });
 test(supplier+': final ordinary save records manual provenance and clears review with the draft',async()=>{
  const cloud=supplier==='berman'?null:harness.fakeCloud();
@@ -245,7 +246,7 @@ test(supplier+': the two photo buttons show distinct screens during and after th
   }
   release();await settleScan();
   assert.equal(r.run('receiptPaperScanState'),'ok');assert.deepEqual(json(r,'receiptList'),[]);
-  if(manual){const html=assertManualScreen(r);assert.match(html,/data-role="rc-quantity-all"/);assert.match(html,/data-role="rc-quantity-differences"/);assert.match(html,/data-price-audit/);assert.doesNotMatch(html,/data-quantity-picker/);}
+  if(manual){const html=assertManualScreen(r);assert.match(html,/data-role="rc-quantity-all"/);assert.match(html,/data-role="rc-quantity-differences"/);assert.match(html,/id="rcOcrReview"/);assert.doesNotMatch(html,/data-price-audit|data-quantity-picker/);}
   else assert.match(r.node('app').innerHTML,/data-role="rc-scan"/);
   requests.push(r.requests.filter(x=>x.url.endsWith('/scan')).map(x=>JSON.parse(x.body)));
  }
@@ -293,36 +294,25 @@ test(supplier+': cancelling the manual receipt resets the next receipt to the no
  r.run('showConfirm=(a,b,c,fn)=>fn()');r.click('rc-cancel');assert.equal(r.run('receiptCountingMode'),'scan');assert.deepEqual(json(r,'receiptList'),[]);
 });
 
-// v79: הפער שהוליד את השינוי. תעודה שהיחידות והשורות שלה סגורות בדיוק, ובין
-// הכסף המחושב ל"נטו לחיוב" המודפס יושבות 21 אגורות של עיגול, נעצרה כאן —
-// במסך בדיקת הכמויות הידנית — על אגורה אחת מעבר לסיבולת הבסיס. שני השערים
-// נבדקים כאן יחד: שער הצילום שפותח את המסך, ובדיקת הפענוח שסוגרת את התעודה.
+// v79 → v122: עד v121 "נטו לחיוב" המודפס נבדק מול הכסף המחושב בסיבולת עיגול
+// (21 אג׳ עברו, 31 נחסמו). מ-v122 הסכום הוא זיהוי בלבד: הוא אינו שער, אינו
+// מפיק אזהרת עיגול, ואינו חוסם את מסך בדיקת הכמויות — בשום גודל של פער.
 function gapData(agorot) {
  const data=plainData(),doc=data.paper.scan.documents[0],total=Math.round(9200+agorot)/100;
  doc.subtotalExVat=total;doc.netToChargeExVat=total;doc.itemsSectionTotalExVat=total;
  return data;
 }
-test(supplier+': a 21-agora rounding gap no longer blocks the manual quantity screen',async()=>{
- const r=await scanned(gapData(21));
+for(const agorot of [21,31,5000]) test(supplier+': a money gap of '+agorot+' agorot is identification only — the manual quantity screen opens and the receipt closes',async()=>{
+ const r=await scanned(gapData(agorot));
  assert.equal(r.run('receiptPaperScanState'),'ok',JSON.stringify(json(r,'receiptPaperScanProblems')));
- assert.equal(r.run('receiptNoteTotal'),92.21);
+ assert.equal(r.run('receiptNoteTotal'),Math.round(9200+agorot)/100);
  r.run(`currentView='receiving';mainMode='receiving';receiptCountingMode='manual';renderReceiving()`);
  assert.doesNotMatch(r.node('app').innerHTML,/צריך להשלים את פענוח התעודה/);
- assert.match(r.run('paperScanStatusHtml()'),/הפרש עיגול של 21 אג׳/);
+ const status=r.run('paperScanStatusHtml()');
+ assert.doesNotMatch(status,/הפרש עיגול|אחוז הנחה/);
+ assert.match(status,/16 יח׳ · 2 שורות/);
+ assert.match(status,/לזיהוי בלבד/);
  r.run('finishReceipt()');closeNormal(r);
  assert.equal(r.run('pendingReceipt.status'),'ok');
-});
-test(supplier+': the widened tolerance stops where the doctrine says it does',async()=>{
- const ok=await scanned(gapData(30));
- assert.equal(ok.run('receiptPaperScanState'),'ok',JSON.stringify(json(ok,'receiptPaperScanProblems')));
- const blocked=await scanned(gapData(31));
- assert.equal(blocked.run('receiptPaperScanState'),'failed');
- const problems=json(blocked,'receiptPaperScanProblems').join(' ');
- assert.match(problems,/31 אג׳/);
- assert.match(problems,/אחוז הנחה/);
-});
-test(supplier+': a rounding gap that closes exactly says nothing about rounding',async()=>{
- const r=await scanned();
- assert.equal(r.run('receiptPaperScanState'),'ok');
- assert.doesNotMatch(r.run('paperScanStatusHtml()'),/הפרש עיגול/);
+ assert.equal(r.requests.length,1);
 });
