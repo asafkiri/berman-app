@@ -105,14 +105,15 @@ test('single finding per product (engine led): the saved receipt is exactly what
   assert.equal(analyzerLed(r), false);
   closeLater(r);
   const { rc, items, di } = await saveAndShow(r);
+  // v121: שורת התעודה נשמרת בלי כסף — מזהה, שם, ברקוד וכמויות בלבד
   assert.deepEqual(rc.items, [
-    { productId: 'code_101', name: 'אחיד פרוס ברמן', barcode: rc.items[0].barcode, qty: 10, unitPrice: rc.items[0].unitPrice, basePrice: rc.items[0].basePrice, lineTotal: rc.items[0].lineTotal, promoPct: 0 },
-    { productId: 'code_238', name: 'ברמן אסלי 5 פיתות', barcode: rc.items[1].barcode, qty: 4, unitPrice: rc.items[1].unitPrice, basePrice: rc.items[1].basePrice, lineTotal: rc.items[1].lineTotal, promoPct: 0, noteQty: 12 }
+    { productId: 'code_101', name: 'אחיד פרוס ברמן', barcode: rc.items[0].barcode, qty: 10 },
+    { productId: 'code_238', name: 'ברמן אסלי 5 פיתות', barcode: rc.items[1].barcode, qty: 4, noteQty: 12 }
   ]);
+  assert.equal(rc.schemaVersion, 2);
+  for (const k of ['totalExVat', 'unresolvedAmountGap', 'priceAudit', 'supplierDiscount', 'monthEndRebates']) assert.ok(!(k in rc), k + ' is not written since v121');
   assert.deepEqual(items, { 101: [10], 238: [4, 12] });
   assert.deepEqual(di, { short: [['238', 8]], over: [], unitsGap: 0 });
-  assert.equal(rc.totalExVat, 77.07);
-  assert.equal(rc.unresolvedAmountGap, 0);
 
   // A surplus alone, and a product billed but never scanned (the v46 line), are unchanged too.
   const surplus = await scanned(PAPER, { 238: 12, 101: 13 });
@@ -135,12 +136,10 @@ test('substitution + another shortage on the same product: billed 12 is saved, i
     closeLater(r);
     assert.deepEqual(paperQty(r), { 238: [4, 12], 101: [12, 10] });
     const summary = strip(r.node('rsBody').innerHTML);
-    assert.match(summary, /ברמן אסלי 5 פיתות חויב בתעודה 12 · נסרק בפועל 4 × ₪4\.91 · חסר 8/, summary);
+    assert.match(summary, /ברמן אסלי 5 פיתות חויב בתעודה 12 · נסרק בפועל 4 · חסר 8/, summary);
     const { rc, di, history } = await saveAndShow(r);
     assert.deepEqual(di, { short: [['238', 8]], over: [['101', 2]], unitsGap: 0 });
     assert.equal(rc.unresolvedUnitsGap, 0);
-    assert.equal(rc.unresolvedAmountGap, 0);
-    assert.equal(rc.totalExVat, 77.07, '116.37 billed − 8 × 4.91 short');
     assert.match(history, /חסר: ברמן אסלי 5 פיתות חויב בתעודה 12 · נסרק בפועל 4 · חסר 8 יח׳ · ₪39\.30/, history);
     assert.ok(!history.includes('שטרם שויך'), history);
   }
@@ -154,7 +153,6 @@ test('the reviewer\'s case: the substitute is not on the paper at all — 238 is
   assert.deepEqual(paperQty(r), { 238: [4, 12], 101: [10, 10], 2387: [2, 0] });
   const { di, history, rc } = await saveAndShow(r);
   assert.deepEqual(di, { short: [['238', 8]], over: [['2387', 2]], unitsGap: 0 });
-  assert.equal(rc.unresolvedAmountGap, 0);
   assert.ok(!/חסר 2 יח׳/.test(history), history);
   assert.match(history, /ברמן אסלי 5 פיתות חויב בתעודה 12 · נסרק בפועל 4 · חסר 8 יח׳/, history);
 });
@@ -167,7 +165,6 @@ test('two shortage claims on one product (the paper has it on two rows, 7 + 5): 
   assert.deepEqual(paperQty(r), { 238: [4, 12], 101: [10, 10] });
   const { rc, di } = await saveAndShow(r);
   assert.deepEqual(di, { short: [['238', 8]], over: [], unitsGap: 0 });
-  assert.equal(rc.unresolvedAmountGap, 0);
 });
 
 test('shortage and surplus claims on one product: the paper\'s comparison is saved — a real surplus of 1 is never saved as "חסר 2"', async () => {
@@ -180,8 +177,6 @@ test('shortage and surplus claims on one product: the paper\'s comparison is sav
   assert.deepEqual(paperQty(r), { 238: [4, 12], 101: [11, 10] });
   const { rc, di } = await saveAndShow(r);
   assert.deepEqual(di, { short: [['238', 8]], over: [['101', 1]], unitsGap: 0 });
-  assert.equal(rc.totalExVat, 77.07, 'was 80.32: the 101 "shortage" was deducted and 238 understated');
-  assert.equal(rc.unresolvedAmountGap, 0);
 });
 
 test('a product billed but never scanned, explained by two claims, gets one line with the paper\'s 3 billed', async () => {
@@ -194,7 +189,6 @@ test('a product billed but never scanned, explained by two claims, gets one line
   assert.equal(r.run("reconcileData.filter(l => String(l.productId) === 'code_3604').length"), 1);
   const { rc, di } = await saveAndShow(r);
   assert.deepEqual(di, { short: [['3604', 3]], over: [['101', 1]], unitsGap: 0 });
-  assert.equal(rc.unresolvedAmountGap, 0);
 });
 
 test('a credit note in the same delivery: the saved paper quantity is the net (12 − 2), with one finding or with two claims', async () => {
@@ -210,7 +204,6 @@ test('a credit note in the same delivery: the saved paper quantity is the net (1
   assert.deepEqual(paperQty(r), { 238: [4, 10], 101: [12, 10] });
   const { rc, di } = await saveAndShow(r);
   assert.deepEqual(di, { short: [['238', 6]], over: [['101', 2]], unitsGap: 0 });
-  assert.equal(rc.unresolvedAmountGap, 0);
 });
 
 test('handle later saves what ai-apply saves — also when a same-price claim names another product than the paper', async () => {

@@ -117,7 +117,7 @@ test('ההיסטוריה מציירת את כל התעודות ביחידות, �
   const html = r.node('app').innerHTML;
   assert.ok(!/התצוגה נכשלה/.test(html));
   assert.ok(html.includes('נספר / חויב'), 'כותרת הכרטיס ביחידות');
-  assert.ok(html.includes('שווי לפי מחירי התעודה'), 'הכסף שנשאר הוא תצוגה');
+  assert.ok(html.includes('שווי לפי מחירי האפליקציה'), 'הכסף שנשאר הוא תצוגה');
   assert.ok(html.includes('סכום מודפס') && html.includes('(לזיהוי בלבד)'), 'הסכום המודפס מסומן כזיהוי');
   for (const gone of ['לתשלום ללא מע"מ', 'ממתינה למרכזת', 'מבצע ירד בתעודה', 'ממתין לזיכוי ספק', 'פער סכום שטרם שויך', 'המחיר ממתין לבירור']) {
     assert.ok(!html.includes(gone), 'ירד: ' + gone);
