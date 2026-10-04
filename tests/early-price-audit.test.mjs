@@ -160,8 +160,9 @@ for(const [label,unit,count] of [['shortage only',5,9],['price only',6,10],['pri
  if(supplier!=='berman')c.run('flushReceiptDraftToCloud=async()=>{receiptSync.dirty=false;return true;}');
  await c.run('confirmReceipt()');
  const saved=c.writes.find(w=>w.path?.includes('receipts'))?.data;assert.ok(saved);
- assert.equal(saved.priceAudit.rows.length,1);assert.equal(saved.priceAudit.rows[0].originalUnitPrice,unit);
- assert.equal(saved.totalExVat,savedPending.ex);assert.equal(saved.supplierDiscount,savedPending.supplierDiscount||0);
+ // v121: התעודה הנשמרת היא כמויות בלבד — priceAudit והכסף אינם נכתבים; הנייר נשמר ב-paperDocs
+ assert.equal(saved.schemaVersion,2);assert.equal(saved.paperDocs.length,1);assert.equal(saved.units,count);
+ for(const k of ['priceAudit','totalExVat','supplierDiscount','monthEndRebates','unresolvedAmountGap'])assert.ok(!(k in saved),k+' not written');
  assert.equal(c.run('aiScanResponse'),null);assert.equal(requests(c),uploadCount);
  assert.equal(report(reload(c,data)).state,'empty');
 });
@@ -209,18 +210,7 @@ test(supplier+': a row the review cannot check keeps the existing price warning'
  assert.match(c.run("aiActionableFindingsHtml([{type:'price',productId:'milk',name:'מוצר בדיקה',text:'מחיר שונה: מוצר בדיקה'}])"),/מחיר שונה/);
  assert.equal(requests(c),1);
 });
-// The banner used to vanish for every product the moment the review produced a
-// single row, including products the review never looked at.
-test(supplier+': the promotion-mismatch banner is filtered per product, not switched off',async()=>{
- const data=fixture({unit:6}),c=create(data);await scan(c,data);
- const mismatch=[{productId:'milk',name:'מוצר בדיקה'},{productId:'coffee',name:'מוצר שני'}];
- const banner=()=>{c.run('presentReconcileSummary([],0,false,'+JSON.stringify({supplierPromoMismatchItems:mismatch})+')');
-  return (c.node('rsBody').innerHTML.match(/מבצע שמוגדר במערכת לא הופיע[\s\S]*?<\/div><\/div>/)||[''])[0];};
- const judged=banner();assert.match(judged,/מוצר שני/);assert.doesNotMatch(judged,/מוצר בדיקה/);
- c.run("products[0].price=0;products[0].listPrice=0;renderReceiving()");
- assert.equal(report(c).rows[0].capability,'missing_catalog_price');
- assert.match(banner(),/מוצר בדיקה/);assert.equal(requests(c),1);
-});
+// v121: בדיקת באנר "מבצע לא הופיע אצל הספק" הוסרה — סיכום הקליטה אינו מציג כסף.
 // The promotion ran on the day the document was issued and expired since. Judged
 // by today, the expected price is rebuilt on a promotion that was not in force —
 // and the credit demanded from the supplier is built on that price.

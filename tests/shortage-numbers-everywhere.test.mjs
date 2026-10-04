@@ -123,9 +123,9 @@ test('close summary: a line with a difference says billed, scanned and the gap',
   const r = await scanned([[238, 12], [101, 10], [2381, 5]], { 238: 4, 101: 10, 2381: 5 });
   r.click('ai-apply');
   const text = strip(r.node('rsBody').innerHTML);
-  assert.match(text, /ברמן אסלי 5 פיתות חויב בתעודה 12 · נסרק בפועל 4 × ₪4\.91 · חסר 8 ₪/);
-  assert.ok(!/התקבל 4 ×/.test(text), 'the short line no longer shows only what arrived');
-  assert.match(text, /אחיד פרוס ברמן התקבל 10 × ₪/, 'a line without a difference is unchanged');
+  assert.match(text, /ברמן אסלי 5 פיתות חויב בתעודה 12 · נסרק בפועל 4 · חסר 8/);
+  assert.ok(!/התקבל 4\b/.test(text), 'the short line no longer shows only what arrived');
+  assert.match(text, /אחיד פרוס ברמן התקבל 10/, 'a line without a difference is unchanged');
   assert.ok(!/אחיד פרוס ברמן חויב בתעודה/.test(text));
 });
 
@@ -133,7 +133,7 @@ test('close summary: a surplus line shows the same three numbers', async () => {
   const r = await scanned([[238, 12], [101, 10]], { 238: 12, 101: 13 });
   r.click('ai-apply');
   const text = strip(r.node('rsBody').innerHTML);
-  assert.match(text, /אחיד פרוס ברמן חויב בתעודה 10 · נסרק בפועל 13 × ₪[\d.]+ · עודף 3/);
+  assert.match(text, /אחיד פרוס ברמן חויב בתעודה 10 · נסרק בפועל 13 · עודף 3/);
 });
 
 test('history: the saved receipt\'s difference row shows billed and scanned', async () => {
@@ -263,8 +263,8 @@ test('close "handle later" after a substitution split: the saved paper quantity 
   assert.equal(r.run("String(reconcileData.find(l => l.productId === 'code_101').noteQty)"), '10');
   const text = strip(r.node('rsBody').innerHTML);
   assert.ok(!/חויב בתעודה 6|חסר 2\b/.test(text), text);
-  assert.match(text, /ברמן אסלי 5 פיתות חויב בתעודה 12 · נסרק בפועל 4 × ₪4\.91 · חסר 8/, text);
-  assert.match(text, /אחיד פרוס ברמן חויב בתעודה 10 · נסרק בפועל 12 × ₪[\d.]+ · עודף 2/);
+  assert.match(text, /ברמן אסלי 5 פיתות חויב בתעודה 12 · נסרק בפועל 4 · חסר 8/, text);
+  assert.match(text, /אחיד פרוס ברמן חויב בתעודה 10 · נסרק בפועל 12 · עודף 2/);
 
   // History: billed − scanned = the gap on every row, and nothing is left unowned.
   const block = await savedHistoryBlock(r);
@@ -287,7 +287,7 @@ test('partial basket closed "handle later": the summary says "billed (resolved r
   r.click('ai-close-receipt');
   acceptConfirm(r);
   const text = strip(r.node('rsBody').innerHTML);
-  assert.match(text, /ברמן אסלי 5 פיתות חויב \(שורות שזוהו\) 12 · נסרק בפועל 4 × ₪4\.91 · חסר 8/, text);
+  assert.match(text, /ברמן אסלי 5 פיתות חויב \(שורות שזוהו\) 12 · נסרק בפועל 4 · חסר 8/, text);
   assert.ok(!/חויב בתעודה 12/.test(text));
 
   // v120: בלי עוגנים התעודה השמורה יודעת רק את השורות שזוהו, והן מוצגות כפי שנשמרו.
@@ -316,10 +316,10 @@ test('a credit note in the same delivery: the net quantity is never labelled as 
 
   r.run('receiptNotes = chargeOnlyNotes;');
   r.click('ai-apply');
-  assert.match(strip(r.node('rsBody').innerHTML), /ברמן אסלי 5 פיתות חויב בתעודה 12 · נסרק בפועל 4 ×/, 'control: no credit note');
-  r.run(withCredit + ' presentReconcileSummary(pendingReceipt.lines, pendingReceipt.ex, false, {});');
+  assert.match(strip(r.node('rsBody').innerHTML), /ברמן אסלי 5 פיתות חויב בתעודה 12 · נסרק בפועל 4/, 'control: no credit note');
+  r.run(withCredit + ' presentReconcileSummary(pendingReceipt.lines, false, {});');
   const text = strip(r.node('rsBody').innerHTML);
-  assert.match(text, /ברמן אסלי 5 פיתות התקבל 4 × ₪4\.91 · חסר 8/);
+  assert.match(text, /ברמן אסלי 5 פיתות התקבל 4 · חסר 8/);
   assert.ok(!/חויב בתעודה/.test(text));
 
   const items = [line('pa', 'לחם א', 5, 4, 12)];
