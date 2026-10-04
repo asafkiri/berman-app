@@ -445,10 +445,12 @@
 
           <section class="bg-white border border-slate-200 rounded-2xl p-3">
             <div class="font-black text-sm text-slate-700 mb-3"><i class="fa-solid fa-shekel-sign text-emerald-600 ml-1"></i> מחירים</div>
-            <label class="text-[11px] text-slate-400 font-bold block mb-1">מחיר מחירון ליחידה (ללא מע״מ) *</label>
+            <label class="text-[11px] text-slate-400 font-bold block mb-1">מחיר מחירון ליחידה (ללא מע״מ) — המודפס בתעודה *</label>
             <div class="flex items-center gap-2"><span class="text-slate-400 font-bold text-lg">₪</span><input id="prod_price" type="text" inputmode="decimal" class="flex-1 p-3 rounded-xl border-2 border-slate-200 outline-none text-center font-black focus:border-blue-500" placeholder="0.00"></div>
-            <label class="text-[11px] text-slate-400 font-bold block mb-1 mt-3">אחוז הנחה קבועה (%) — ריק = עדיין לא נקבע</label>
-            <div class="flex items-center gap-2"><span class="text-slate-400 font-bold text-lg">%</span><input id="prod_discount" type="text" inputmode="decimal" class="flex-1 p-3 rounded-xl border-2 border-slate-200 outline-none text-center font-black focus:border-blue-500" placeholder="לדוגמה: 30"></div>
+            <label class="text-[11px] text-slate-400 font-bold block mb-1 mt-3">מחיר בחשבונית ליחידה (ללא מע״מ) — מה שברמן מחייבת</label>
+            <div class="flex items-center gap-2"><span class="text-slate-400 font-bold text-lg">₪</span><input id="prod_invoicePrice" type="text" inputmode="decimal" class="flex-1 p-3 rounded-xl border-2 border-slate-200 outline-none text-center font-black focus:border-blue-500" placeholder="ריק = מחירון מלא"></div>
+            <label class="text-[11px] text-slate-400 font-bold block mb-1 mt-2">בתוקף מ</label>
+            <input id="prod_priceFrom" type="date" class="w-full p-2.5 rounded-xl border-2 border-slate-200 outline-none text-center font-bold focus:border-blue-500">
             <div id="prod_finalHint" class="text-[12px] font-black text-amber-800 text-center mt-2 min-h-[17px]"></div>
             <div id="prod_recHint" class="hidden text-[11px] font-black text-emerald-700 text-center mt-2"></div>
             <label class="text-[11px] text-slate-400 font-bold block mb-1 mt-3">מחיר בקופה (כולל מע״מ) — המחיר המקודד על המוצר</label>
@@ -895,13 +897,11 @@ function findProductsByBarcode(value) {
   if (exact.length) return exact;
   return products.filter(p => barcodeMatchesProduct(key, p));
 }
-// מחיר סופי = מחירון × (1 − אחוז הנחה קבועה). לא מעגלים את מחיר היחידה —
-// רק סכומי שורות מתעגלים לאגורה בסוף (כמו שברמן מחשבת את "נטו לחיוב").
+// מחירון × (1 − אחוז) — רק לזריעת הקטלוג הראשונה (seedBermanCatalog).
 function finalUnitPrice(listPrice, pct) { return (Number(listPrice) || 0) * (1 - (Number(pct) || 0) / 100); }
+// מחיר המחירון שמודפס בתעודת ברמן — עדות לזהות המוצר בסריקה (תיקון ספרה בקוד,
+// הכרעה בין קוד לברקוד, קיזוז וריאנט באותו מחירון). אינו מחיר לתשלום.
 function productListPrice(p) { return Number(p && p.listPrice) || 0; }
-function productDiscountPct(p) { return Number(p && p.discountPct) || 0; }
-function productDiscountSet(p) { return !!(p && p.discountSet); }
-function recomputeProductFinal(p) { if (p) p.price = finalUnitPrice(p.listPrice, p.discountPct); }
 // תצוגת מחיר סופי עד מיליריות (כמו 9.652) — התצוגה בלבד; החישוב נשאר מלא.
 function fmt3(n) { const v = Math.round((Number(n) || 0) * 1000) / 1000; return v.toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 3 }); }
 // חיפוש מוצר אחיד: שם, קוד פריט או ברקוד
@@ -2482,7 +2482,7 @@ function healthStatCardHtml(label, val, sub, status) {
 }
 function buildSystemHealth() {
   const activeProducts = products.filter(p => !p.hidden);
-  const missingPrice = activeProducts.filter(p => p.price == null || p.price === '' || !(Number(p.price) > 0));
+  const missingPrice = activeProducts.filter(p => !(productPriceNow(p) > 0));
   const missingBarcode = activeProducts.filter(p => !String(p.barcode || '').trim());
   const missingAverage = activeProducts.filter(p => !(parseInt(p.average, 10) > 0));
   const dupBc = duplicateBarcodeGroups();
@@ -5246,12 +5246,6 @@ function basketQty(pr) {
 // המבצע מופעל רק כשסך הסל עבר את הסף
 function promoTriggered(pr, dateStr) { return promoActive(pr, dateStr) && (promoMinUnitsP(pr) <= 1 || basketQty(pr) >= promoMinUnitsP(pr)); }
 function productActivePromo(p, dateStr) { const pr = promoForProduct(p && p.id, dateStr); return promoActive(pr, dateStr) ? pr : null; }
-// v201: ממצא "מחיר שונה" נשמר בתוך התעודה כטקסט קפוא ברגע הסריקה, יחד עם
-// המספרים שמאחוריו. עד v200 מבצע פעיל יכול היה לא להיתפס, והמחיר ה"צפוי"
-// שנשמר היה המחיר המלא — כלומר הממצא האשים את הספק במחיר שהיה נכון לגמרי.
-// כאן בודקים את הממצא השמור מחדש: אם המחיר הצפוי בניכוי מבצע שפעיל בתאריך
-// התעודה שווה בדיוק למחיר שהודפס בנייר — לא היה הפרש מחיר, ומחזירים את
-// המבצע שמסביר אותו. שום נתון שמור לא משתנה; רק ההצגה והסטטוס נגזרים מחדש.
 // ===== מבצעי מרכזת (סוף חודש) — לא בתעודה, מחושב בדוח החודשי =====
 function monthEndPromoForProduct(pid, dateStr, promotionCatalog) {
   if (!pid) return null;
@@ -6205,10 +6199,8 @@ function buildReconcileData() {
   const day = activeReceiptDate();
   reconcileData = receiptList.map(it => {
     const p = products.find(x => x.id === it.productId);
-    // מחיר השורה נשאר בדיוק מלא (5.7408, 10.962) — בברמן המחיר נגזר
-    // ממחירון×הנחה ועיגול פר-שורה מזיז את הסכום בכמה אגורות על תעודה
-    // שלמה, והפער שהבלש מקבל כבר לא מתאים לאף מחיר מוצר. העיגול נעשה
-    // פעם אחת בסוף הסכימה (reconcileNoteInc), כמו בקליטה וכמו בנייר.
+    // v124: המחיר על שורת ההשוואה אינו משמש להשוואה — הוא נשלח כמו שהוא לשרת
+    // הניתוח (aiAnalyzePayload, חוזה השרת לא השתנה) ונכלל בחתימת השורות של הסריקה.
     const base = Number(p && p.price) || 0;
     const pr = promoForProduct(it.productId, day);
     const on = promoTriggered(pr, day);
@@ -12171,8 +12163,10 @@ function mtxPromoUnit(pid, day, unit) {
 // 12.00). כדי שחודש ישן יחושב במחיר שהיה בו, המחיר נושא תאריך תחילה:
 // product.priceHistory = [{from: 'YYYY-MM-DD', price, source}]. בלי היסטוריה
 // המחיר הוא product.price, ולכן מוצר שלא נגעו בו מתנהג בדיוק כמו קודם.
-// product.price עצמו אינו משתנה מאימוץ מחיר חשבונית: הקליטה עדיין משווה את
-// התעודה לפי מחירי המוצר, ו-9.50 על פרנה היה מפיל כל תעודה עם פרנה.
+// v124: product.price הוא מחיר החשבונית הבסיסי — מה שחל לפני הרשומה המתוארכת
+// הראשונה. שינוי מחיר (אימוץ במרכזת, או "מחיר מהחשבונית" + "בתוקף מ" בכרטיס
+// המוצר) מוסיף רשומה ל-priceHistory ואינו נוגע ב-product.price, כך שחודש שכבר
+// עבר אינו מתומחר מחדש בשקט. ההנחה מהמחירון היא תצוגה נגזרת בלבד.
 function priceAt(p, day) {
   if (!p) return 0;
   const d = String(day || todayStr()).slice(0, 10);
@@ -12190,6 +12184,23 @@ function priceAt(p, day) {
 function invoiceUnitAt(p, day) {
   const pu = mtxPromoUnit(p && p.id, day, priceAt(p, day));
   return { unit: Math.round(pu.unit * 1000) / 1000, rebate: pu.rebate, promo: pu.promo };
+}
+// v124: המחיר שברמן מחייבת היום, וההנחה מהמחירון שנגזרת ממנו (תצוגה בלבד)
+function productPriceNow(p) { return priceAt(p, todayStr()); }
+function productInvoiceDiscountPct(p, day) {
+  const list = productListPrice(p), price = priceAt(p, day || todayStr());
+  return list > 0 && price > 0 ? Math.round((1 - price / list) * 10000) / 100 : null;
+}
+// "₪9.03 עד 31.8.26 · ₪9.50 מ-1.9.26" — כל המחירים המתוארכים, לתצוגה
+function productPriceHistoryText(p) {
+  const list = (Array.isArray(p && p.priceHistory) ? p.priceHistory : []).filter(h => h && h.from && Number(h.price) > 0)
+    .slice().sort((a, b) => String(a.from).localeCompare(String(b.from)));
+  if (!list.length) return '';
+  const dayBefore = from => { const t = new Date(String(from) + 'T12:00:00'); t.setDate(t.getDate() - 1); return t.toLocaleDateString('en-CA'); };
+  const parts = [];
+  if (Number(p.price) > 0) parts.push('₪' + fmt3(Number(p.price)) + ' עד ' + dDisp(dayBefore(list[0].from)));
+  list.forEach(h => parts.push('₪' + fmt3(Number(h.price)) + ' מ-' + dDisp(h.from)));
+  return parts.join(' · ');
 }
 // הוספת רשומת מחיר להיסטוריה; אותו תאריך תחילה — דריסה, לא כפילות
 function priceHistoryWith(p, from, price, source) {
@@ -14104,7 +14115,8 @@ function calcReceiptRange() {
 function priceRowHtml(p) {
   const op = promoForProduct(p.id, todayStr());
   const onNow = promoActive(op, todayStr());
-  const mop = promos.find(pr => pr.type === 'monthEnd' && Array.isArray(pr.productIds) && pr.productIds.indexOf(p.id) !== -1) || null;
+  // v124: כל מבצע מחיר-קבוע הוא מבצע מרכזת (monthEndPromoForProduct), גם כשנשמר כ-'receipt'
+  const mop = promos.find(pr => (pr.type === 'monthEnd' || promoFixedPrice(pr) > 0) && Array.isArray(pr.productIds) && pr.productIds.indexOf(p.id) !== -1) || null;
   const mOn = promoActive(mop, todayStr());
   const cat = pricingCatOf(p);
   const rec = recForProduct(p);
@@ -14119,9 +14131,12 @@ function priceRowHtml(p) {
         : '<span class="text-[10px] text-slate-300 font-bold">' + (cat ? ((Number(cat.pct) || 0) === 0 ? 'מחיר מפוקח — ללא המלצה' : 'הזן מחיר עלות') : 'שייך קטגוריה למחיר מומלץ') + '</span>') +
       '</div>'
     : '');
-  const discBadge = productDiscountSet(p)
-    ? '<span class="text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full px-2 py-0.5">' + productDiscountPct(p) + '%</span>'
-    : '<span class="text-[10px] font-black bg-amber-50 text-amber-700 border border-amber-300 rounded-full px-2 py-0.5">אחוז לא נקבע</span>';
+  // v124: מחיר החשבונית שבתוקף היום, וההנחה מהמחירון נגזרת ממנו (תצוגה)
+  const priceNow = productPriceNow(p), discNow = productInvoiceDiscountPct(p);
+  const discBadge = discNow != null && discNow > 0
+    ? '<span class="text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full px-2 py-0.5">' + discNow + '%</span>'
+    : '';
+  const nextPrice = (Array.isArray(p.priceHistory) ? p.priceHistory : []).filter(h => h && h.from > todayStr() && Number(h.price) > 0).sort((a, b) => String(a.from).localeCompare(String(b.from)))[0];
   // מחיר הקופה (כולל מע״מ) לצד כל מוצר. שדה ריק מסומן בכתום —
   // תזכורת לבדוק את המחיר בקופה ולעדכן, עד שכל המאגר יתמלא.
   const posLine = '<div class="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-slate-100">' +
@@ -14137,9 +14152,9 @@ function priceRowHtml(p) {
         '<div class="text-[11px] text-slate-400 mt-0.5">קוד <b class="text-slate-600">' + htmlEscape(productCode(p) || '—') + '</b> · <i class="fa-solid fa-barcode"></i> ' + htmlEscape(p.barcode || 'ללא ברקוד') + ' <i class="fa-solid fa-pen text-[9px] opacity-60"></i></div>' +
       '</button>' +
       '<div class="shrink-0 text-left">' +
-        '<div class="text-[10px] text-slate-400 font-bold">מחירון ₪' + fmt3(productListPrice(p) || p.price || 0) + ' ' + discBadge + '</div>' +
-        '<div class="flex items-center gap-1 justify-end mt-0.5"><span class="text-[10px] text-slate-400 font-bold">אחוז:</span><input data-role="pct-set" data-id="' + p.id + '" type="text" inputmode="decimal" value="' + (productDiscountSet(p) ? p.discountPct : '') + '" placeholder="—" class="w-14 h-8 text-center text-sm font-black border-2 border-slate-200 rounded-lg outline-none focus:border-blue-500"><span class="text-slate-400 text-xs font-bold">%</span></div>' +
-        '<div class="text-xs font-black text-amber-800 mt-0.5">סופי: ₪' + fmt3(Number(p.price) || 0) + '</div>' +
+        '<div class="text-[10px] text-slate-400 font-bold">מחירון ₪' + fmt3(productListPrice(p)) + ' ' + discBadge + '</div>' +
+        '<div class="text-xs font-black text-amber-800 mt-0.5">בחשבונית: ₪' + fmt3(priceNow) + '</div>' +
+        (nextPrice ? '<div class="text-[10px] font-black text-blue-700">מ-' + dDisp(nextPrice.from) + ': ₪' + fmt3(Number(nextPrice.price)) + '</div>' : '') +
       '</div>' +
     '</div>' +
     ((op || mop)
@@ -14187,10 +14202,12 @@ function pricingCatOf(p) {
   if (!p || !p.category) return null;
   return pricingCats.find(c => c.id === p.category) || null;
 }
+// v124: העלות היא מחיר החשבונית שבתוקף היום (priceHistory), לא רק הבסיס
 function recForProduct(p) {
   const c = pricingCatOf(p);
-  if (!c || (Number(c.pct) || 0) === 0 || p.price == null || p.price === '') return null;
-  return recommendedPrice(Number(p.price) || 0, c.pct, depositIncFor(p));
+  const cost = productPriceNow(p);
+  if (!c || (Number(c.pct) || 0) === 0 || !(cost > 0)) return null;
+  return recommendedPrice(cost, c.pct, depositIncFor(p));
 }
 function savePricingCats() {
   if (!db) return;
@@ -14465,22 +14482,6 @@ function posImportCardHtml() {
     '<button data-role="pos-import-close" class="btn-tap w-full bg-white border border-slate-300 text-slate-600 rounded-xl py-2 font-black text-xs mt-2">בטל</button></div>';
 }
 // עריכת אחוז ההנחה הקבועה משורת המוצר — מעדכן מיידית את המחיר הסופי
-function saveDiscountPct(id, val) {
-  const raw = (val || '').toString().replace(',', '.').trim();
-  const num = parseFloat(raw);
-  const p = products.find(x => x.id === id); if (!p) return;
-  const discountSet = raw !== '' && isFinite(num) && num >= 0 && num < 100;
-  const discountPct = discountSet ? Math.round(num * 100) / 100 : 0;
-  if (raw !== '' && !discountSet) { showToast('אחוז ההנחה חייב להיות בין 0 ל-99.99', null, null, 2600); return; }
-  p.discountPct = discountPct; p.discountSet = discountSet;
-  recomputeProductFinal(p);
-  clearTimeout(priceTimers[id]);
-  const data = { discountPct, discountSet, price: p.price };
-  priceTimers[id] = setTimeout(() => {
-    if (db) runCloudTaskSilent('save product discount pct', { op: 'update', path: dataPath('products', id), data, operationId: makeOperationId('pct') });
-    if (currentView === 'prices') refreshPricesList(priceQuery);
-  }, 700);
-}
 function openPriceScanner() { scanPurpose = 'price'; openScanner(); }
 function handlePriceScan(code) {
   code = (code || '').trim(); if (!code) return;
@@ -14509,23 +14510,31 @@ function refreshProdWholeCartonUi() {
     }
   }
 }
+// v124: ההנחה מהמחירון נגזרת ממחיר החשבונית (תצוגה בלבד), ולצידה המחירים המתוארכים
 function updateProdFinalHint() {
   const out = $('prod_finalHint'); if (!out) return;
-  const lp = parseFloat((($('prod_price') || {}).value || '').toString().replace(',', '.'));
-  const rawPct = (($('prod_discount') || {}).value || '').toString().replace(',', '.').trim();
-  const pct = parseFloat(rawPct);
-  if (!(lp > 0)) { out.textContent = ''; return; }
-  if (rawPct === '' || !isFinite(pct)) {
-    out.textContent = 'אחוז לא נקבע → מחיר סופי = מחירון: ₪' + fmt3(lp);
-    return;
+  const num = id => parseFloat(((($(id) || {}).value || '') + '').replace(',', '.'));
+  const lp = num('prod_price'), inv = num('prod_invoicePrice');
+  const from = (($('prod_priceFrom') || {}).value || '').trim() || todayStr();
+  const p = priceEditId ? products.find(x => x.id === priceEditId) : null;
+  const parts = [];
+  if (lp > 0 && inv > 0) parts.push('הנחה מהמחירון: ' + (Math.round((1 - inv / lp) * 10000) / 100) + '%');
+  else if (lp > 0 && !p) parts.push('בלי מחיר בחשבונית — מחירון מלא (₪' + fmt3(lp) + ') עד שיוזן');
+  if (p && inv > 0) {
+    const cur = priceAt(p, from);
+    if (Math.round(inv * 1000) !== Math.round(cur * 1000)) parts.push('מ-' + dDisp(from) + ': ₪' + fmt3(cur) + ' ← ₪' + fmt3(inv) + (from > todayStr() ? ' (יחול בעתיד)' : ''));
   }
-  out.textContent = 'מחיר סופי לחיוב: ₪' + fmt3(finalUnitPrice(lp, pct)) + ' (מחירון ₪' + fmt3(lp) + ' פחות ' + pct + '%)';
+  const hist = p ? productPriceHistoryText(p) : '';
+  if (hist) parts.push(hist);
+  out.textContent = parts.join(' · ');
 }
 function updateProdRecHint() {
   const out = $('prod_recHint'), catId = ($('prod_category') || {}).value || '';
   if (!out) return;
   const cat = pricingCats.find(c => c.id === catId);
-  const cost = parseFloat((($('prod_price') || {}).value || '').replace(',', '.'));
+  // v124: העלות היא מחיר החשבונית; בלעדיו — המחירון
+  const inv = parseFloat((($('prod_invoicePrice') || {}).value || '').replace(',', '.'));
+  const cost = inv > 0 ? inv : parseFloat((($('prod_price') || {}).value || '').replace(',', '.'));
   if (!cat) { out.classList.add('hidden'); return; }
   if ((Number(cat.pct) || 0) === 0) {
     out.textContent = cat.name + ' — ללא המלצת מחיר (0%)'; out.classList.remove('hidden'); return;
@@ -14580,9 +14589,11 @@ function openProdModal(p, fromScan, presetCode, afterSaveTarget) {
   $('prod_name').value = p ? (p.name || '') : '';
   $('prod_barcode').value = p ? (p.barcode || '') : (presetCode || '');
   syncProductBarcodeDuplicate(false);
-  $('prod_price').value = (p && p.listPrice != null) ? p.listPrice : ((p && p.price != null) ? p.price : '');
+  $('prod_price').value = (p && p.listPrice != null) ? p.listPrice : '';
   $('prod_posPrice').value = (p && p.posPrice != null) ? p.posPrice : '';
-  $('prod_discount').value = (p && p.discountSet && p.discountPct != null) ? p.discountPct : '';
+  // v124: מחיר החשבונית שבתוקף היום; שינוי נרשם מ"בתוקף מ" (ברירת מחדל: היום)
+  $('prod_invoicePrice').value = p && productPriceNow(p) > 0 ? String(Math.round(productPriceNow(p) * 1000) / 1000) : '';
+  $('prod_priceFrom').value = todayStr();
   updateProdFinalHint();
   $('prod_creditPrice').value = (p && Number(p.creditPrice) > 0) ? p.creditPrice : '';
   $('prod_deposit').value = (p && Number(p.deposit) > 0) ? p.deposit : '';
@@ -14676,13 +14687,13 @@ async function saveProd(again) {
   const num = parseFloat(raw);
   if (raw !== '' && !(num >= 0)) { showToast('מחיר המחירון אינו תקין', null, null, 2500); $('prod_price').focus(); return; }
   const listPrice = (raw === '') ? null : r2(num);
-  const rawPct = ($('prod_discount').value || '').toString().replace(',', '.').trim();
-  const pctNum = parseFloat(rawPct);
-  if (rawPct !== '' && !(pctNum >= 0 && pctNum < 100)) { showToast('אחוז ההנחה חייב להיות בין 0 ל-99.99, או ריק אם עדיין לא נקבע', null, null, 3200); $('prod_discount').focus(); return; }
-  const discountSet = rawPct !== '';
-  const discountPct = discountSet ? Math.round(pctNum * 100) / 100 : 0;
-  // המחיר הסופי נגזר תמיד מהמחירון והאחוז — הוא מה שמחייב בתעודות
-  const price = listPrice == null ? null : finalUnitPrice(listPrice, discountPct);
+  // v124: מחיר החשבונית (3 ספרות, כמו בחשבונית ברמן) ותאריך התחילה שלו
+  const rawInv = ($('prod_invoicePrice').value || '').toString().replace(',', '.').trim();
+  const numInv = parseFloat(rawInv);
+  if (rawInv !== '' && !(numInv > 0)) { showToast('מחיר החשבונית צריך להיות מספר חיובי, או ריק', null, null, 2800); $('prod_invoicePrice').focus(); return; }
+  const invoicePrice = rawInv === '' ? null : Math.round(numInv * 1000) / 1000;
+  const priceFrom = (($('prod_priceFrom') || {}).value || '').trim() || todayStr();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(priceFrom)) { showToast('תאריך "בתוקף מ" אינו תקין', null, null, 2600); $('prod_priceFrom').focus(); return; }
   const rawPos = ($('prod_posPrice').value || '').toString().replace(',', '.').trim();
   const numPos = parseFloat(rawPos);
   if (rawPos !== '' && !(numPos > 0)) { showToast('מחיר הקופה צריך להיות מספר חיובי או ריק', null, null, 2800); $('prod_posPrice').focus(); return; }
@@ -14741,7 +14752,20 @@ async function saveProd(again) {
   const existingForPos = id ? products.find(x => x.id === id) : null;
   const posChanged = !existingForPos || (existingForPos.posPrice != null ? existingForPos.posPrice : null) !== posPrice;
   const posPriceAt = posChanged ? Date.now() : (Number(existingForPos && existingForPos.posPriceAt) || null);
-  const data = { code: codeVal, name, barcode, listPrice, discountPct, discountSet, price, posPrice, posPriceAt, creditPrice, deposit, billingPackId, billingPackSize, category, average, defaultUnit, defaultUnitUpdatedAt: unitUpdatedAt, boxSize, hidden, quickCrate };
+  const data = { code: codeVal, name, barcode, posPrice, posPriceAt, creditPrice, deposit, billingPackId, billingPackSize, category, average, defaultUnit, defaultUnitUpdatedAt: unitUpdatedAt, boxSize, hidden, quickCrate };
+  // v124: מחירון נשמר כשהוזן (שדה ריק במוצר קיים אינו מוחק אותו). מוצר חדש:
+  // product.price = מחיר החשבונית, ובלעדיו המחירון המלא. מוצר קיים: product.price
+  // אינו נכתב — שינוי מחיר נרשם ב-priceHistory מ"בתוקף מ", וחודש שעבר נשאר כמו שהיה.
+  // discountPct/discountSet אינם נכתבים יותר (ההנחה נגזרת).
+  if (listPrice != null || !id) data.listPrice = listPrice;
+  if (!id) data.price = invoicePrice != null ? invoicePrice : listPrice;
+  else if (invoicePrice != null) {
+    const cur = existingForPos;
+    if (cur && Math.round(invoicePrice * 1000) !== Math.round(priceAt(cur, priceFrom) * 1000)) {
+      if (!(Number(cur.price) > 0) && !(Array.isArray(cur.priceHistory) && cur.priceHistory.length)) data.price = invoicePrice;
+      else data.priceHistory = priceHistoryWith(cur, priceFrom, invoicePrice, { method: 'editor', at: Date.now() });
+    }
+  }
   clearTimeout(priceTimers[docId]); clearTimeout(avgTimers[docId]); clearTimeout(boxTimers[docId]);
   let savedProduct = null;
   if (id) {
@@ -14863,7 +14887,7 @@ function promoRowHtml(pr, state) {
   return '<button data-role="promo-open" data-id="' + pr.id + '" class="btn-tap block w-full ' + cardBg + ' rounded-2xl border ' + cardBorder + ' p-4 shadow-sm text-right mb-2.5">' +
     '<div class="flex items-center justify-between gap-2">' +
       '<div class="min-w-0"><div class="font-black ' + nameColor + ' truncate">' + promoTitle(pr) + '</div>' +
-      '<div class="text-xs text-slate-400 mt-0.5">' + (pr.type === 'monthEnd' ? '<span class="' + meColor + ' font-black">מרכזת</span> · ' : '') + cnt + ' מוצרים · ' + (pr.start || '?') + ' ← ' + (pr.end || '?') + '</div></div>' +
+      '<div class="text-xs text-slate-400 mt-0.5">' + ((pr.type === 'monthEnd' || promoFixedPrice(pr) > 0) ? '<span class="' + meColor + ' font-black">מרכזת</span> · ' : '') + cnt + ' מוצרים · ' + (pr.start || '?') + ' ← ' + (pr.end || '?') + '</div></div>' +
       '<div class="shrink-0 text-left"><div class="' + pctBadge + ' font-black px-2.5 py-1 rounded-full text-sm">' + promoLabel(pr) + '</div>' + statusBadge + '</div>' +
     '</div>' +
     (promoMinUnitsP(pr) > 1 ? '<div class="text-[11px] text-slate-500 font-bold mt-1"><i class="fa-solid fa-layer-group"></i> מינימום ' + promoMinLabelP(pr) + ' מהסל</div>' : '') +
@@ -14893,7 +14917,7 @@ function signMaxCost(promoId) {
   const pr = promos.find(p => p.id === promoId);
   if (!pr || !Array.isArray(pr.productIds)) return 0;
   let mx = 0;
-  pr.productIds.forEach(pid => { const p = products.find(x => x.id === pid); const c = Number(p && p.price) || 0; if (c > mx) mx = c; });
+  pr.productIds.forEach(pid => { const p = products.find(x => x.id === pid); const c = p ? productPriceNow(p) : 0; if (c > mx) mx = c; });
   return mx;
 }
 // עיגול "חנות": מעל .2 → .9 של אותו שקל (13.3→13.9); .2 ומטה → .9 הקודם (13.2→12.9)
@@ -15003,7 +15027,7 @@ function signInternalBasis(s) {
   let best = null, bestCost = 0;
   ((s && s.productIds) || []).forEach(pid => {
     const p = products.find(x => x.id === pid);
-    const c = Number(p && p.price) || 0;
+    const c = p ? productPriceNow(p) : 0;
     if (c > 0 && c > bestCost) { best = p; bestCost = c; }
   });
   if (!best) return null;
@@ -15015,7 +15039,7 @@ function signInternalUnitPrice(b, m) {
 function internalSignShelfPrice(p) {
   const categorized = shelfRecommendedPrice(p);
   if (categorized > 0) return categorized;
-  const cost = Number(p && p.price) || 0;
+  const cost = p ? productPriceNow(p) : 0;
   return cost > 0 ? recommendedPrice(cost, Number(signMarginPct) || 0, depositIncFor(p)) : null;
 }
 function signRecommendInternal(s) {
@@ -15113,7 +15137,7 @@ function refreshSignProdList(q) {
   if (q) list = list.filter(p => productSearchMatch(p, q));
   box.innerHTML = list.map(p => {
     const inIt = ids.indexOf(p.id) !== -1;
-    const cost = Number(p.price) || 0;
+    const cost = productPriceNow(p);
     return '<button data-role="sign-prod-toggle" data-id="' + htmlEscape(p.id) + '" class="btn-tap w-full flex items-center justify-between gap-2 p-2.5 rounded-xl border-2 ' + (inIt ? 'border-amber-500 bg-amber-50' : 'border-slate-100 bg-white') + '">' +
       '<div class="min-w-0 text-right"><div class="font-bold text-slate-800 text-sm truncate">' + htmlEscape(p.name || '(ללא שם)') + '</div>' +
       '<div class="text-[10px] text-slate-400">' + htmlEscape(p.barcode || 'ללא ברקוד') + (cost > 0 ? ' · עלות ₪' + fmtMoney(cost) : '') + '</div></div>' +
@@ -17231,7 +17255,8 @@ $('prod_wholeCarton').addEventListener('change', refreshProdWholeCartonUi);
 $('prod_category').addEventListener('change', updateProdRecHint);
 $('prod_billingPack').addEventListener('change', refreshBillingPackUi);
 $('prod_price').addEventListener('input', () => { updateProdRecHint(); updateProdFinalHint(); });
-$('prod_discount').addEventListener('input', updateProdFinalHint);
+$('prod_invoicePrice').addEventListener('input', () => { updateProdRecHint(); updateProdFinalHint(); });
+$('prod_priceFrom').addEventListener('change', updateProdFinalHint);
 $('prod_deposit').addEventListener('input', updateProdRecHint);
 $('prod_cartonPrice').addEventListener('input', calcCartonPrice);
 $('prod_cartonUnits').addEventListener('input', calcCartonPrice);
@@ -17277,7 +17302,6 @@ app.addEventListener('input', (e) => {
   if (role === 'sign-if') { if (signMaker) { const s = signInternalCurrent(); if (s) s[t.dataset.f] = t.value; } return; }
   if (role === 'sign-f') { if (signMaker) { const si = parseInt(t.dataset.id, 10); const s = signMaker.signs[si]; if (s) { s[t.dataset.f] = t.value; drawSignCanvas(); const rc = $('signRec_' + si); if (rc) rc.innerHTML = signRecInnerHtml(s, si); } } return; }
   if (role === 'pos-set') { savePosPrice(t.dataset.id, t.value); return; }
-  if (role === 'pct-set') { saveDiscountPct(t.dataset.id, t.value); return; }
   if (role === 'pcat-name') { const i = parseInt(t.dataset.i, 10); if (pricingCats[i]) { pricingCats[i].name = t.value; savePricingCats(); } return; }
   if (role === 'pcat-pct') { const i = parseInt(t.dataset.i, 10); let v = t.value.replace(/[^0-9]/g, ''); if (v !== t.value) t.value = v; if (pricingCats[i]) { pricingCats[i].pct = v ? parseInt(v, 10) : 0; savePricingCats(); } return; }
   if (role === 'cat-set') {
