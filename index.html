@@ -848,7 +848,7 @@ let sharedReceiptScanToken = null;
 const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '117'; // v117: מבצע המרכזת יורד בשורת המוצר בפירוט החודשי — כמו בחשבונית
+const APP_VERSION = '118'; // v118: המרכזת החודשית לפי כמויות × מחיר הלקוח; היסטוריית מחירים ושורות חשבונית
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -862,6 +862,7 @@ const BACKUP_COLLECTIONS = [
   { name: 'returns', label: 'היסטוריית חזרות' },
   { name: 'receipts', label: 'תעודות קליטה' },
   { name: 'promos', label: 'מבצעים' },
+  { name: 'invoices', label: 'חשבוניות חודשיות (שורות שהוקלדו)' },
   { name: 'notes', label: 'הערות' },
   { name: 'settings', label: 'הגדרות מחירים' },
   { name: 'config', label: 'הגדרות מערכת' },
@@ -1136,7 +1137,7 @@ function switchReturnsSlot(slot) {
   saveReturnsDraft();
   renderReturns();
 }
-function parseNoteVal(v) {
+function parseNoteVal(v, decimals) {
   let s = (v || '').toString().trim().replace(/\s/g, '').replace(/[^0-9.,]/g, '');
   if (!s) return null;
   const comma = s.lastIndexOf(','), dot = s.lastIndexOf('.');
@@ -1152,7 +1153,8 @@ function parseNoteVal(v) {
     s = s.slice(0, last).replace(/\./g, '') + s.slice(last);
   }
   const n = Number(s);
-  return isFinite(n) && n > 0 ? r2(n) : null;
+  // v118: מחירי לקוח בחשבונית מודפסים בשלוש ספרות (5.741) — שם אסור לעגל לאגורות
+  return isFinite(n) && n > 0 ? (decimals === 3 ? Math.round(n * 1000) / 1000 : r2(n)) : null;
 }
 let receiptNoteUnits = null; // ברמן: עוגן "סה\"כ כללי" — סך היחידות המודפס בתחתית התעודה
 let receiptNoteLines = null; // ברמן: עוגן "סה\"כ שורות" המודפס בתחתית התעודה
@@ -2198,6 +2200,8 @@ function actionTitleFromCloud(actionName, task) {
     'toggle product hidden': ['product', 'הסתרת/הצגת מוצר'],
     'save app config': ['settings', 'שמירת הגדרות מערכת'],
     'create promo': ['promo', 'יצירת מבצע'],
+    'adopt invoice price': ['price', 'אימוץ מחיר מהחשבונית'],
+    'assign invoice alt code': ['product', 'שיוך קוד חשבונית למוצר'],
     'save promo': ['promo', 'שמירת מבצע'],
     'restore from trash': ['restore', 'שחזור מסל מחזור'],
     'delete trash item': ['delete', 'מחיקה לצמיתות מסל מחזור'],
@@ -2221,6 +2225,13 @@ function actionDetailsFromCloud(actionName, task) {
   if (actionName === 'split credit note to shortage' || actionName === 'cancel credit note split') return (task && task.summary) || '';
   if (actionName === 'add product' || actionName === 'create product' || actionName === 'save product') return d.name ? ('מוצר: ' + d.name + ' · מומלץ: ' + (d.average || 0) + ' · ברירת מחדל: ' + (d.defaultUnit === 'unit' ? 'יחידות' : 'ארגז')) : '';
   if (actionName === 'sync legacy default units') return 'סונכרנו בחירות ארגז/יחידה מהמכשיר הזה לענן';
+  if (actionName === 'adopt invoice price' || actionName === 'assign invoice alt code') {
+    const id = task && task.path ? task.path[task.path.length - 1] : '';
+    const p = products.find(x => x.id === id);
+    if (actionName === 'assign invoice alt code') return (p ? p.name + ' · ' : '') + 'קודים בחשבונית: ' + ((d.altCodes || []).join(', '));
+    const last = (d.priceHistory || []).slice(-1)[0];
+    return (p ? p.name + ' · ' : '') + (last ? '₪' + fmt3(last.price) + ' מ-' + dDisp(last.from) : '');
+  }
   if (actionName === 'add contact') return d.name ? ('איש קשר: ' + d.name + ' · ' + (d.phone || '')) : '';
   if (actionName === 'toggle product hidden') {
     const id = task && task.path ? task.path[task.path.length - 1] : '';
@@ -4254,13 +4265,15 @@ async function saveReturnItemsEdit(opts) {
   setView(origin);
   showToast((r && r.credited && noteTotal != null && !moneyGap && !lineGap) ? 'הפריטים עודכנו — הזיכוי סוגר בדיוק ✓' : 'הפריטים עודכנו ✓', null, null, 2800);
 }
-async function pruneCollection(name, keep) {
+async function pruneCollection(name, keep, minAgeDays) {
   if (!db) return;
   try {
     const snap = await getDocs(query(collection(db, 'artifacts', appId, 'public', 'data', name), orderBy('timestamp', 'desc')));
     const docs = snap.docs.filter(dd => {
       if (name !== 'returns') return true;
       const r = dd.data();
+      // v118: החזרות הן הכמויות השליליות של החודש במרכזת — לא נוגעים בהן לפני גיל
+      if (minAgeDays && (Date.now() - (Number(r.timestamp) || 0)) < minAgeDays * 86400000) return false;
       return r.credited && r.creditStatus !== 'open' && !creditAllocationList(r).length && !returnCreditNotes(r).length && !returnCarriedNotes(r).length;
     });
     if (docs.length <= keep) return;
@@ -4275,7 +4288,7 @@ let prunedOnce = false;
 function pruneOnLoad() {
   if (prunedOnce) return; prunedOnce = true;
   pruneCollection('history', 20);
-  pruneCollection('returns', 20);
+  pruneCollection('returns', 20, 400);
   pruneCollection('actionLog', 300); // יומן פעולות — שומר 300 אחרונות, מציג 100
   pruneTrash(90);
 }
@@ -17601,60 +17614,44 @@ function setRangeMonth(offset) {
   if (t) t.value = last.toLocaleDateString('en-CA');
   calcReceiptRange();
 }
-// סה"כ ההנחות של התקופה — ההפרש בין מחירי המחירון למחירים ששולמו בפועל.
-// מקביל לשורת "כוללת הנחות בסך" שבחשבונית ברמן. החזרות מקטינות את ההנחות.
-// שורת "כוללת הנחות בסך" בחשבונית = (מחירון − מה ששולם) × כמות נטו.
-// v58: מוצר במבצע אינו נספר בה. בחשבונית המחירון שלו מוחלף במחיר המבצע —
-// אומת בשורה 324 בחשבונית יוני (7.20/7.200) ובשורה 1220 ביולי (10.00/10.000) —
-// ולכן ההפרש שלו שם הוא אפס. קודם נספר גם הפרש המחירון וגם קיזוז המבצע
-// מעליו, וזה ניפח את הצפי בכל חודש עם מבצע (באוגוסט: ₪432 מול סיבולת ₪5).
+
+// שורת "כוללת הנחות בסך" בחשבונית = (מחירון − מחיר הלקוח) × כמות שחויבה.
+// v58: מוצר במבצע אינו נספר בה — בחשבונית המחירון שלו מוחלף במחיר המבצע.
 function rangeDiscountsTotal(d) {
-  let disc = 0, lineCount = 0, promoLines = 0, promoEx = 0;
-  const lineList = (l) => {
-    if (Number(l.listPrice) > 0) return Number(l.listPrice);
-    const p = products.find(x => x.id === l.productId);
-    return productListPrice(p) || Number(l.basePrice) || Number(l.unitPrice) || 0;
-  };
-  const addLine = (l, sign, dateStr) => {
-    if (!l || l.isDeposit) return;
-    lineCount++;
-    const gap = (lineList(l) - (Number(l.unitPrice) || 0)) * (Number(l.qty) || 0) * sign;
-    if (monthEndPromoForProduct(l.productId, dateStr)) { promoLines++; promoEx += gap; return; }
+  const m = d.matrix || rangeProductMatrixData(d);
+  let disc = 0, promoLines = 0, promoEx = 0;
+  m.list.forEach(r => {
+    if (!r.product || !(r.list > 0)) return;
+    const gap = (r.list - (r.expectedQty ? r.amount / r.expectedQty : priceAt(r.product, d.to || todayStr()))) * r.expectedQty;
+    if (r.promo) { promoLines++; promoEx += gap; return; }
     disc += gap;
-  };
-  (d.recs || []).forEach(r => { const dd = storedReceiptDate(r); (r.items || []).forEach(l => addLine(l, 1, dd)); });
-  (d.rets || []).forEach(r => { const dd = String((r && (r.docDate || r.date)) || '').slice(0, 10); (r.items || []).forEach(l => addLine(l, -1, dd)); });
-  return { disc: r2(disc), lineCount, promoLines, promoEx: r2(promoEx) };
+  });
+  return { disc: r2(disc), lineCount: m.list.length, promoLines, promoEx: r2(promoEx) };
 }
+
 // פירוט יומי — מול עמוד הסיכום של חשבונית ברמן (שורה לכל תעודה: מס', סכום, כמות)
 function rangeDailyHtml(d) {
+  const m = d.matrix || rangeProductMatrixData(d);
   const days = {};
-  const bucket = (day) => (days[day] = days[day] || { recs: 0, rets: 0, ex: 0, units: 0 });
+  const bucket = (day) => (days[day] = days[day] || { recs: 0, rets: 0, numbers: [] });
   (d.recs || []).forEach(r => {
-    const t = bucket(storedReceiptDate(r));
-    t.recs++;
-    t.ex = r2(t.ex + receiptPayableBaseEx(r));
-    (r.items || []).forEach(l => { if (!l.isDeposit) t.units += Number(l.qty) || 0; });
+    const t = bucket(storedReceiptDate(r)); t.recs++;
+    (Array.isArray(r.noteParts) ? r.noteParts : []).forEach(n => { if (n && n.number) t.numbers.push(String(n.number)); });
   });
-  (d.rets || []).forEach(r => {
-    const t = bucket(String(r.docDate || r.date || todayStr()));
-    t.rets++;
-    t.ex = r2(t.ex - returnTotals(r).ex);
-    (r.items || []).forEach(l => { if (!l.isDeposit) t.units -= Number(l.qty) || 0; });
-  });
+  (d.rets || []).forEach(r => { bucket(String(r.docDate || r.date || todayStr())).rets++; });
   const keys = Object.keys(days).sort();
   if (!keys.length) return '';
   const rows = keys.map(day => {
-    const t = days[day];
+    const t = days[day], a = m.dayAgg[day] || { q: 0, r: 0, amount: 0 };
     return '<div class="flex items-center justify-between gap-2 py-1 border-b border-slate-100 last:border-0 text-xs font-bold text-slate-700">' +
       '<span class="shrink-0">' + dDisp(day) + '</span>' +
-      '<span class="text-slate-400">' + t.recs + ' תעודות' + (t.rets ? ' · ' + t.rets + ' החזרות' : '') + '</span>' +
-      '<span class="text-slate-500">' + t.units + ' יח׳</span>' +
-      '<span class="font-black text-slate-800 shrink-0">₪' + fmtMoney(t.ex) + '</span>' +
+      '<span class="text-slate-400 truncate">' + t.recs + ' תעודות' + (t.rets ? ' · ' + t.rets + ' החזרות' : '') + (t.numbers.length ? ' · ' + t.numbers.join(', ') : '') + '</span>' +
+      '<span class="text-slate-500 shrink-0">' + mtxQty(a.q - a.r) + ' יח׳</span>' +
+      '<span class="font-black text-slate-800 shrink-0">₪' + fmtMoney(a.amount) + '</span>' +
     '</div>';
   }).join('');
   return '<details class="mt-3 bg-white border-2 border-slate-200 rounded-xl overflow-hidden"><summary class="cursor-pointer p-3 font-black text-sm text-slate-700"><i class="fa-solid fa-calendar-days text-blue-600"></i> פירוט יומי — להשוואה מול עמוד הסיכום של החשבונית</summary>' +
-    '<div class="px-3 pb-3"><div class="text-[11px] text-slate-400 font-bold mb-1">בעמוד הסיכום של חשבונית ברמן יש שורה לכל תעודה (מס׳ תעודה, סכום וכמות) — השווה יום מול יום</div>' + rows + '</div></details>';
+    '<div class="px-3 pb-3"><div class="text-[11px] text-slate-400 font-bold mb-1">בעמוד הסיכום של חשבונית ברמן יש שורה לכל תעודה (מס׳ תעודה, סכום וכמות). הכמות והסכום כאן הם לפי מחיר הלקוח, לא לפי הסכום שהודפס בתעודה — השווה יום מול יום</div>' + rows + '</div></details>';
 }
 // ===== פירוט לפי מוצר × ימים — במבנה החשבונית המפורטת של ברמן =====
 // בחשבונית יש שורה לכל פריט (ממוינת לפי קוד פריט כמחרוזת: 101, 119, 1231, 207…),
@@ -17686,52 +17683,135 @@ function mtxPromoUnit(pid, day, unit) {
   const rebate = monthEndUnitRebate(pr, unit);
   return { unit: unit - rebate, rebate, promo: true };
 }
+
+// ===== v118: מחיר עם היסטוריה =====
+// החשבונית החודשית של ברמן מחושבת ממחיר ללקוח לכל מוצר, לא ממה שהמסופון
+// הדפיס בתעודה (פרנה: 9.03 בתעודה, 9.50 בחשבונית; לחמנ' עננים 10: 14.28 מול
+// 12.00). כדי שחודש ישן יחושב במחיר שהיה בו, המחיר נושא תאריך תחילה:
+// product.priceHistory = [{from: 'YYYY-MM-DD', price, source}]. בלי היסטוריה
+// המחיר הוא product.price, ולכן מוצר שלא נגעו בו מתנהג בדיוק כמו קודם.
+// product.price עצמו אינו משתנה מאימוץ מחיר חשבונית: הקליטה עדיין משווה את
+// התעודה לפי מחירי המוצר, ו-9.50 על פרנה היה מפיל כל תעודה עם פרנה.
+function priceAt(p, day) {
+  if (!p) return 0;
+  const d = String(day || todayStr()).slice(0, 10);
+  let best = null;
+  (Array.isArray(p.priceHistory) ? p.priceHistory : []).forEach(h => {
+    if (!h || !h.from || !(Number(h.price) > 0) || String(h.from) > d) return;
+    if (!best || String(h.from) >= String(best.from)) best = h;
+  });
+  return best ? Number(best.price) : (Number(p.price) || 0);
+}
+// המחיר שהחשבונית מדפיסה לשורה ביום נתון: מחיר הלקוח, ואחריו מבצע המרכזת (v117).
+// ברמן מחזיקה את מחיר הלקוח בשלוש ספרות אחרי הנקודה ומכפילה אותו בכמות
+// (412 × 5.741 = 2,365.29 בחשבונית ספטמבר, לא 412 × 5.7408 = 2,365.21), ולכן
+// גם כאן המחיר מעוגל לשלוש ספרות לפני ההכפלה.
+function invoiceUnitAt(p, day) {
+  const pu = mtxPromoUnit(p && p.id, day, priceAt(p, day));
+  return { unit: Math.round(pu.unit * 1000) / 1000, rebate: pu.rebate, promo: pu.promo };
+}
+// הוספת רשומת מחיר להיסטוריה; אותו תאריך תחילה — דריסה, לא כפילות
+function priceHistoryWith(p, from, price, source) {
+  const list = (Array.isArray(p && p.priceHistory) ? p.priceHistory : []).filter(h => h && h.from && String(h.from) !== String(from));
+  list.push({ from: String(from), price: Number(price), source: source || null });
+  list.sort((a, b) => String(a.from).localeCompare(String(b.from)));
+  return list;
+}
+// חוסר שזוכה, ביחידות לכל מוצר. v118: עדיין אין רישום ביחידות (יגיע בשלב 5),
+// ולכן הכלל הוא ירושה: זיכוי כספי שנרשם על התעודה (shortCreditNotes) מכסה את
+// שורות החוסר לפי הסדר, במחיר הלקוח של אותו יום, עם סיבולת עיגול של 5 אג׳
+// ליחידה — הספק מעגל שורה-שורה, וזיכוי שנופל באגורות הוא זיכוי מלא (v66).
+function receiptCreditedShortUnits(rc, day) {
+  const out = {};
+  const units = Array.isArray(rc && rc.shortCreditUnits) ? rc.shortCreditUnits : [];
+  units.forEach(x => { if (x && x.productId && Number(x.qty) > 0) out[x.productId] = (out[x.productId] || 0) + Number(x.qty); });
+  if (units.length) return out;
+  let left = (Array.isArray(rc && rc.shortCreditNotes) ? rc.shortCreditNotes : []).reduce((a, x) => a + (Number(x && x.amount) || 0), 0);
+  if (!(left > 0)) return out;
+  (rc && rc.items || []).forEach(l => {
+    if (!l || l.isDeposit || l.noteQty == null) return;
+    const short = (Number(l.noteQty) || 0) - (Number(l.qty) || 0);
+    if (!(short > 0)) return;
+    // תעודת הזיכוי יוצאת מאותו מסופון ובאותו מחיר כמו תעודת המשלוח, ולכן הזיכוי
+    // הכספי נמדד במחיר שנשמר על השורה; מחיר הלקוח רק כנפילה לאחור
+    const p = (l.productId && products.find(x => x.id === l.productId)) || null;
+    const unit = Number(l.unitPrice) || priceAt(p, day) || 0;
+    if (!(unit > 0)) return;
+    const covered = Math.min(short, Math.floor((left + 0.05 * short) / unit + 1e-9));
+    if (covered > 0) { out[l.productId] = (out[l.productId] || 0) + covered; left -= covered * unit; }
+  });
+  return out;
+}
+// ===== v118: ארבע כמויות לכל מוצר — זה מה שהחשבונית מחשבת =====
+// billed    = מה שהמסופון הדפיס (noteQty, או qty כשהן שוות). זה מה שברמן תחייב.
+// received  = מה שנספר בפועל.
+// credited  = מה שברמן זיכתה: החזרות שאומתו (noteQty) וחוסרים שזוכו.
+// sent      = מה שהחזרנו (בלי שורות שהועברו קדימה, שנספרות בתעודה שאליה עברו).
+// צפוי בחשבונית = billed − credited. מה שמגיע = received − sent. ההפרש ביניהם
+// הוא חוסר שטרם זוכה, ביחידות קודם ובכסף אחר כך. הכסף נגזר תמיד ממחיר הלקוח
+// של אותו יום (invoiceUnitAt), לא ממחיר השורה בתעודה — זה בדיוק מה שהחשבונית
+// עושה, ולכן שורה כאן אמורה להיות זהה לשורה בנייר.
 function rangeProductMatrixData(d) {
   const wd = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ש'];
   const dayAgg = {}, rows = {};
-  const agg = (day) => (dayAgg[day] = dayAgg[day] || { q: 0, amount: 0 });
+  const agg = (day) => (dayAgg[day] = dayAgg[day] || { q: 0, r: 0, amount: 0, fair: 0 });
+  const isDepositLine = l => !!(l.isDeposit || String(l.productId || '').indexOf('deposit-') === 0);
   const rowFor = (l) => {
     const p = (l.productId && products.find(x => x.id === l.productId)) ||
       products.find(x => (l.barcode && x.barcode === l.barcode) || x.name === l.name) || null;
     const key = (p && p.id) || l.productId || ('n:' + String(l.name || ''));
     if (!rows[key]) rows[key] = {
-      key, pid: (p && p.id) || l.productId || '',
+      key, pid: (p && p.id) || l.productId || '', product: p,
       code: p ? productCode(p) : '',
       name: (p && p.name) || l.name || '(ללא שם)',
       list: p ? (productListPrice(p) || Number(p.price) || 0) : (Number(l.listPrice) || 0),
-      days: {}, qty: 0, rets: 0, amount: 0, rebate: 0, prices: [], promo: false
+      days: {}, billed: 0, received: 0, credited: 0, sent: 0, qty: 0, rets: 0,
+      amount: 0, fair: 0, inc: 0, billedEx: 0, creditedEx: 0, rebate: 0, prices: [], promo: false
     };
     return rows[key];
   };
+  // מוצר שאינו במאגר (נמחק, או שורה ידנית ישנה) — נשאר רק המחיר שנשמר על השורה
+  const unitFor = (row, l, day) => row.product ? invoiceUnitAt(row.product, day) : { unit: Number(l.unitPrice) || 0, rebate: 0, promo: false };
   const cell = (row, day) => (row.days[day] = row.days[day] || { q: 0, r: 0, amt: 0 });
-  let promoEx = 0;
   (d.recs || []).forEach(rc => {
     const day = storedReceiptDate(rc);
+    const vat = 1 + vatRateForDoc(rc);
+    const creditedShort = receiptCreditedShortUnits(rc, day);
     (rc.items || []).forEach(l => {
-      if (!l || l.isDeposit) return;
-      const qty = Number(l.qty) || 0;
+      if (!l || isDepositLine(l)) return;
+      const received = Number(l.qty) || 0;
+      const billed = l.noteQty != null ? (Number(l.noteQty) || 0) : received;
       const row = rowFor(l);
-      const pu = mtxPromoUnit(row.pid, day, Number(l.unitPrice) || 0);
-      const unit = pu.unit;
-      const c = cell(row, day); c.q += qty; c.amt += unit * qty;
-      row.qty += qty; row.amount += unit * qty; row.rebate += pu.rebate * qty; promoEx += pu.rebate * qty;
-      const a = agg(day); a.q += qty; a.amount += unit * qty;
-      if (qty > 0 && row.prices.indexOf(unit) === -1) row.prices.push(unit);
+      const pu = unitFor(row, l, day);
+      const credited = Math.min(Math.max(0, billed - received), creditedShort[row.pid] || 0);
+      if (credited) creditedShort[row.pid] -= credited;
+      const expected = billed - credited;
+      const c = cell(row, day); c.q += billed; c.r += credited; c.amt += pu.unit * expected;
+      row.billed += billed; row.received += received; row.credited += credited;
+      row.amount += pu.unit * expected; row.fair += pu.unit * received; row.inc += pu.unit * expected * vat;
+      row.billedEx += pu.unit * billed; row.creditedEx += pu.unit * credited; row.rebate += pu.rebate * expected;
+      const a = agg(day); a.q += billed; a.r += credited; a.amount += pu.unit * expected; a.fair += pu.unit * received;
+      if (expected > 0 && row.prices.indexOf(pu.unit) === -1) row.prices.push(pu.unit);
       if (pu.promo) row.promo = true;
     });
   });
   (d.rets || []).forEach(rt => {
     const day = String((rt && (rt.docDate || rt.date)) || todayStr()).slice(0, 10);
+    const vat = 1 + vatRateForDoc(rt);
+    const credited = !!(rt && rt.credited);
     (rt.items || []).forEach(l => {
-      if (!l || l.isDeposit) return;
+      if (!l || isDepositLine(l)) return;
       const qty = Number(l.qty) || 0;
       const row = rowFor(l);
-      // יחידת מבצע שחזרה מזוכה במחיר המבצע (v57), ולכן גם כאן היא יורדת אליו
-      const pu = mtxPromoUnit(row.pid, day, mtxReturnUnit(l));
-      const unit = pu.unit;
-      const c = cell(row, day); c.r += qty; c.amt -= unit * qty;
-      row.qty -= qty; row.rets += qty; row.amount -= unit * qty; row.rebate -= pu.rebate * qty; promoEx -= pu.rebate * qty;
-      const a = agg(day); a.q -= qty; a.amount -= unit * qty;
+      const pu = unitFor(row, l, day);
+      // שורה שהועברה קדימה נספרת כ"נשלחה" רק בתעודת המקור; הזיכוי עליה נרשם כאן
+      const sent = l.carried ? 0 : qty;
+      const cred = credited ? (l.noteQty != null ? (Number(l.noteQty) || 0) : qty) : 0;
+      const c = cell(row, day); c.r += cred; c.amt -= pu.unit * cred;
+      row.sent += sent; row.credited += cred;
+      row.amount -= pu.unit * cred; row.fair -= pu.unit * sent; row.inc -= pu.unit * cred * vat;
+      row.creditedEx += pu.unit * cred; row.rebate -= pu.rebate * cred;
+      const a = agg(day); a.r += cred; a.amount -= pu.unit * cred; a.fair -= pu.unit * sent;
       if (pu.promo) row.promo = true;
     });
   });
@@ -17747,32 +17827,40 @@ function rangeProductMatrixData(d) {
     if (b.code) return 1;
     return a.name.localeCompare(b.name, 'he');
   });
-  const total = list.reduce((s, r) => s + r.amount, 0);
-  list.forEach(r => { r.rebate = r2(r.rebate); });
-  return { days, list, dayAgg, total: r2(total), promoEx: r2(promoEx) };
+  let total = 0, fairTotal = 0, totalInc = 0, promoEx = 0, billedEx = 0, creditedEx = 0, openUnits = 0, overUnits = 0;
+  list.forEach(r => {
+    r.expectedQty = r.billed - r.credited;
+    r.fairQty = r.received - r.sent;
+    r.qty = r.expectedQty; r.rets = r.credited;
+    r.openUnits = r.expectedQty - r.fairQty;
+    r.unit = r.expectedQty ? r.amount / r.expectedQty : 0;
+    total += r.amount; fairTotal += r.fair; totalInc += r.inc; promoEx += r.rebate; billedEx += r.billedEx; creditedEx += r.creditedEx;
+    if (r.openUnits > 0) openUnits += r.openUnits; else if (r.openUnits < 0) overUnits -= r.openUnits;
+    r.amount = r2(r.amount); r.fair = r2(r.fair); r.rebate = r2(r.rebate); r.billedEx = r2(r.billedEx); r.creditedEx = r2(r.creditedEx);
+  });
+  return { days, list, dayAgg, total: r2(total), fairTotal: r2(fairTotal), totalInc: r2(totalInc), promoEx: r2(promoEx), billedEx: r2(billedEx), creditedEx: r2(creditedEx), openUnits, overUnits };
 }
+
 // סימוני השורה שמסבירים מראש פער צפוי מול הנייר
 function mtxRowFlags(row) {
   return (row.promo ? ' <i class="fa-solid fa-tag text-rose-500" title="מוצר במבצע מרכזת — המחיר בשורה הוא מחיר המבצע, כמו בחשבונית"></i>' : '') +
-    (row.prices.length > 1 ? ' <i class="fa-solid fa-arrow-right-arrow-left text-amber-600" title="המחיר השתנה במהלך התקופה — בחשבונית מופיע מחיר אחד לשורה"></i>' : '');
+    (row.prices.length > 1 ? ' <i class="fa-solid fa-arrow-right-arrow-left text-amber-600" title="המחיר השתנה בתוך התקופה (מחיר חדש או מבצע שהתחיל באמצע) — בחשבונית מופיע מחיר אחד לשורה"></i>' : '') +
+    (row.openUnits > 0 ? ' <span class="text-[10px] font-black text-rose-600">חסר ' + mtxQty(row.openUnits) + ' יח׳ שטרם זוכה</span>' : '') +
+    (row.openUnits < 0 ? ' <span class="text-[10px] font-black text-amber-600">+' + mtxQty(-row.openUnits) + ' יח׳ מעבר לחיוב</span>' : '');
 }
 // התצוגה הראשית: שורה לכל מוצר על כל רוחב המסך, בלי גלילה לצדדים —
-// אותן שלוש עמודות שמשווים מול הנייר (כמות, מחיר סופי, לתשלום).
+// אותן שלוש עמודות שמשווים מול הנייר (כמות, מחיר, לתשלום), במחירי החשבונית.
 // לחיצה על מוצר פותחת מתחתיו את הימים שלו, אחד מתחת לשני.
 function rangeProductListHtml(m) {
-  // ארבע עמודות קבועות בכל השורות — הכותרת, המוצרים, הימים שנפתחים והסיכום —
-  // כדי שאפשר יהיה לרוץ עם העין למטה בעמודה אחת, כמו בנייר. align-items:stretch
-  // כדי שקווי ההפרדה האנכיים יגיעו מקצה השורה ועד קצהּ.
   const COLS = 'display:grid;grid-template-columns:1fr 3.1rem 3.4rem 4.7rem;align-items:stretch';
   const numCell = 'flex flex-col items-center justify-center text-center border-r border-slate-200 px-0.5';
   const head = '<div class="text-[11px] font-black text-slate-400 bg-slate-50 border-y-2 border-slate-200 rounded-t-lg" style="' + COLS + '">' +
     '<div class="py-1 pr-1">פריט</div><div class="' + numCell + ' py-1">כמות</div>' +
     '<div class="' + numCell + ' py-1">מחיר</div><div class="' + numCell + ' py-1">לתשלום</div></div>';
   const rows = m.list.map(row => {
-    const avg = row.qty ? row.amount / row.qty : 0;
     const dayHead = '<div class="text-[10px] font-black text-slate-400 border-b border-slate-200" style="' + COLS + '">' +
-      '<div class="py-0.5 pr-1">יום</div><div class="' + numCell + ' py-0.5">כמות</div>' +
-      '<div class="' + numCell + ' py-0.5">חזרו</div><div class="' + numCell + ' py-0.5">₪</div></div>';
+      '<div class="py-0.5 pr-1">יום</div><div class="' + numCell + ' py-0.5">חויב</div>' +
+      '<div class="' + numCell + ' py-0.5">זוכה</div><div class="' + numCell + ' py-0.5">₪</div></div>';
     const dayRows = m.days.filter(x => row.days[x.day]).map(x => {
       const c = row.days[x.day];
       return '<div class="text-[12px] font-bold text-slate-600 border-b border-slate-200 last:border-b-0" style="' + COLS + '">' +
@@ -17782,24 +17870,26 @@ function rangeProductListHtml(m) {
         '<div class="' + numCell + ' py-1 font-black text-slate-700" dir="ltr">' + fmtMoney(c.amt) + '</div>' +
       '</div>';
     }).join('');
+    const subQty = (row.credited || row.received !== row.billed)
+      ? '<div class="text-[10px] font-bold text-slate-400">חויב ' + mtxQty(row.billed) + (row.credited ? ' · זוכה ' + mtxQty(row.credited) : '') + (row.received !== row.billed ? ' · נספר ' + mtxQty(row.received) : '') + '</div>' : '';
     return '<details class="border-b border-slate-200">' +
       '<summary class="cursor-pointer" style="' + COLS + '">' +
         '<div class="min-w-0 py-1.5 pl-1 pr-1">' +
           '<div class="text-[13px] font-black text-slate-800" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">' +
             '<i class="fa-solid fa-chevron-down text-[9px] text-slate-300 hist-chevron"></i> ' + htmlEscape(row.name) + mtxRowFlags(row) + '</div>' +
-          '<div class="text-[11px] font-bold text-slate-400">קוד ' + htmlEscape(row.code || '—') + (row.list ? ' · מחירון ' + fmt3(row.list) : '') + '</div>' +
+          '<div class="text-[11px] font-bold text-slate-400">קוד ' + htmlEscape(row.code || '—') + (row.list ? ' · מחירון ' + fmt3(row.list) : '') + '</div>' + subQty +
         '</div>' +
-        '<div class="' + numCell + ' py-1.5 leading-tight" dir="ltr"><div class="text-[13px] font-black text-slate-800">' + mtxQty(row.qty) + '</div>' +
-          (row.rets ? '<div class="text-[11px] font-black text-rose-600">-' + mtxQty(row.rets) + '</div>' : '') + '</div>' +
-        '<div class="' + numCell + ' py-1.5 text-[13px] font-bold text-slate-600" dir="ltr">' + fmt3(avg) + '</div>' +
+        '<div class="' + numCell + ' py-1.5 leading-tight" dir="ltr"><div class="text-[13px] font-black text-slate-800">' + mtxQty(row.expectedQty) + '</div>' +
+          (row.credited ? '<div class="text-[11px] font-black text-rose-600">-' + mtxQty(row.credited) + '</div>' : '') + '</div>' +
+        '<div class="' + numCell + ' py-1.5 text-[13px] font-bold text-slate-600" dir="ltr">' + fmt3(row.unit) + '</div>' +
         '<div class="' + numCell + ' py-1.5 text-[13px] font-black text-slate-900" dir="ltr">' + fmtMoney(row.amount) + '</div>' +
       '</summary>' +
       '<div class="bg-slate-50 rounded-lg px-1 py-1 mb-1.5 border border-slate-200">' +
-        '<div class="text-[10px] font-bold text-slate-400 pb-0.5 pr-1">הימים של הפריט הזה בתקופה</div>' + dayHead + dayRows +
+        '<div class="text-[10px] font-bold text-slate-400 pb-0.5 pr-1">הימים של הפריט הזה בתקופה · חויב לפי התעודה, זוכה = החזרות וחוסרים שזוכו</div>' + dayHead + dayRows +
       '</div>' +
     '</details>';
   }).join('');
-  const totQty = m.list.reduce((s, r) => s + r.qty, 0);
+  const totQty = m.list.reduce((s, r) => s + r.expectedQty, 0);
   const foot = '<div class="text-[13px] font-black text-slate-900 bg-slate-100 border-b-2 border-slate-300 rounded-b-lg" style="' + COLS + '">' +
     '<div class="py-1.5 pr-1">סה״כ</div>' +
     '<div class="' + numCell + ' py-1.5" dir="ltr">' + mtxQty(totQty) + '</div>' +
@@ -17807,6 +17897,7 @@ function rangeProductListHtml(m) {
     '<div class="' + numCell + ' py-1.5" dir="ltr">' + fmtMoney(m.total) + '</div></div>';
   return head + rows + foot;
 }
+
 // הטבלה הרחבה — כל החודש בפריסה אחת, בדיוק כמו הנייר. גוללת לצדדים
 // (31 ימים אינם נכנסים לרוחב טלפון), ולכן היא מאחורי כפתור ולא ברירת המחדל.
 function rangeProductGridHtml(m) {
@@ -17832,7 +17923,6 @@ function rangeProductGridHtml(m) {
         (c.r ? '<div class="text-[10px] font-black text-rose-600">-' + mtxQty(c.r) + '</div>' : '') +
       '</td>';
     }).join('');
-    const avg = row.qty ? row.amount / row.qty : 0;
     return '<tr class="even:bg-slate-50/60">' +
       '<th scope="row" class="px-2 py-1.5 text-right font-bold text-slate-700 border-l border-b border-slate-200 bg-white" style="' + stickyName + '">' +
         '<div class="truncate max-w-[10rem]">' + htmlEscape(row.name) + mtxRowFlags(row) + '</div>' +
@@ -17840,18 +17930,18 @@ function rangeProductGridHtml(m) {
       '</th>' +
       '<td dir="ltr" class="' + cellCls + ' text-slate-400 font-bold">' + (row.list ? fmt3(row.list) : '—') + '</td>' +
       cells +
-      '<td dir="ltr" class="' + cellCls + ' font-black text-slate-800 bg-amber-50/60 leading-tight">' + mtxQty(row.qty) + (row.rets ? '<div class="text-[10px] font-black text-rose-600">-' + mtxQty(row.rets) + '</div>' : '') + '</td>' +
-      '<td dir="ltr" class="' + cellCls + ' font-bold text-slate-600 bg-amber-50/60">' + fmt3(avg) + '</td>' +
+      '<td dir="ltr" class="' + cellCls + ' font-black text-slate-800 bg-amber-50/60 leading-tight">' + mtxQty(row.expectedQty) + (row.credited ? '<div class="text-[10px] font-black text-rose-600">-' + mtxQty(row.credited) + '</div>' : '') + '</td>' +
+      '<td dir="ltr" class="' + cellCls + ' font-bold text-slate-600 bg-amber-50/60">' + fmt3(row.unit) + '</td>' +
       '<td dir="ltr" class="' + cellCls + ' font-black text-slate-800 bg-amber-50/60">' + fmtMoney(row.amount) + '</td>' +
     '</tr>';
   }).join('');
-  const totQty = m.list.reduce((s, r) => s + r.qty, 0);
+  const totQty = m.list.reduce((s, r) => s + r.expectedQty, 0);
   const footCell = cellCls + ' font-black text-slate-700';
   const foot =
     '<tr class="bg-slate-100 border-t-2 border-slate-300">' +
       '<th scope="row" class="px-2 py-1.5 text-right font-black text-slate-700 border-l border-b border-slate-200 bg-slate-100" style="' + stickyName + '">סה״כ כמות</th>' +
       '<td class="' + cellCls + '"></td>' +
-      m.days.map(x => '<td dir="ltr" class="' + footCell + '">' + mtxQty(m.dayAgg[x.day].q) + '</td>').join('') +
+      m.days.map(x => '<td dir="ltr" class="' + footCell + '">' + mtxQty(m.dayAgg[x.day].q - m.dayAgg[x.day].r) + '</td>').join('') +
       '<td dir="ltr" class="' + footCell + ' text-slate-900">' + mtxQty(totQty) + '</td><td class="' + cellCls + '"></td><td class="' + cellCls + '"></td>' +
     '</tr>' +
     '<tr class="bg-slate-100">' +
@@ -17865,30 +17955,24 @@ function rangeProductGridHtml(m) {
     '<summary class="cursor-pointer p-2.5 font-black text-[13px] text-slate-600"><i class="fa-solid fa-table-cells text-slate-400"></i> טבלה מלאה — כל החודש בפריסה אחת (גוללת לצדדים)</summary>' +
     '<div class="px-2 pb-2">' +
       '<div class="overflow-auto max-h-[70vh] border border-slate-300 rounded-lg bg-white">' +
-        // border-separate ולא collapse: תא sticky בטבלה עם border-collapse מאבד
-        // את המסגרת שלו בספארי, וכאן כל תא נושא מסגרת בשני צדדים ולכן הרשת שלמה
         '<table class="text-[12px]" style="width:max-content;border-collapse:separate;border-spacing:0"><thead>' + head + '</thead><tbody>' + body + '</tbody><tfoot>' + foot + '</tfoot></table>' +
       '</div>' +
     '</div></details>';
 }
+
 function rangeProductMatrixHtml(d) {
-  const m = rangeProductMatrixData(d);
+  const m = d.matrix || rangeProductMatrixData(d);
   if (!m.days.length || !m.list.length) return '';
-  const gap = r2(m.total - (Number(d.netEx) || 0));
-  // v116: מבצעי המרכזת כבר בתוך השורות, ולכן הם לא מסבירים עוד פער מול הסכום לתשלום
   const promoNote = m.promoEx !== 0
-    ? '<div class="text-[11px] text-rose-700/80 font-bold mt-2 bg-rose-50 rounded-lg px-2 py-1.5"><i class="fa-solid fa-tag"></i> שורות מוצרי המבצע מוצגות במחיר המבצע, כמו בחשבונית — סה״כ ₪' + fmtMoney(Math.abs(m.promoEx)) + ' פחות ממה שחויב בתעודות' +
+    ? '<div class="text-[11px] text-rose-700/80 font-bold mt-2 bg-rose-50 rounded-lg px-2 py-1.5"><i class="fa-solid fa-tag"></i> שורות מוצרי המבצע מוצגות במחיר המבצע, כמו בחשבונית — סה״כ ₪' + fmtMoney(Math.abs(m.promoEx)) + ' פחות ממחיר הלקוח' +
       m.list.filter(r => r.rebate).map(r => '<div class="pr-3">· ' + htmlEscape(r.name) + ': −₪' + fmtMoney(r.rebate) + '</div>').join('') + '</div>'
     : '';
-  const gapNote = Math.abs(gap) > 0.05
-    ? '<div class="text-[11px] text-slate-500 font-bold mt-2 bg-slate-50 rounded-lg px-2 py-1.5"><i class="fa-solid fa-circle-info text-slate-400"></i> סה״כ הפירוט ₪' + fmtMoney(m.total) + ' מול ₪' + fmtMoney(d.netEx) + ' לתשלום — הפרש של ₪' + fmtMoney(Math.abs(gap)) + '. כאן מחושב מחיר × כמות לפי השורות (כולל מחירי מבצע); הסכום לתשלום מביא בחשבון גם סכום נייר שהוקלד, הפרשים פתוחים וזיכויי ספק.</div>'
-    : '';
-  return '<details class="mt-3 bg-white border-2 border-slate-200 rounded-xl overflow-hidden"><summary class="cursor-pointer p-3 font-black text-sm text-slate-700"><i class="fa-solid fa-list-ul text-amber-600"></i> פירוט לפי מוצר — כמו בחשבונית המפורטת</summary>' +
+  return '<details open class="mt-3 bg-white border-2 border-slate-200 rounded-xl overflow-hidden"><summary class="cursor-pointer p-3 font-black text-sm text-slate-700"><i class="fa-solid fa-list-ul text-amber-600"></i> פירוט לפי מוצר — כמו בחשבונית המפורטת</summary>' +
     '<div class="px-3 pb-3">' +
-      '<div class="text-[11px] text-slate-400 font-bold mb-2">שורה לכל פריט לפי קוד, כמו סדר החשבונית — השווה כמות, מחיר וסכום מול הנייר. לחיצה על פריט פותחת את הימים שלו.</div>' +
+      '<div class="text-[11px] text-slate-400 font-bold mb-2">שורה לכל פריט לפי קוד, כמו סדר החשבונית. הכמות היא מה שחויב בתעודות פחות מה שזוכה; המחיר הוא מחיר הלקוח (ומבצע מרכזת) ביום התעודה, לא המחיר שהודפס בתעודה. לחיצה על פריט פותחת את הימים שלו.</div>' +
       rangeProductListHtml(m) +
       '<div class="text-[11px] text-slate-400 font-bold mt-2">' + m.list.length + ' פריטים · ' + m.days.length + ' ימי תנועה · <i class="fa-solid fa-tag text-rose-500"></i> מבצע (במחיר המבצע) · <i class="fa-solid fa-arrow-right-arrow-left text-amber-600"></i> המחיר השתנה בתקופה</div>' +
-      promoNote + gapNote +
+      promoNote +
       rangeProductGridHtml(m) +
     '</div></details>';
 }
@@ -19271,163 +19355,290 @@ function receiptPayableBaseEx(rc) {
   if (rc && rc.noteTotalInc != null && rc.noteTotalInc !== '' && Number.isFinite(paper) && paper >= 0) return r2(Math.max(0, paper - (Number(di.shortValRaw) || 0)));
   return r2(Math.max(0, (Number(rc && rc.totalExVat) || 0) - (Number(di.overVal) || 0)));
 }
+
+// ===== v118: המרכזת החודשית — מקור אמת אחד =====
+// עד v117 הסכום החודשי נבנה מסכומי הנייר של התעודות (פחות חוסרים, פחות קיזוזי
+// מרכזת שהוקפאו בכל תעודה, פחות זיכויי ספק), בעוד הטבלה לפי מוצר חישבה
+// כמות × מחיר, ושני המספרים נפרדו זה מזה. ברמן מחשבת את החשבונית בדיוק כמו
+// הטבלה: כמות נטו לכל מוצר × מחיר ללקוח. מעכשיו הסכום החודשי הוא סכום
+// הטבלה, ושום סכום מודפס מתעודת משלוח אינו נכנס אליו.
+// תעודות וחזרות של הטווח: מה שכבר בזיכרון (100 התעודות האחרונות) ועוד מה
+// שנטען במיוחד לטווח (rangeDocsCache), כדי שחודש ישן יישאר שלם.
+let rangeDocsCache = { key: '', receipts: [], returns: [] };
+function rangeDocsMerged(name) {
+  const base = name === 'returns' ? returns : receipts;
+  const extra = rangeDocsCache[name] || [];
+  if (!extra.length) return base;
+  const seen = new Set(base.map(x => x.id));
+  return base.concat(extra.filter(x => x && x.id && !seen.has(x.id)));
+}
+// ===== v118: שורות החשבונית — מוקלדות לצד הטבלה ונשמרות לפי חודש =====
+// invoices/{YYYY-MM} = { month, totalEx, lines: { [code]: { qty, price } } }.
+// ההשוואה שורה-שורה זמינה רק כשהטווח הוא חודש קלנדרי אחד, כי כך החשבונית בנויה.
+let monthInvoice = null;
+let monthInvoiceTimer = null;
+function rangeMonthKey(from, to) {
+  if (!from || !to) return '';
+  const a = String(from).slice(0, 7), b = String(to).slice(0, 7);
+  return a === b && String(from).slice(8, 10) === '01' ? a : '';
+}
+async function loadMonthInvoice(month) {
+  if (!month) { monthInvoice = null; return false; }
+  if (monthInvoice && monthInvoice.month === month) return false;
+  let data = {};
+  if (db) { try { const snap = await getDoc(doc(db, ...dataPath('invoices', month))); if (snap.exists()) data = snap.data() || {}; } catch (e) { console.error(e); } }
+  monthInvoice = { month, totalEx: data.totalEx != null ? Number(data.totalEx) : null, lines: data.lines && typeof data.lines === 'object' ? data.lines : {} };
+  return true;
+}
+function saveMonthInvoice() {
+  if (!monthInvoice || !monthInvoice.month) return;
+  clearTimeout(monthInvoiceTimer);
+  const payload = { month: monthInvoice.month, totalEx: monthInvoice.totalEx, lines: cloneSafe(monthInvoice.lines), updatedAt: Date.now() };
+  monthInvoiceTimer = setTimeout(() => {
+    runCloudTaskSilent('save invoice lines', { op: 'set', path: dataPath('invoices', payload.month), data: payload, merge: true, operationId: makeOperationId('inv') });
+  }, 700);
+}
+function setInvoiceLine(code, field, raw) {
+  if (!monthInvoice) return;
+  code = String(code || '').trim(); if (!code) return;
+  // שורה של החזרות בלבד מודפסת בכמות שלילית (1220 בחשבונית מאי: −4)
+  const negative = /^\s*[-−]/.test(String(raw || ''));
+  let v = parseNoteVal(raw, field === 'price' ? 3 : 2);
+  if (v != null && negative && field === 'qty') v = -v;
+  const line = { ...(monthInvoice.lines[code] || {}) };
+  if (v == null) delete line[field]; else line[field] = v;
+  if (line.qty == null && line.price == null) delete monthInvoice.lines[code]; else monthInvoice.lines[code] = line;
+  saveMonthInvoice();
+}
+// המוצר שאליו שייכת שורת חשבונית: לפי קוד, או לפי קוד חלופי שברמן נתנה לאותו
+// מוצר (458 "חלומית ארוזה" ו-4581 "חלומית ארוזה עגולה" על אותו ברקוד).
+function productForInvoiceCode(code) {
+  code = String(code || '').trim();
+  return products.find(p => productCode(p) === code) || products.find(p => Array.isArray(p.altCodes) && p.altCodes.map(String).indexOf(code) !== -1) || null;
+}
+function invoiceCodesOfRow(row) {
+  const codes = [];
+  if (row.code) codes.push(String(row.code));
+  (row.product && Array.isArray(row.product.altCodes) ? row.product.altCodes : []).forEach(c => { if (codes.indexOf(String(c)) === -1) codes.push(String(c)); });
+  return codes;
+}
+// השוואת שורה לחשבונית: 'ok' | 'qty' | 'price' | 'amount' | 'none'
+function invoiceRowCompare(row, inv) {
+  const lines = invoiceCodesOfRow(row).map(code => ({ code, ...(inv.lines[code] || {}) })).filter(l => l.qty != null || l.price != null);
+  if (!lines.length) return { status: 'none', lines };
+  const invQty = lines.reduce((a, l) => a + (Number(l.qty) || 0), 0);
+  const invAmount = r2(lines.reduce((a, l) => a + (Number(l.qty) || 0) * (Number(l.price) || 0), 0));
+  const out = { lines, invQty, invAmount, qtyDiff: r2(invQty - row.expectedQty), amountDiff: r2(invAmount - row.amount) };
+  if (Math.abs(out.qtyDiff) > 0.001) out.status = 'qty';
+  // ברמן מדפיסה את מחיר הלקוח בשלוש ספרות אחרי הנקודה ומכפילה אותו; הבדל
+  // בספרה השלישית (5.7408 מול 5.741) כבר מזיז את השורה באגורות
+  else if (lines.length === 1 && lines[0].price != null && Math.round(Number(lines[0].price) * 1000) !== Math.round(row.unit * 1000)) { out.status = 'price'; out.invPrice = Number(lines[0].price); }
+  else if (Math.abs(out.amountDiff) > 0.05) out.status = 'amount';
+  else out.status = 'ok';
+  return out;
+}
+function invoiceAdoptMonths(month) {
+  const out = [];
+  const [y, m] = month.split('-').map(Number);
+  for (let i = 0; i < 4; i++) {
+    const dt = new Date(y, m - 1 - i, 1);
+    const key = dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0');
+    out.push({ from: key + '-01', label: dt.toLocaleDateString('he-IL', { month: 'long', year: 'numeric' }) });
+  }
+  out.push({ from: todayStr(), label: 'מהיום' });
+  return out;
+}
+function invoiceChipHtml(row, cmp, month) {
+  const id = 'invChip_' + row.key.replace(/[^a-zA-Z0-9_-]/g, '_');
+  let inner;
+  if (cmp.status === 'none') inner = '<span class="text-slate-400">לא הוקלד</span>';
+  else if (cmp.status === 'ok') inner = '<span class="text-emerald-700"><i class="fa-solid fa-circle-check"></i> תואם</span>';
+  else if (cmp.status === 'qty') inner = '<span class="text-rose-700"><i class="fa-solid fa-triangle-exclamation"></i> כמות: אצלנו ' + mtxQty(row.expectedQty) + ' · בחשבונית ' + mtxQty(cmp.invQty) + ' (' + (cmp.qtyDiff > 0 ? '+' : '') + mtxQty(cmp.qtyDiff) + ')</span>';
+  else if (cmp.status === 'price') {
+    const opts = invoiceAdoptMonths(month).map(o => '<option value="' + o.from + '">' + htmlEscape(o.label) + '</option>').join('');
+    inner = '<span class="text-amber-700"><i class="fa-solid fa-tag"></i> מחיר: אצלנו ' + fmt3(row.unit) + ' · בחשבונית ' + fmt3(cmp.invPrice) + '</span>' +
+      (row.product ? '<span class="inline-flex items-center gap-1 mr-2"><select data-role="inv-from" data-key="' + htmlEscape(row.key) + '" class="text-[11px] font-bold bg-white border border-amber-300 rounded-lg px-1 py-0.5">' + opts + '</select>' +
+        '<button data-role="inv-adopt" data-pid="' + htmlEscape(row.product.id) + '" data-price="' + cmp.invPrice + '" data-key="' + htmlEscape(row.key) + '" class="btn-tap bg-amber-500 text-white rounded-lg px-2 py-0.5 text-[11px] font-black">אמץ את מחיר החשבונית</button></span>' : '');
+  } else inner = '<span class="text-amber-700"><i class="fa-solid fa-circle-info"></i> סכום: אצלנו ₪' + fmtMoney(row.amount) + ' · בחשבונית ₪' + fmtMoney(cmp.invAmount) + '</span>';
+  return '<div id="' + id + '" class="text-[11px] font-bold mt-0.5">' + inner + '</div>';
+}
+function refreshInvoiceChips() {
+  if (!monthInvoice || !lastRangeData || !lastRangeData.matrix) return;
+  lastRangeData.matrix.list.forEach(row => {
+    const el = document.getElementById('invChip_' + row.key.replace(/[^a-zA-Z0-9_-]/g, '_'));
+    if (el) el.outerHTML = invoiceChipHtml(row, invoiceRowCompare(row, monthInvoice), monthInvoice.month);
+  });
+  const sum = $('invSummary'); if (sum) sum.innerHTML = invoiceSummaryText(lastRangeData.matrix, monthInvoice);
+}
+function invoiceSummaryText(m, inv) {
+  let ok = 0, typed = 0;
+  m.list.forEach(row => { const c = invoiceRowCompare(row, inv); if (c.status !== 'none') typed++; if (c.status === 'ok') ok++; });
+  const extra = invoiceExtraLines(m, inv);
+  return typed ? (ok + ' מתוך ' + typed + ' שורות שהוקלדו תואמות' + (extra.length ? ' · ' + extra.length + ' שורות בחשבונית בלי תנועה אצלנו' : '')) : 'הקלד כמות ומחיר מהחשבונית ליד כל שורה; ההשוואה מתעדכנת מיד';
+}
+// שורות חשבונית שאין להן שורה בטבלה: מוצר בלי תנועה החודש, או קוד שאינו במאגר
+function invoiceExtraLines(m, inv) {
+  const used = new Set();
+  m.list.forEach(row => invoiceCodesOfRow(row).forEach(c => used.add(c)));
+  return Object.keys(inv.lines || {}).filter(code => !used.has(code)).sort().map(code => ({ code, ...(inv.lines[code] || {}), product: productForInvoiceCode(code) }));
+}
+function rangeInvoiceSectionHtml(d) {
+  const month = rangeMonthKey(d.from, d.to);
+  const m = d.matrix;
+  const head = '<div class="font-black text-slate-800 text-sm flex items-center gap-2"><i class="fa-solid fa-file-circle-check text-blue-600"></i> שורות החשבונית — השוואה שורה-שורה</div>';
+  if (!month) return '<div class="mt-3 bg-white border-2 border-slate-200 rounded-xl p-3">' + head + '<div class="text-[11px] text-slate-500 font-bold mt-1">בחר חודש קלנדרי שלם ("חודש שעבר" / "החודש הנוכחי") כדי להקליד את שורות החשבונית ולהשוות אותן.</div></div>';
+  if (!monthInvoice || monthInvoice.month !== month) return '<div class="mt-3 bg-white border-2 border-slate-200 rounded-xl p-3">' + head + '<div class="text-[11px] text-slate-500 font-bold mt-1">טוען את שורות החשבונית של ' + month + '…</div></div>';
+  const inv = monthInvoice;
+  const COLS = 'display:grid;grid-template-columns:1fr 4.2rem 4.6rem;align-items:center;gap:.25rem';
+  const input = (code, field, val, ph) => '<input data-role="inv-' + field + '" data-code="' + htmlEscape(code) + '" type="text" inputmode="decimal" value="' + (val != null ? val : '') + '" placeholder="' + ph + '" class="w-full h-9 text-center font-black border-2 border-slate-200 rounded-lg outline-none focus:border-blue-500 bg-white text-sm">';
+  const rows = m.list.map(row => {
+    const cmp = invoiceRowCompare(row, inv);
+    const codes = invoiceCodesOfRow(row);
+    const inputs = codes.map(code => {
+      const l = inv.lines[code] || {};
+      return '<div style="' + COLS + '" class="py-0.5">' +
+        '<div class="min-w-0 text-[11px] font-bold text-slate-500 truncate">' + (codes.length > 1 ? 'קוד ' + htmlEscape(code) : '') + '</div>' +
+        '<div>' + input(code, 'qty', l.qty, 'כמות') + '</div><div>' + input(code, 'price', l.price, 'מחיר') + '</div></div>';
+    }).join('');
+    return '<div class="border-b border-slate-200 py-1.5">' +
+      '<div style="' + COLS + '">' +
+        '<div class="min-w-0"><div class="text-[13px] font-black text-slate-800 truncate">' + htmlEscape(row.name) + '</div>' +
+          '<div class="text-[11px] font-bold text-slate-400">קוד ' + htmlEscape(row.code || '—') + ' · אצלנו ' + mtxQty(row.expectedQty) + ' × ' + fmt3(row.unit) + ' = ₪' + fmtMoney(row.amount) + '</div></div>' +
+        (codes.length === 1 ? '<div>' + input(codes[0], 'qty', (inv.lines[codes[0]] || {}).qty, 'כמות') + '</div><div>' + input(codes[0], 'price', (inv.lines[codes[0]] || {}).price, 'מחיר') + '</div>' : '<div></div><div></div>') +
+      '</div>' +
+      (codes.length > 1 ? inputs : '') +
+      invoiceChipHtml(row, cmp, month) +
+    '</div>';
+  }).join('');
+  const extra = invoiceExtraLines(m, inv);
+  const prodOptions = products.filter(p => !p.hidden).slice().sort((a, b) => productCode(a).localeCompare(productCode(b))).map(p => '<option value="' + htmlEscape(p.id) + '">' + htmlEscape(productCode(p) + ' · ' + p.name) + '</option>').join('');
+  const extraHtml = extra.length ? '<div class="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-2">' +
+    '<div class="text-[11px] font-black text-amber-800 mb-1">בחשבונית ואין להן שורה למעלה</div>' +
+    extra.map(x => '<div class="flex flex-wrap items-center justify-between gap-2 py-1 border-b border-amber-100 last:border-0 text-xs font-bold text-slate-700">' +
+      '<span>קוד ' + htmlEscape(x.code) + (x.product ? ' · ' + htmlEscape(x.product.name) + ' (אין תנועה אצלנו החודש)' : ' · <span class="text-rose-700">לא במאגר</span>') + ' · ' + (x.qty != null ? mtxQty(x.qty) + ' יח׳' : '') + (x.price != null ? ' × ' + fmt3(x.price) : '') + '</span>' +
+      (x.product ? '' : '<span class="inline-flex items-center gap-1"><select data-role="inv-assign-select" data-code="' + htmlEscape(x.code) + '" class="text-[11px] font-bold bg-white border border-amber-300 rounded-lg px-1 py-0.5 max-w-[11rem]"><option value="">שייך למוצר…</option>' + prodOptions + '</select><button data-role="inv-assign" data-code="' + htmlEscape(x.code) + '" class="btn-tap bg-amber-500 text-white rounded-lg px-2 py-0.5 text-[11px] font-black">שייך</button></span>') +
+      '<button data-role="inv-remove-line" data-code="' + htmlEscape(x.code) + '" class="btn-tap text-rose-600 text-[11px] font-black"><i class="fa-solid fa-trash-can"></i></button>' +
+    '</div>').join('') + '</div>' : '';
+  const addHtml = '<div class="mt-3 flex items-center gap-1">' +
+    '<input id="invNewCode" type="text" inputmode="numeric" placeholder="קוד" class="w-16 h-9 text-center font-black border-2 border-slate-200 rounded-lg outline-none focus:border-blue-500 bg-white text-sm">' +
+    '<input id="invNewQty" type="text" inputmode="decimal" placeholder="כמות" class="w-16 h-9 text-center font-black border-2 border-slate-200 rounded-lg outline-none focus:border-blue-500 bg-white text-sm">' +
+    '<input id="invNewPrice" type="text" inputmode="decimal" placeholder="מחיר" class="w-20 h-9 text-center font-black border-2 border-slate-200 rounded-lg outline-none focus:border-blue-500 bg-white text-sm">' +
+    '<button data-role="inv-add-line" class="btn-tap flex-1 bg-slate-100 text-slate-700 rounded-lg h-9 px-2 text-[11px] font-black">הוסף שורה מהחשבונית שלא מופיעה למעלה</button></div>';
+  return '<details open class="mt-3 bg-white border-2 border-slate-200 rounded-xl overflow-hidden"><summary class="cursor-pointer p-3">' + head + '</summary>' +
+    '<div class="px-3 pb-3">' +
+      '<div id="invSummary" class="text-[11px] text-slate-500 font-bold mb-2">' + invoiceSummaryText(m, inv) + '</div>' +
+      rows + extraHtml + addHtml +
+    '</div></details>';
+}
+async function adoptInvoicePrice(pid, price, from) {
+  const p = products.find(x => x.id === pid); if (!p) return;
+  const amount = Number(price); if (!(amount > 0)) return;
+  const fromDay = String(from || todayStr()).slice(0, 10);
+  const month = monthInvoice && monthInvoice.month ? monthInvoice.month : fromDay.slice(0, 7);
+  const priceHistory = priceHistoryWith(p, fromDay, amount, { method: 'invoice', month, adoptedAt: Date.now() });
+  const ok = await runCloudTask('adopt invoice price', { op: 'update', path: dataPath('products', pid), data: { priceHistory }, operationId: makeOperationId('price_hist') });
+  if (!ok) return;
+  p.priceHistory = priceHistory;
+  showToast(p.name + ': מחיר חשבונית ₪' + fmt3(amount) + ' מ-' + dDisp(fromDay) + ' — המרכזת חושבה מחדש', null, null, 3500);
+  calcReceiptRange();
+}
+async function assignInvoiceAltCode(code, pid) {
+  const p = products.find(x => x.id === pid); if (!p) return;
+  code = String(code || '').trim(); if (!code) return;
+  const altCodes = (Array.isArray(p.altCodes) ? p.altCodes.map(String) : []).filter(c => c !== code).concat([code]);
+  const ok = await runCloudTask('assign invoice alt code', { op: 'update', path: dataPath('products', pid), data: { altCodes }, operationId: makeOperationId('alt_code') });
+  if (!ok) return;
+  p.altCodes = altCodes;
+  showToast('קוד ' + code + ' שויך ל"' + p.name + '"', null, null, 2500);
+  calcReceiptRange();
+}
+// תעודות וחזרות של הטווח נטענות במיוחד: ה-snapshot מחזיק רק את 100 התעודות
+// האחרונות, וחודש ישן היה יוצא חסר בשקט. חלון של 45 יום סביב הטווח לפי
+// timestamp, ואז סינון לפי תאריך הנייר — תעודה שהוקלדה באיחור נתפסת.
+async function ensureRangeDocs(from, to) {
+  const key = String(from || '') + '|' + String(to || '');
+  if (!db || !from || !to || rangeDocsCache.key === key) return false;
+  const pad = 45 * 86400000;
+  const fromT = new Date(from + 'T00:00:00').getTime() - pad, toT = new Date(to + 'T23:59:59').getTime() + pad;
+  try {
+    const [rc, rt] = await Promise.all([
+      getDocs(query(collection(db, 'artifacts', appId, 'public', 'data', 'receipts'), where('timestamp', '>=', fromT), where('timestamp', '<=', toT))),
+      getDocs(query(collection(db, 'artifacts', appId, 'public', 'data', 'returns'), where('timestamp', '>=', fromT), where('timestamp', '<=', toT)))
+    ]);
+    rangeDocsCache = { key, receipts: rc.docs.map(x => ({ id: x.id, ...x.data() })), returns: rt.docs.map(x => ({ id: x.id, ...x.data() })) };
+    return true;
+  } catch (e) { console.error('range docs load failed', e); return false; }
+}
+function renderRangeResult(from, to) {
+  const out = $('rcRangeResult'); if (!out) return;
+  const d = receiptRangeData(from, to);
+  lastRangeData = d;
+  out.innerHTML =
+    '<div class="text-[11px] font-bold text-slate-500 mb-2">' + d.recs.length + ' תעודות קליטה · ' + d.rets.length + ' תעודות החזרה · ' + d.matrix.list.length + ' מוצרים</div>' +
+    supplierPaymentModeCardsHtml(d) +
+    supplierCalculationStepsHtml(d) +
+    rangeProductMatrixHtml(d) +
+    rangeInvoiceSectionHtml(d) +
+    rangeDailyHtml(d) +
+    (d.openCnt ? '<div class="text-[11px] text-rose-700/80 font-bold mt-2 bg-rose-50 rounded-lg p-2"><i class="fa-solid fa-clipboard-question"></i> ' + d.openCnt + ' תעודות פתוחות בטווח — חוסרים שטרם זוכו מסומנים בטבלה לפי מוצר</div>' : '') +
+    supplierStatementVerifyHtml(d);
+  out.classList.remove('hidden');
+}
 function receiptRangeData(from, to) {
   const fromT = from ? new Date(from + 'T00:00:00').getTime() : -Infinity;
   const toT = to ? new Date(to + 'T23:59:59').getTime() : Infinity;
   // v22: הדוח בוחר תעודות לפי תאריך הנייר — כדי שהרשימה, הדוח ודף היתרות
   // של תנובה ידברו באותו סדר בדיוק
   const effT = r => { const e = r.docDate || r.date; return e ? new Date(e + 'T12:00:00').getTime() : (r.timestamp || 0); };
-  const recs = receipts.filter(r => effT(r) >= fromT && effT(r) <= toT);
-  const retT = r => { const e = r.docDate || r.date; return e ? new Date(e + 'T12:00:00').getTime() : (r.timestamp || 0); };
-  const rets = returns.filter(r => retT(r) >= fromT && retT(r) <= toT);
-  const recEx = r2(recs.reduce((a, r) => a + receiptPayableBaseEx(r), 0));
-  // חודש מעבר מע"מ: כל תעודה נושאת את השיעור שלה; ללא שדה — השיעור הנוכחי
-  const recInc = r2(recs.reduce((a, r) => a + amountIncForDoc(r, receiptPayableBaseEx(r)), 0));
-  let retEx = 0, retInc = 0;
-  rets.forEach(r => { const t = returnTotals(r); retEx += t.ex; retInc += t.inc; });
-  retEx = r2(retEx); retInc = r2(retInc);
-  const meMap = {}; let meEx = 0, meInc = 0;
-  recs.forEach(r => {
-    if (receiptDiscountPending(r)) return;
-    const frozen = Array.isArray(r.monthEndRebates) && (r.monthEndRebates.length || r.discountReview)
-      ? r.monthEndRebates
-      : monthEndSnapshotForLines(r.items || [], storedReceiptDate(r), r.discountReview && r.discountReview.promos);
-    // v91: תעודה שנשמרה לפני v91 שמרה שורה שחויבה במחירון מלא דווקא במחיר
-    // הרגיל, ולכן הקיזוז שהוקפא בה חושב מ-₪12.05 במקום מ-₪17.21 ששולמו —
-    // ₪16.38 במקום ₪57.68 (תעודת 1.9.2026). ההשלמה נגזרת מהרשומה שנשמרה עם
-    // התעודה עצמה, ונמדדת מול המחיר שבאמת רשום בשורה — ולכן בתעודה שנשמרה
-    // אחרי התיקון היא יוצאת אפס מעצמה ואין ספירה כפולה.
-    const corrections = monthEndPendingCorrections(r);
-    frozen.forEach(x => {
-      const key = x.id || (String(x.name || '') + '|' + String(x.pct || 0));
-      const extra = r2(Number(corrections.get(key)) || 0);
-      if (extra > 0) corrections.delete(key);
-      const reb = r2((Number(x.rebate) || 0) + Math.max(0, extra));
-      meEx += reb;
-      const rebInc = amountIncForDoc(r, reb);
-      meInc += rebInc;
-      // v48: מבצע שירד כבר בתעודה (מחיר השורה = מחיר המבצע) משאיר קיזוז אפס.
-      // שורת "− ₪0.00" ברשימה רק מבלבלת — לא מציגים אותה.
-      if (reb === 0) return;
-      if (!meMap[key]) meMap[key] = { name: x.name || ('מבצע ' + x.pct + '%'), pct: Number(x.pct) || 0, ex: 0, inc: 0 };
-      meMap[key].ex = r2(meMap[key].ex + reb);
-      meMap[key].inc = r2(meMap[key].inc + rebInc);
-    });
-  });
-  // v57: המרכזת של ברמן מקזזת החזרות בתוך הכמות, ומחיר השורה הוא מחיר המבצע
-  // (מאומת מול חשבונית 30/06/26: שורה 324 במחיר המבצע ₪7.20, ושורות שכל
-  // החודש שלהן החזרה יצאו בכמות שלילית). לכן יחידה במבצע שחזרה כבר מזוכה
-  // במחיר המבצע, והקיזוז מגיע רק על מה שנשאר. בלי הקיזוז הזה התחזית נמוכה
-  // מהחשבונית בדיוק בגובה ההחזרות של מוצרי המבצע.
-  let meBackEx = 0, meBackInc = 0;
-  rets.forEach(r => {
-    const dd = String((r && (r.docDate || r.date)) || '').slice(0, 10);
-    (r.items || []).forEach(l => {
-      if (!l || l.isDeposit || !l.productId) return;
-      const pr = monthEndPromoForProduct(l.productId, dd);
-      if (!pr) return;
-      const back = monthEndUnitRebate(pr, Number(l.unitPrice) || 0) * (Number(l.qty) || 0);
-      if (!(back > 0)) return;
-      const backInc = amountIncForDoc(r, back);
-      meBackEx += back; meBackInc += backInc;
-      const key = pr.id || (String(promoTitle(pr) || '') + '|' + String(pr.pct || 0));
-      const e = meMap[key];
-      if (e) { e.backEx = r2((e.backEx || 0) + back); e.ex = r2(Math.max(0, e.ex - back)); e.inc = r2(Math.max(0, e.inc - backInc)); }
-    });
-  });
-  Object.keys(meMap).forEach(k => { if (!(meMap[k].ex > 0) && !(meMap[k].backEx > 0)) delete meMap[k]; });
-  meBackEx = r2(meBackEx); meBackInc = r2(meBackInc);
-  meEx = r2(Math.max(0, meEx - meBackEx)); meInc = r2(Math.max(0, meInc - meBackInc));
-  let openShortEx = 0, openOverEx = 0, openCnt = 0;
-  recs.forEach(r => { const di = receiptDiscrepancyInfo(r); if (di.open) { openCnt++; openShortEx += di.shortVal; openOverEx += di.overVal; } });
-  openShortEx = r2(openShortEx); openOverEx = r2(openOverEx);
-  const openSupplierCredits = openSupplierCreditClaims(recs);
-  const deferredDueCredits = supplierCreditClaimsDeferredDue(receipts, from, to);
-  const verifiedSupplierCredits = supplierCreditClaimsVerifiedInRange(receipts, fromT, toT);
-  const openSupplierCreditEx = r2(openSupplierCredits.reduce((a, r) => a + supplierCreditClaimAmountAny(r), 0));
-  const deferredSupplierCreditEx = r2(deferredDueCredits.reduce((a, r) => a + supplierCreditClaimAmountAny(r), 0));
-  const verifiedSupplierCreditEx = r2(verifiedSupplierCredits.reduce((a, r) => a + supplierCreditClaimSettledAmount(r), 0));
-  const pendingSupplierCreditEx = r2(openSupplierCreditEx + deferredSupplierCreditEx);
-  const openSupplierCreditInc = r2(openSupplierCredits.reduce((a, r) => a + amountIncForDoc(r, supplierCreditClaimAmountAny(r)), 0));
-  const deferredSupplierCreditInc = r2(deferredDueCredits.reduce((a, r) => a + amountIncForDoc(r, supplierCreditClaimAmountAny(r)), 0));
-  const verifiedSupplierCreditInc = r2(verifiedSupplierCredits.reduce((a, r) => a + amountIncForDoc(r, supplierCreditClaimSettledAmount(r)), 0));
-  const pendingSupplierCreditInc = r2(openSupplierCreditInc + deferredSupplierCreditInc);
-  // החוסר כבר הופחת פעם אחת בתוך receiptPayableBaseEx. העודף נשמר להצגה
-  // בלבד ואינו מתקזז מול החוסר ואינו מתווסף לתשלום.
-  const shortOffsetByOverEx = 0;
-  const openShortNetEx = openShortEx;
-  const openOverNetEx = openOverEx;
-  const netBeforeSupplierCredits = r2(recEx - retEx - meEx);
-  const netBeforeSupplierCreditsInc = r2(recInc - retInc - meInc);
-  // זיכויי מבצע שמגיעים לנו כן נכנסים לחישוב התשלום לפי המערכת,
-  // אבל אם הם עדיין פתוחים/נדחו — הם מודגשים כחובה לבדיקה מול מרכזת הספק.
-  const netEx = r2(netBeforeSupplierCredits - verifiedSupplierCreditEx - pendingSupplierCreditEx);
-  const netInc = r2(netBeforeSupplierCreditsInc - verifiedSupplierCreditInc - pendingSupplierCreditInc);
-  const vatAmount = r2(netInc - netEx);
-  // סכום בדיקה שמרני: לא כולל זיכויי מבצע פתוחים/נדחים, כן כולל זיכויים שכבר אומתו.
-  // לא משנה את מנוע החישוב — רק מציג למשתמש שני מספרים כדי להוריד בלבול.
-  const netSafeEx = r2(netBeforeSupplierCredits - verifiedSupplierCreditEx);
-  const netSafeInc = r2(netBeforeSupplierCreditsInc - verifiedSupplierCreditInc);
-  const netSafeVat = r2(netSafeInc - netSafeEx);
+  const recs = rangeDocsMerged('receipts').filter(r => effT(r) >= fromT && effT(r) <= toT);
+  const rets = rangeDocsMerged('returns').filter(r => effT(r) >= fromT && effT(r) <= toT);
+  const matrix = rangeProductMatrixData({ recs, rets });
+  const netEx = matrix.total, netInc = matrix.totalInc;
+  const fairEx = matrix.fairTotal;
+  const openClaimsEx = r2(netEx - fairEx);
+  let openCnt = 0;
+  recs.forEach(r => { if (receiptDiscrepancyInfo(r).open) openCnt++; });
   const vatRates = [...new Set(recs.concat(rets).map(r => r2(vatRateForDoc(r) * 100)))].sort((a, b) => a - b);
-  return { from, to, fromT, toT, recs, rets, recEx, recInc, retEx, retInc, meMap, meList: Object.values(meMap), meEx, meInc, meBackEx, meBackInc, openCnt, shortOffsetByOverEx, openShortNetEx, openOverNetEx, openShortEx, openOverEx, openSupplierCredits, openSupplierCreditEx, openSupplierCreditInc, deferredDueCredits, deferredSupplierCreditEx, deferredSupplierCreditInc, pendingSupplierCreditEx, pendingSupplierCreditInc, verifiedSupplierCredits, verifiedSupplierCreditEx, verifiedSupplierCreditInc, netBeforeSupplierCredits, netBeforeSupplierCreditsInc, netSafeEx, netSafeVat, netSafeInc, netEx, vatAmount, netInc, vatRates };
+  return { from, to, fromT, toT, recs, rets, matrix,
+    netEx, netInc, vatAmount: r2(netInc - netEx), fairEx, openClaimsEx,
+    openClaimUnits: matrix.openUnits, overUnits: matrix.overUnits,
+    billedEx: matrix.billedEx, creditedEx: matrix.creditedEx, promoEx: matrix.promoEx, openCnt, vatRates };
 }
+
 function moneyRow(label, amount, cls, prefix) {
   prefix = prefix || '';
   return '<div class="flex items-center justify-between gap-3 py-1 text-sm font-bold ' + (cls || 'text-slate-700') + '"><span>' + label + '</span><span class="shrink-0">' + prefix + '₪' + fmtMoney(amount) + '</span></div>';
 }
+
+// הכרטיס הראשי: מה שהחשבונית אמורה להראות, ולידו מה שבאמת מגיע
 function supplierPaymentModeCardsHtml(d) {
-  const hasPending = (Number(d.pendingSupplierCreditEx) || 0) > 0;
-  const diffInc = r2((Number(d.netSafeInc) || 0) - (Number(d.netInc) || 0));
-  const diffEx = r2((Number(d.netSafeEx) || 0) - (Number(d.netEx) || 0));
-  if (!hasPending) {
-    return '<div class="bg-emerald-50 border-2 border-emerald-200 rounded-2xl p-4 mb-3 text-emerald-900">' +
-      '<div class="font-black text-base flex items-center gap-2"><i class="fa-solid fa-circle-check"></i> אין זיכויי מבצע פתוחים</div>' +
-      '<div class="text-xs font-bold mt-1">אין כרגע סכום שמורד מהתשלום לפני אימות ספק. לכן סכום הבדיקה וסכום התשלום זהים.</div>' +
+  const claims = d.openClaimsEx > 0.005;
+  return '<div class="bg-emerald-50 border-2 border-emerald-200 rounded-2xl p-4 mb-3 text-emerald-900">' +
+      '<div class="font-black text-base flex items-center gap-2"><i class="fa-solid fa-file-invoice"></i> צפוי בחשבונית ברמן</div>' +
+      '<div class="text-xs font-bold mt-1">כמות שחויבה בתעודות פחות מה שזוכה, × מחיר הלקוח ומבצעי המרכזת. הסכומים המודפסים בתעודות המשלוח אינם משתתפים.</div>' +
       '<div class="font-black text-3xl mt-2">₪' + fmtMoney(d.netEx) + '</div>' +
-      '<div class="text-xs font-bold">סה"כ לפני מע״מ לפי המערכת · כולל מע״מ: ₪' + fmtMoney(d.netInc) + '</div>' +
+      '<div class="text-xs font-bold">לפני מע״מ · כולל מע״מ: ₪' + fmtMoney(d.netInc) + '</div>' +
+      (claims ? '<div class="mt-3 bg-white/80 border border-rose-200 rounded-xl p-2 text-xs font-black text-rose-800"><i class="fa-solid fa-triangle-exclamation"></i> מתוך זה ₪' + fmtMoney(d.openClaimsEx) + ' על ' + mtxQty(d.openClaimUnits) + ' יח׳ שחסרו ועדיין לא זוכו. אם הן בחשבונית — זו דרישת זיכוי. מה שבאמת מגיע: ₪' + fmtMoney(d.fairEx) + '</div>' : '') +
+      (d.overUnits > 0 ? '<div class="mt-2 text-[11px] font-bold text-amber-800">' + mtxQty(d.overUnits) + ' יח׳ התקבלו מעבר למה שחויב — לא נדרש לשלם עליהן עד שתגיע חשבונית</div>' : '') +
     '</div>';
-  }
-  return '<div class="grid gap-3 mb-3">' +
-    '<div class="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4 text-slate-800">' +
-      '<div class="font-black text-base flex items-center gap-2"><i class="fa-solid fa-shield-halved text-slate-500"></i> סכום בדיקה שמרני</div>' +
-      '<div class="text-xs font-bold text-slate-500 mt-1">לא כולל זיכויי מבצע פתוחים/נדחים. טוב להשוואה אם רוצים לראות מה בטוח לפי מה שכבר אומת.</div>' +
-      '<div class="font-black text-3xl mt-2">₪' + fmtMoney(d.netSafeInc) + '</div>' +
-      '<div class="text-xs font-bold text-slate-500">כולל מע״מ</div>' +
-    '</div>' +
-    '<div class="bg-orange-50 border-2 border-orange-300 rounded-2xl p-4 text-orange-900 shadow-sm">' +
-      '<div class="font-black text-base flex items-center gap-2"><i class="fa-solid fa-hand-holding-dollar text-orange-600"></i> לתשלום לפי מה שמגיע לנו</div>' +
-      '<div class="text-xs font-bold mt-1">זה הסכום שהמערכת מחשבת לתשלום אחרי הורדת זיכויי מבצע שמגיעים לכם.</div>' +
-      '<div class="font-black text-3xl mt-2">₪' + fmtMoney(d.netInc) + '</div>' +
-      '<div class="text-xs font-bold">כולל מע״מ</div>' +
-      '<div class="mt-3 bg-white/80 border border-orange-200 rounded-xl p-2 text-xs font-black">⚠️ מתוך הסכום הזה הורדו ₪' + fmtMoney(diffEx) + ' ללא מע״מ / ₪' + fmtMoney(diffInc) + ' כולל מע״מ שעדיין דורשים בדיקה מול הספק.</div>' +
-    '</div>' +
-  '</div>';
 }
+
 function supplierCalculationStepsHtml(d) {
   const vatLabel = d.vatRates && d.vatRates.length === 1
     ? 'מע״מ (' + d.vatRates[0] + '%)'
     : 'מע״מ משוקלל לפי התעודות' + (d.vatRates && d.vatRates.length ? ' (' + d.vatRates.join('% / ') + '%)' : '');
   return '<div class="bg-white border-2 border-slate-200 rounded-2xl p-4 mb-3">' +
     '<div class="font-black text-slate-800 mb-2 flex items-center gap-2"><i class="fa-solid fa-list-check text-blue-600"></i> איך הגענו לסכום?</div>' +
-    '<div class="text-[11px] text-slate-500 font-bold mb-2">הפירוט הפנימי כאן ללא מע״מ. הסכום לתשלום הסופי מוצג גם כולל מע״מ.</div>' +
-    moneyRow('תעודות ספק — אחרי הפחתת חוסרים', d.recEx, 'text-slate-800', '') +
-    moneyRow('פחות חזרות / זיכויים רגילים', d.retEx, 'text-emerald-700', '− ') +
-    (d.openShortEx > 0 ? '<div class="text-[11px] text-rose-700 font-bold bg-rose-50 rounded-lg px-2 py-1.5 my-1"><i class="fa-solid fa-circle-minus"></i> חוסרים בסך ₪' + fmtMoney(d.openShortEx) + ' כבר הופחתו בתוך סכום התעודות — לא מופחתים שוב.</div>' : '') +
-    (d.openOverEx > 0 ? '<div class="text-[11px] text-amber-700 font-bold bg-amber-50 rounded-lg px-2 py-1.5 my-1"><i class="fa-solid fa-circle-plus"></i> עודפים בסך ₪' + fmtMoney(d.openOverEx) + ' מוצגים בלבד ואינם מתווספים לתשלום.</div>' : '') +
-
-    (d.meEx > 0
-      ? moneyRow('פחות קיזוז מבצעים במרכזת (צפי)', d.meEx, 'text-rose-700', '− ') +
-        d.meList.map(s => '<div class="flex items-center justify-between text-[11px] text-rose-600/80 font-bold pr-3"><span>· ' + htmlEscape(s.name) + (s.backEx > 0 ? ' <span class="text-slate-400">(אחרי החזרות: ₪' + fmtMoney(r2(s.backEx)) + ' לא מקוזזים)</span>' : '') + '</span><span>− ₪' + fmtMoney(r2(s.ex)) + '</span></div>').join('') +
-        (d.meBackEx > 0 ? '<div class="text-[11px] text-slate-500 font-bold bg-slate-50 rounded-lg px-2 py-1.5 my-1"><i class="fa-solid fa-circle-info text-slate-400"></i> ₪' + fmtMoney(d.meBackEx) + ' לא נכללים בקיזוז: אלה יחידות מבצע שחזרו. במרכזת הכמות היא נטו והמחיר הוא מחיר המבצע, ולכן הן כבר זוכו במחיר המבצע.</div>' : '')
-      : '') +
-    (d.verifiedSupplierCreditEx > 0 ? moneyRow('פחות זיכויי מבצע שכבר אומתו', d.verifiedSupplierCreditEx, 'text-emerald-700', '− ') : '') +
-    (d.pendingSupplierCreditEx > 0 ? moneyRow('פחות זיכויי מבצע פתוחים שמגיעים לכם', d.pendingSupplierCreditEx, 'text-orange-700', '− ') : '') +
+    '<div class="text-[11px] text-slate-500 font-bold mb-2">הפירוט כאן ללא מע״מ, במחירי הלקוח. הסכום הסופי מוצג גם כולל מע״מ.</div>' +
+    moneyRow('אספקות שחויבו בתעודות × מחיר הלקוח', d.billedEx, 'text-slate-800', '') +
+    moneyRow('פחות זיכויים — החזרות שאומתו וחוסרים שזוכו', d.creditedEx, 'text-emerald-700', '− ') +
+    (d.promoEx !== 0 ? '<div class="text-[11px] text-rose-700/80 font-bold bg-rose-50 rounded-lg px-2 py-1.5 my-1"><i class="fa-solid fa-tag"></i> מבצעי המרכזת כבר בתוך המחירים: ₪' + fmtMoney(Math.abs(d.promoEx)) + ' פחות ממחיר הלקוח הרגיל</div>' : '') +
     '<div class="border-t border-slate-200 mt-2 pt-2">' +
-      moneyRow('סה״כ ללא מע״מ לפי מה שמגיע', d.netEx, 'text-slate-900', '') +
+      moneyRow('צפוי בחשבונית, ללא מע״מ', d.netEx, 'text-slate-900', '') +
       moneyRow(vatLabel, d.vatAmount, 'text-slate-700', '') +
       '<div class="flex items-center justify-between gap-3 mt-2 pt-2 border-t border-slate-200 text-xl font-black text-slate-900"><span>סה״כ כולל מע״מ</span><span>₪' + fmtMoney(d.netInc) + '</span></div>' +
     '</div>' +
+    (d.openClaimsEx > 0.005 ? '<div class="mt-2 text-[11px] font-bold text-rose-700 bg-rose-50 rounded-lg px-2 py-1.5">לפי מה שבאמת התקבל: ₪' + fmtMoney(d.fairEx) + ' — ההפרש (₪' + fmtMoney(d.openClaimsEx) + ') הוא חוסרים שטרם זוכו, מפורטים בטבלה לפי מוצר</div>' : '') +
   '</div>';
 }
 function supplierCreditMiniList(list) {
@@ -19438,16 +19649,19 @@ function supplierCreditMiniList(list) {
     return '<div class="bg-white/70 rounded-lg px-2 py-1.5 text-xs font-bold flex justify-between gap-2"><span class="truncate">' + (supplierCreditClaimItemsText(c) || 'מבצע ספק') + '</span><span class="shrink-0">₪' + fmtMoney(amt) + ' / ₪' + fmtMoney(amountIncForDoc(r, amt)) + ' כולל</span></div>';
   }).join('') + (list.length > 6 ? '<div class="text-xs font-bold">ועוד ' + (list.length - 6) + '...</div>' : '') + '</div>';
 }
+
 function supplierStatementVerifyHtml(d) {
-  const ids = (d.openSupplierCredits || []).concat(d.deferredDueCredits || []).map(r => r.id).filter(Boolean).join(',');
+  const month = rangeMonthKey(d.from, d.to);
+  const typed = monthInvoice && monthInvoice.month === month && monthInvoice.totalEx != null ? monthInvoice.totalEx : '';
   return '<div class="mt-3 bg-white border-2 border-slate-200 rounded-xl p-3">' +
-    '<div class="font-black text-slate-800 text-sm flex items-center gap-2"><i class="fa-solid fa-file-circle-check text-blue-600"></i> אימות מול חשבונית ברמן</div>' +
+    '<div class="font-black text-slate-800 text-sm flex items-center gap-2"><i class="fa-solid fa-scale-balanced text-blue-600"></i> סה״כ החשבונית</div>' +
     '<div class="text-[11px] text-slate-500 font-bold mt-1 leading-relaxed">הקלד מהחשבונית את <b>סה"כ לפני מע״מ</b>, ואם מודפסת — גם את שורת <b>"כוללת הנחות בסך"</b>. שים לב: בשורת מוצר שבמבצע, עמודת ה"מחירון" בחשבונית מציגה את מחיר המבצע עצמו.</div>' +
-    '<div class="flex gap-2 mt-2"><div class="flex-1 flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500 bg-white"><span class="text-slate-400 font-black">₪</span><input id="rcSupplierInc" type="text" inputmode="decimal" placeholder="סה&quot;כ לפני מע״מ מהחשבונית" class="w-full h-11 text-center font-black outline-none bg-transparent"></div><button data-role="rc-supplier-compare" data-ids="' + ids + '" class="btn-tap px-4 rounded-xl bg-blue-600 text-white font-black text-sm">השווה</button></div>' +
+    '<div class="flex gap-2 mt-2"><div class="flex-1 flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500 bg-white"><span class="text-slate-400 font-black">₪</span><input id="rcSupplierInc" type="text" inputmode="decimal" value="' + typed + '" placeholder="סה&quot;כ לפני מע״מ מהחשבונית" class="w-full h-11 text-center font-black outline-none bg-transparent"></div><button data-role="rc-supplier-compare" class="btn-tap px-4 rounded-xl bg-blue-600 text-white font-black text-sm">השווה</button></div>' +
     '<div class="flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 mt-1.5 focus-within:border-blue-500 bg-white"><span class="text-slate-400 font-black">₪</span><input id="rcSupplierDisc" type="text" inputmode="decimal" placeholder="שורת &quot;כוללת הנחות בסך&quot; (רשות)" class="w-full h-11 text-center font-black outline-none bg-transparent"></div>' +
     '<div id="rcSupplierCompareResult" class="hidden mt-2"></div>' +
   '</div>';
 }
+
 function compareSupplierStatement() {
   const inp = $('rcSupplierInc'), out = $('rcSupplierCompareResult');
   if (!inp || !out) return;
@@ -19456,8 +19670,8 @@ function compareSupplierStatement() {
   const from = $('rcFrom') ? $('rcFrom').value : '';
   const to = $('rcTo') ? $('rcTo').value : '';
   const d = receiptRangeData(from, to);
-  // ברמן: ההשוואה לפני מע"מ, עם סיבולת של אגורות בודדות לכל שורה
-  // (המחירים הסופיים זזים במיליריות בין חודשים — ראה הקיקאוף)
+  if (monthInvoice && monthInvoice.month === rangeMonthKey(from, to)) { monthInvoice.totalEx = r2(supplierInc); saveMonthInvoice(); }
+  // ברמן מעגלת כל שורה בחשבונית בנפרד — אגורות בודדות לשורה
   const dt = rangeDiscountsTotal(d);
   const tolerance = Math.max(1, r2(dt.lineCount * 0.03));
   const discInp = $('rcSupplierDisc');
@@ -19467,56 +19681,43 @@ function compareSupplierStatement() {
     const dDiff = r2(supplierDisc - dt.disc);
     discHtml = Math.abs(dDiff) <= tolerance
       ? '<div class="mt-2 bg-emerald-50 border border-emerald-200 rounded-lg p-2 text-emerald-800 text-xs font-bold"><i class="fa-solid fa-circle-check"></i> שורת ההנחות תואמת: לפי החשבונית ₪' + fmtMoney(supplierDisc) + ' · לפי המערכת ₪' + fmtMoney(dt.disc) + '</div>'
-      : '<div class="mt-2 bg-rose-50 border border-rose-200 rounded-lg p-2 text-rose-800 text-xs font-bold"><i class="fa-solid fa-triangle-exclamation"></i> שורת ההנחות לא תואמת: לפי החשבונית ₪' + fmtMoney(supplierDisc) + ' · לפי המערכת ₪' + fmtMoney(dt.disc) + ' (פער ₪' + fmtMoney(Math.abs(dDiff)) + '). ייתכן שאחוז הנחה של מוצר השתנה. מוצרי מבצע אינם נספרים כאן, כי בחשבונית המחירון שלהם הוא מחיר המבצע.</div>';
+      : '<div class="mt-2 bg-rose-50 border border-rose-200 rounded-lg p-2 text-rose-800 text-xs font-bold"><i class="fa-solid fa-triangle-exclamation"></i> שורת ההנחות לא תואמת: לפי החשבונית ₪' + fmtMoney(supplierDisc) + ' · לפי המערכת ₪' + fmtMoney(dt.disc) + ' (פער ₪' + fmtMoney(Math.abs(dDiff)) + '). כנראה מחיר לקוח שונה באחד המוצרים — חפש בטבלה שורה עם צ׳יפ מחיר. מוצרי מבצע אינם נספרים כאן.</div>';
   }
   const diff = r2(supplierInc - d.netEx); // חיובי = החשבונית גבוהה מהמערכת (לפני מע"מ)
   const abs = Math.abs(diff);
-  const openAndDue = (d.openSupplierCredits || []).concat(d.deferredDueCredits || []);
-  const openAndDueEx = r2((d.openSupplierCreditEx || 0) + (d.deferredSupplierCreditEx || 0));
-  const openAndDueInc = r2((d.openSupplierCreditInc || 0) + (d.deferredSupplierCreditInc || 0));
-  const meInc = r2(d.meInc || 0);
-  const ids = openAndDue.map(r => r.id).filter(Boolean).join(',');
   let html = '';
   if (abs <= tolerance) {
     html = '<div class="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-emerald-800 text-xs font-bold"><div class="font-black text-sm"><i class="fa-solid fa-circle-check"></i> החשבונית תואמת למערכת (לפני מע״מ)' + (abs > 0 ? ' — פער של ₪' + fmtMoney(abs) + ' בתוך הסיבולת (' + dt.lineCount + ' שורות)' : '') + '</div><div class="mt-1">לפי המערכת: ₪' + fmtMoney(d.netEx) + ' · לפי החשבונית: ₪' + fmtMoney(supplierInc) + '</div><div class="text-[11px] mt-1">כולל מע״מ לפי המערכת: ₪' + fmtMoney(d.netInc) + '</div>' +
-      (openAndDueInc > 0 ? '<div class="mt-2 bg-white/80 rounded-lg p-2 text-emerald-800"><b>שים לב:</b> הסיכום תואם אחרי שהמערכת הורידה ₪' + fmtMoney(openAndDueEx) + ' ללא מע״מ / ₪' + fmtMoney(openAndDueInc) + ' כולל מע״מ של זיכויי מבצע פתוחים/נדחים. אם הם באמת מופיעים במרכזת הספק — סמן אותם כזוכו כדי שלא יופיעו שוב.</div>' + supplierCreditMiniList(openAndDue) + '<button data-role="rc-supplier-verify-open" data-ids="' + ids + '" class="btn-tap mt-2 w-full bg-emerald-600 text-white rounded-xl py-2.5 font-black"><i class="fa-solid fa-check-double"></i> סמן זיכויים אלה כזוכו</button>' : '') + '</div>';
+      (d.openClaimsEx > 0.005 ? '<div class="mt-2 bg-white/80 rounded-lg p-2 text-rose-800"><b>אבל:</b> הסכום כולל ₪' + fmtMoney(d.openClaimsEx) + ' על יחידות שחסרו ולא זוכו. אם ברמן חייבה אותן — זו דרישת זיכוי, לא תשלום.</div>' : '') + '</div>';
   } else if (diff > 0) {
-    const creditMatch = openAndDueEx > 0 && Math.abs(diff - openAndDueEx) <= tolerance;
-    const meMatch = r2(d.meEx || 0) > 0 && Math.abs(diff - r2(d.meEx || 0)) <= tolerance;
-    html = '<div class="bg-rose-50 border-2 border-rose-200 rounded-xl p-3 text-rose-800 text-xs font-bold"><div class="font-black text-sm"><i class="fa-solid fa-triangle-exclamation"></i> החשבונית גבוהה מהמערכת ב־₪' + fmtMoney(diff) + ' (לפני מע״מ)</div><div class="mt-1">לפי המערכת: ₪' + fmtMoney(d.netEx) + ' · לפי החשבונית: ₪' + fmtMoney(supplierInc) + '</div><div class="text-[11px] mt-1">בדוק: תעודה שלא נקלטה, אחוז הנחה שהשתנה, או מבצע שלא הוזן. זכור: בחשבונית, עמודת המחירון של מוצר במבצע מציגה את מחיר המבצע.</div>' +
-      (creditMatch ? '<div class="mt-2 bg-white/80 rounded-lg p-2 text-rose-700"><b>הפער תואם לזיכויי מבצע שמגיעים לכם אך לא הופיעו אצל הספק.</b><br>המערכת הורידה אותם מהחישוב כי הם מגיעים לכם, אבל המרכזת של הספק כנראה לא הורידה אותם בפועל.</div>' + supplierCreditMiniList(openAndDue) + '<div class="grid grid-cols-2 gap-2 mt-2"><button data-role="rc-supplier-defer-open" data-ids="' + ids + '" class="btn-tap bg-blue-600 text-white rounded-xl py-2.5 font-black">העבר לחודש הבא</button><button data-role="rc-supplier-verify-open" data-ids="' + ids + '" class="btn-tap bg-emerald-600 text-white rounded-xl py-2.5 font-black">אם הופיע — סמן כזוכה</button></div>' :
-        (meMatch ? '<div class="mt-2 bg-white/80 rounded-lg p-2 text-rose-700"><b>הפער דומה להנחות המרכזת הצפויות כולל מע״מ.</b><br>כנראה שהמרכזת לא הורידה מבצע סוף חודש. בדוק מול הספק או פתח/העבר דרישת זיכוי.</div>' : '<div class="mt-2 bg-white/80 rounded-lg p-2">בדוק הנחות מרכזת, זיכויי מבצע שלא הופיעו, תעודות חסרות או סכום ספק שהוקלד לא נכון.</div>')) + '</div>';
+    const claimsMatch = d.openClaimsEx > 0 && Math.abs(diff - d.openClaimsEx) <= tolerance;
+    html = '<div class="bg-rose-50 border-2 border-rose-200 rounded-xl p-3 text-rose-800 text-xs font-bold"><div class="font-black text-sm"><i class="fa-solid fa-triangle-exclamation"></i> החשבונית גבוהה מהמערכת ב־₪' + fmtMoney(diff) + ' (לפני מע״מ)</div><div class="mt-1">לפי המערכת: ₪' + fmtMoney(d.netEx) + ' · לפי החשבונית: ₪' + fmtMoney(supplierInc) + '</div>' +
+      (claimsMatch ? '<div class="mt-2 bg-white/80 rounded-lg p-2">הפער שווה בדיוק לחוסרים שטרם זוכו (₪' + fmtMoney(d.openClaimsEx) + '). ברמן חייבה יחידות שלא התקבלו — דרוש זיכוי.</div>'
+        : '<div class="mt-2 bg-white/80 rounded-lg p-2">הקלד את שורות החשבונית למעלה: הצ׳יפ ליד כל שורה יראה אם הפער בכמות (תעודה שלא נקלטה, החזרה שלא זוכתה) או במחיר (מחיר לקוח שונה — אפשר לאמץ בלחיצה).</div>') + '</div>';
   } else {
     const lower = r2(-diff);
     html = '<div class="bg-blue-50 border-2 border-blue-200 rounded-xl p-3 text-blue-900 text-xs font-bold"><div class="font-black text-sm"><i class="fa-solid fa-circle-info"></i> החשבונית נמוכה מהמערכת ב־₪' + fmtMoney(lower) + ' (לפני מע״מ)</div><div class="mt-1">לפי המערכת: ₪' + fmtMoney(d.netEx) + ' · לפי החשבונית: ₪' + fmtMoney(supplierInc) + '</div>' +
-      '<div class="mt-2 bg-white/80 rounded-lg p-2">ייתכן שהחשבונית זיכתה משהו שלא סומן במערכת, שהחזרה לא נקלטה אצלנו, או שהסכום הוקלד לא נכון. בדוק גם את הפירוט היומי למטה.</div></div>';
+      '<div class="mt-2 bg-white/80 rounded-lg p-2">כנראה מחיר לקוח נמוך יותר באחד המוצרים (כמו לחמנ׳ עננים 10: 12.00 בחשבונית מול 14.28 בתעודות), או זיכוי שלא סומן במערכת. הקלד את שורות החשבונית למעלה כדי לראות איזו שורה.</div></div>';
   }
   out.innerHTML = html + discHtml;
   out.classList.remove('hidden');
 }
+
+let lastRangeData = null;
+let rangeRenderToken = 0;
 function calcReceiptRange() {
   const fromEl = $('rcFrom'), toEl = $('rcTo'), out = $('rcRangeResult');
   if (!out) return;
   const from = fromEl ? fromEl.value : '', to = toEl ? toEl.value : '';
-  const d = receiptRangeData(from, to);
-  const supplierCreditHtml = d.openSupplierCredits.length ? supplierCreditWarningHtml(d.openSupplierCredits, false) : '';
-  const deferredHtml = d.deferredDueCredits.length ? '<div class="bg-blue-600 text-white rounded-2xl p-4 mb-3 shadow-lg border-2 border-blue-300"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-calendar-days fa-beat"></i> זיכויים מחודש קודם שממתינים לאימות</div><div class="font-black text-2xl mt-1">₪' + fmtMoney(d.deferredSupplierCreditEx) + '</div><div class="text-xs text-white/95 mt-1 font-bold">הספק התחייב להוציא אותם בחודש הזה. ודא מול המרכזת לפני סגירת חשבון.</div>' + supplierCreditMiniList(d.deferredDueCredits) + '</div>' : '';
-  const dt = rangeDiscountsTotal(d);
-  out.innerHTML = supplierCreditHtml + deferredHtml +
-    '<div class="text-[11px] font-bold text-slate-500 mb-2">' + d.recs.length + ' תעודות קליטה · ' + d.rets.length + ' תעודות החזרה · ' + dt.lineCount + ' שורות</div>' +
-    supplierPaymentModeCardsHtml(d) +
-    supplierCalculationStepsHtml(d) +
-    rangeDailyHtml(d) +
-    rangeProductMatrixHtml(d) +
-    (d.meEx > 0 ? '<div class="text-[11px] text-rose-700/80 font-bold mt-2 bg-rose-50 rounded-lg p-2"><i class="fa-solid fa-triangle-exclamation"></i> הנחות מרכזת הן צפי — ודא שהספק זיכה אותן בחשבון החודשי</div>' : '') +
-    (d.openCnt ? '<div class="text-[11px] text-rose-700/80 font-bold mt-2 bg-rose-50 rounded-lg p-2"><i class="fa-solid fa-clipboard-question"></i> ' + d.openCnt + ' תעודות עם הפרש פתוח' +
-      (d.openShortEx > 0 ? '<br>· חוסר ₪' + fmtMoney(d.openShortEx) + ' — <b>כבר הופחת מהתעודות</b>' : '') +
-      (d.openOverEx > 0 ? '<br>· עודף ₪' + fmtMoney(d.openOverEx) + ' — הערה בלבד; לא נוסף לתשלום עד שתגיע חשבונית' : '') +
-      '</div>' : '') +
-    supplierStatementVerifyHtml(d);
-  out.classList.remove('hidden');
+  const token = ++rangeRenderToken;
+  renderRangeResult(from, to);
+  // ברקע: תעודות של חודש ישן ושורות החשבונית — ואז ציור מחדש אם הטווח לא השתנה
+  Promise.all([ensureRangeDocs(from, to), loadMonthInvoice(rangeMonthKey(from, to))]).then(changed => {
+    if (token !== rangeRenderToken || !changed.some(Boolean)) return;
+    if (($('rcFrom') ? $('rcFrom').value : '') !== from || ($('rcTo') ? $('rcTo').value : '') !== to) return;
+    renderRangeResult(from, to);
+  });
 }
-
 // --- מוצרים ומחירים ---
 function priceRowHtml(p) {
   const op = promoForProduct(p.id, todayStr());
@@ -22899,6 +23100,7 @@ $('rsBody').addEventListener('change', e => {
 });
 $('scanPriceNotice').addEventListener('click', () => { closeScanner(); renderReceiving(); const panel = app.querySelector('[data-price-panel]'); if (panel) panel.open = true; const details = app.querySelector('[data-price-details]'); if (details) { details.open = true; details.scrollIntoView({ block: 'start' }); } });
 app.addEventListener('change', (e) => {
+  if (e.target.dataset.role === 'inv-qty' || e.target.dataset.role === 'inv-price') { setInvoiceLine(e.target.dataset.code, e.target.dataset.role === 'inv-qty' ? 'qty' : 'price', e.target.value); refreshInvoiceChips(); return; }
   if (e.target.dataset.role === 'price-doc-date') { priceAuditSetDate(Number(e.target.dataset.doc), e.target.value); return; }
   const t = e.target;
   // v32: בסיום הקלדת כמות (blur/Enter) בנייה מלאה אחת — הפוקוס כבר עוזב את
@@ -23426,6 +23628,10 @@ app.addEventListener('click', (e) => {
   else if (role === 'rc-minus') changeReceiptQty(id, -1);
   else if (role === 'rc-remove') removeReceiptLine(id);
   else if (role === 'rc-calc') calcReceiptRange();
+  else if (role === 'inv-adopt') { const sel = app.querySelector('select[data-role="inv-from"][data-key="' + CSS.escape(t.dataset.key || '') + '"]'); adoptInvoicePrice(t.dataset.pid, Number(t.dataset.price), sel ? sel.value : ''); }
+  else if (role === 'inv-assign') { const sel = app.querySelector('select[data-role="inv-assign-select"][data-code="' + CSS.escape(t.dataset.code || '') + '"]'); if (sel && sel.value) assignInvoiceAltCode(t.dataset.code, sel.value); else showToast('בחר מוצר לשיוך', null, null, 2000); }
+  else if (role === 'inv-add-line') { const code = String(($('invNewCode') || {}).value || '').trim(); if (!code || !monthInvoice) { showToast('הקלד קוד פריט מהחשבונית', null, null, 2000); return; } setInvoiceLine(code, 'qty', ($('invNewQty') || {}).value); setInvoiceLine(code, 'price', ($('invNewPrice') || {}).value); renderRangeResult($('rcFrom') ? $('rcFrom').value : '', $('rcTo') ? $('rcTo').value : ''); }
+  else if (role === 'inv-remove-line') { if (monthInvoice) { delete monthInvoice.lines[String(t.dataset.code || '')]; saveMonthInvoice(); renderRangeResult($('rcFrom') ? $('rcFrom').value : '', $('rcTo') ? $('rcTo').value : ''); } }
   else if (role === 'seed-catalog') seedBermanCatalog();
   else if (role === 'rc-month-cur') setRangeMonth(0);
   else if (role === 'rc-month-prev') setRangeMonth(-1);

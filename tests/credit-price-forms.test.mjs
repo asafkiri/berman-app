@@ -131,10 +131,12 @@ test('הספק זיכה במחיר המבצע: הצירוף היחיד שסוג�
   assert.equal(saved.items[2].unitPrice, 5.7408);
   assert.equal(rt.run('returnsDiscrepancyInfo(returns[0]).open'), false);
   assert.match(rt.run('returnCardInReceipts(returns[0])'), /מבצע בתעודה/);
-  // המרכזת: יחידה שזוכתה במחיר המבצע אינה "חוזרת" לקיזוז; במחיר הרגיל היא כן
-  assert.equal(rt.run("receiptRangeData('2026-10-01', '2026-10-31').meBackEx"), 0);
+  // v118: המרכזת מתמחרת את הזיכוי ממחיר הלקוח ומבצע המרכזת של אותו יום (₪8.50),
+  // ולא ממחיר השורה — ולכן המחיר שנשמר על השורה אינו משנה את החודש
+  const monthRow = () => rt.run("receiptRangeData('2026-10-01', '2026-10-31').matrix.list.find(r => r.code === '1231').amount");
+  assert.equal(monthRow(), -8.5);
   rt.run('returns[0].items[0].unitPrice = 10.399818');
-  assert.equal(rt.run("receiptRangeData('2026-10-01', '2026-10-31').meBackEx"), 1.9);
+  assert.equal(monthRow(), -8.5);
   // פתיחה מחדש: השורה נשארת במחיר המבצע, והצ'יפ מסומן
   rt.run('returns[0].items[0].unitPrice = 8.5; openReturnVerify("test-return")');
   assert.equal(state(rt).items[0].unitPrice, 8.5);
