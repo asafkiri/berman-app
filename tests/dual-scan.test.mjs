@@ -93,15 +93,62 @@ test('an unidentified code triggers exactly one verification of the code, and th
   assert.deepEqual(json(r,'products'), data.products);
 });
 
-test('a quantity that was not read triggers one verification of the quantity', async () => {
-  const data = fixture(), correct = strong(data);
+test('a quantity that was not read never opens a paid request of its own — the paper fails on its units anchor instead', async () => {
+  const data = fixture();
   data.paper.scan.documents[0].rows[0].quantity = null;
+  const r = setup(data); await r.scan();
+  assert.equal(r.requests.length, 1, 'no verify request for a quantity alone (main sent none either)');
+  assert.deepEqual(targets(r), []);
+  assert.equal(r.run('receiptPaperScanState'), 'failed');
+  assert.ok(json(r, 'receiptPaperScanProblems').some(p => /סה״כ כללי/.test(p)));
+});
+
+test('a quantity that was not read rides on a verification that identity already forces', async () => {
+  const data = fixture(), correct = strong(data);
+  Object.assign(data.paper.scan.documents[0].rows[0], { quantity: null, itemCode: '9999', barcode: '' });
   const r = setup(data, [correct]); await r.scan();
   assert.equal(r.requests.length, 2);
   const request = JSON.parse(r.requests[1].body);
-  assert.deepEqual(request.verificationTargets.map(t => [t.lineNumber, t.field]), [[10, 'quantity']]);
+  assert.deepEqual(request.verificationTargets.map(t => [t.lineNumber, t.field]), [[10, 'itemCode'], [10, 'quantity']]);
   assert.equal(r.run('aiScanResponse.scan.documents[0].rows[0].quantity'), 2);
+  assert.equal(r.run('aiScanResponse.scan.documents[0].rows[0].__tnuvaProductId'), 'spelt');
   assert.equal(r.run('receiptPaperScanState'), 'ok');
+});
+
+test('a row the server already flagged is not re-targeted (no second paid request); it waits for manual review', async () => {
+  const data = fixture();
+  Object.assign(data.paper.scan.documents[0].rows[0], { itemCode: '9999', barcode: '', unitPriceExVat: 99 });
+  data.paper.verification = { ...data.paper.verification, status: 'needs_review', issues: [{ noteIndex: 0, sourcePage: 1, lineNumber: 10, field: 'identity', reason: 'unreadable' }] };
+  const r = setup(data); await r.scan();
+  assert.equal(r.requests.length, 1);
+  assert.deepEqual(targets(r), []);
+  assert.equal(r.run('bermanOcrPendingDocs().length'), 1);
+  // a document-level issue pulls the whole paper to manual review — no row targets at all
+  const other = fixture();
+  Object.assign(other.paper.scan.documents[0].rows[0], { itemCode: '9999', barcode: '', unitPriceExVat: 99 });
+  other.paper.verification = { ...other.paper.verification, status: 'needs_review', issues: [{ noteIndex: 0, field: 'document', reason: 'low_confidence' }] };
+  const s = setup(other); await s.scan();
+  assert.equal(s.requests.length, 1);
+  assert.deepEqual(targets(s), []);
+});
+
+test('analyzer: an answer with only price claims is not adopted — the engine\'s quantity findings stay', async () => {
+  const data = fixture(); data.items[0].qty = 1; data.items[1].qty = 9; // spelt short 1, buns surplus 1 — units still 18
+  const r = setup(data); await r.scan();
+  r.run('openReconcile()');
+  assert.deepEqual(json(r, 'aiScanEvaluation.findings.map(f => [f.type, f.productId, f.qty]).sort()'), [['shortage', 'spelt', 1], ['surplus', 'buns', 1]]);
+  r.context.fetch = async (url, options) => {
+    r.requests.push({ url: String(url), body: options.body });
+    assert.equal(JSON.parse(options.body).mode, 'analyze');
+    return { ok: true, status: 200, json: async () => ({ ok: true, analysis: { claims: [{ kind: 'price', productId: 'spelt', quantity: 0, billedUnitPriceExVat: 14.94, expectedUnitPriceExVat: 10.46, amountExVat: 8.96 }], summary: 'מחיר שונה', unexplained: '' } }) };
+  };
+  r.run('aiRunAnalyzer = auditOriginalAnalyzer');
+  await r.run('aiRunAnalyzer()');
+  assert.equal(r.requests.length, 2);
+  assert.equal(r.run('aiAnalyzeResult && aiAnalyzeResult.accepted'), false);
+  assert.equal(r.run('aiScanEvaluation.analyzerLed'), undefined);
+  assert.deepEqual(json(r, 'aiScanEvaluation.findings.map(f => [f.type, f.productId, f.qty]).sort()'), [['shortage', 'spelt', 1], ['surplus', 'buns', 1]]);
+  assert.equal(r.run('aiScanAllGood(aiScanEvaluation)'), false);
 });
 
 test('server escalation already used the third read: no fourth request; the row is resolved locally by name and list price', async () => {

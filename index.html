@@ -5380,7 +5380,7 @@ function receiptPaperDocsSnapshot() {
     const inp = (aiScanDocuments || [])[d && d.noteIndex] || {};
     return { number: receiptPaperNumber(d && (d.docNumber ?? d.invoiceNumber)) || null, date: (d && (d.docDate || d.date)) || null,
       units: inp.units != null ? Number(inp.units) : null, lines: inp.lines != null ? Number(inp.lines) : null,
-      printedNetEx: inp.amount != null ? r2(inp.amount) : null, kind: inp.kind === 'credit' ? 'credit' : 'charge' };
+      printedNetEx: Number(inp.amount) > 0 ? r2(inp.amount) : null, kind: inp.kind === 'credit' ? 'credit' : 'charge' };
   });
 }
 function receiptAlreadyReceivedPapers() {
@@ -10460,9 +10460,19 @@ function priceAuditCapture(doc) {
   if (!doc || doc.__pricePaper) return;
   doc.__pricePaper = JSON.parse(JSON.stringify(doc));
 }
+// v122: ממצא אימות על כסף בלבד (נטו לחיוב, מע"מ, סה"כ לתשלום, מחיר יחידה, "totals")
+// אינו עניין של הקליטה ואינו חוסם. כל ממצא אחר — זהות, כמות, עוגני הסיכום,
+// מספר/תאריך תעודה, ביטחון המסמך — ממתין לאימות ידני.
+const BERMAN_OCR_MONEY_FIELDS = new Set(['netToChargeExVat', 'vatAmountPrinted', 'totalToChargeInclVat', 'unitPriceExVat', 'totals']);
+function bermanOcrIssueGates(issue) { return !issue || !BERMAN_OCR_MONEY_FIELDS.has(String(issue.field || '')); }
 function bermanOcrPendingDocs() {
   return (aiScanResponse && aiScanResponse.scan && aiScanResponse.scan.documents || [])
-    .filter(doc => doc.__bermanOcrVerification && doc.__bermanOcrVerification.status === 'needs_review');
+    .filter(doc => {
+      const verification = doc && doc.__bermanOcrVerification;
+      if (!verification || verification.status !== 'needs_review') return false;
+      const issues = Array.isArray(verification.issues) ? verification.issues : [];
+      return !issues.length || issues.some(bermanOcrIssueGates);
+    });
 }
 function bermanOcrReviewFields(doc) {
   const raw = doc.__pricePaper || doc, fields = [], seen = new Set();
@@ -10474,8 +10484,9 @@ function bermanOcrReviewFields(doc) {
     // שני עוגני בלוק הסיכום, "סה"כ כללי" ו"סה"כ שורות". ממצא ברמת המסמך שאינו
     // נושא שם שדה בר-הקלדה מציג את שני העוגנים האלה במקום בלוק ריק. המחיר
     // המודפס אינו עניין של הקליטה, ולכן אינו מוצג להקלדה.
+    if (!bermanOcrIssueGates(issue)) continue;
     let names = row ? (issue.field === 'row' ? ['itemCode', 'quantity'] : issue.field === 'identity' ? ['itemCode'] : [issue.field])
-      : (issue.field === 'totals' || issue.field === 'document') ? ['totalUnits', 'printedLines'] : [issue.field];
+      : issue.field === 'document' ? ['totalUnits', 'printedLines'] : [issue.field];
     names = names.filter(field => (row ? ['itemCode', 'barcode', 'quantity'] : ['docNumber', 'docDate', 'totalUnits', 'printedLines']).includes(field));
     for (const field of names) {
       const key = index + ':' + field;
@@ -10577,7 +10588,9 @@ function bermanConfirmOcr(index) {
   if (!bermanOcrPendingDocs().length) aiScanResponse.scan.warnings = (aiScanResponse.scan.warnings || []).filter(w => !w.includes('לא ניתן לאמת את הקריאה:'));
   aiRefreshScanEvaluation();
   if (receiptEntryMode === 'photo') bermanAdoptPaperAnchors();
-  saveReceiptDraft(); refreshScanHost();
+  saveReceiptDraft(); refreshScanHost(); refreshOcrReviewViews();
+  // v122: הסיכום הפתוח (אם יש) נשען על הסריקה שאושרה כרגע — לא "התעדכנה במכשיר אחר".
+  if (pendingReceipt) pendingReceipt.sharedBasis = sharedReceiptSummaryBasis();
   return true;
 }
 function aiMoneyCents(value) {
@@ -11882,17 +11895,27 @@ function aiSingleDocScoreBetter(candidate, best) {
 function bermanOcrVerificationTargets(payload, inputDoc, docOverride) {
   const doc = docOverride || (payload && payload.scan && Array.isArray(payload.scan.documents) ? payload.scan.documents[0] : null);
   const rows = doc && Array.isArray(doc.rows) ? doc.rows : [];
-  const targets = [];
-  rows.forEach(row => {
-    if (!row) return;
+  // שורה שהשרת כבר סימן בקריאה הזאת אינה יעד נוסף (כמו ocr_uncertain עד v121) —
+  // היא ממתינה לאימות ידני. ממצא שאינו מצביע על שורה מושך את כל התעודה לאימות ידני.
+  const verification = doc && doc.__bermanOcrVerification;
+  const issues = verification && verification.status === 'needs_review' && Array.isArray(verification.issues) ? verification.issues : [];
+  if (issues.some(issue => issue && issue.rowIndex == null && issue.lineNumber == null)) return [];
+  const flagged = (row, index) => issues.some(issue => issue && (issue.rowIndex === index
+    || (issue.lineNumber != null && issue.lineNumber === row.lineNumber && (issue.sourcePage == null || issue.sourcePage === row.sourcePage))));
+  const identity = [], quantity = [];
+  rows.forEach((row, index) => {
+    if (!row || flagged(row, index)) return;
     if (!row.__tnuvaProductId || String(row.barcodeMatchMethod || '') === 'tnuva_code_repair') {
-      targets.push({ noteIndex: 0, sourcePage: row.sourcePage, lineNumber: row.lineNumber, field: 'itemCode' });
+      identity.push({ noteIndex: 0, sourcePage: row.sourcePage, lineNumber: row.lineNumber, field: 'itemCode' });
     }
     if (row.quantity == null || row.quantity === '' || !isFinite(Number(row.quantity))) {
-      targets.push({ noteIndex: 0, sourcePage: row.sourcePage, lineNumber: row.lineNumber, field: 'quantity' });
+      quantity.push({ noteIndex: 0, sourcePage: row.sourcePage, lineNumber: row.lineNumber, field: 'quantity' });
     }
   });
-  return targets.slice(0, 100);
+  // כמות שלא נקראה נוסעת רק על קריאה חוזרת שממילא נשלחת בגלל זהות — היא לעולם
+  // אינה פותחת בקשה חדשה בתשלום (בלעדיה הנייר נכשל על עוגן היחידות ומוקלד ביד).
+  if (!identity.length) return [];
+  return identity.concat(quantity).slice(0, 100);
 }
 async function aiScanSingleDocPipeline(token, docIndex) {
   const inputDoc = aiScanDocuments[docIndex];
@@ -12265,7 +12288,7 @@ async function aiRunAnalyzer(options) {
       unexplained: analysis.unexplained || '',
       droppedClaims: Number(analysis.droppedClaims) || 0,
       usage: payload.usage || null, // v196: למונה הטוקנים באבחון
-      accepted: claims.length > 0 && closure.ok === true
+      accepted: findings.length > 0 && closure.ok === true // v122: תשובה של טענות מחיר בלבד אינה מחליפה את ממצאי הכמות של המנוע
     };
     if (aiAnalyzeResult.accepted) aiAdoptAnalyzerResult(ev, aiAnalyzeResult);
   } catch (error) {
@@ -14148,6 +14171,11 @@ function reconcileSetPriceLive(productId, val) {
 function saveReconciledReceipt(opts) {
   opts = opts || {};
   if (!reconcileData) return;
+  // v122: כמו בסיום מהקליטה — תעודה שממתינה לאימות הקריאה אינה נסגרת לפני האישור.
+  if (bermanOcrPendingDocs().length) {
+    showToast('לפני השמירה יש לבדוק את המספרים המסומנים באימות הקריאה מול התעודה.', null, null, 4000);
+    saveReceiptDraft(); return;
+  }
   if (!opts.skipChecked && reconcileCheckMode) {
     const unchecked = reconcileSaveable().filter(l => !l.checked).length;
     if (unchecked > 0) { showConfirm('לא סימנת הכל', 'נשארו ' + unchecked + ' מוצרים בלי ✓ — ייתכן שעוד לא עברת עליהם מול הנייר. להמשיך בכל זאת?', 'המשך', function () { saveReconciledReceipt({ skipChecked: true }); }); return; }
@@ -20903,6 +20931,14 @@ function applySharedReceipt(payload, meta = {}) {
       const value = Object.prototype.hasOwnProperty.call(incoming.state, key) ? incoming.state[key] : defaults[key];
       if (!same(bindings[key][0](), value)) bindings[key][1](value);
     });
+    // v122: מכשיר ב-v121 עדיין יכול לשלוח את המצב שירד ('discount-pending') —
+    // נגזר מחדש מהסריקה, כמו בשחזור טיוטה מקומית.
+    if (receiptPaperScanState === 'discount-pending') {
+      let paper = null;
+      try { paper = aiScanResponse ? bermanPaperAnchorsFromScan(aiScanResponse) : null; } catch (e) { paper = null; }
+      if (paper && paper.ok && paper.notes.length === aiScanDocuments.length) bermanSetPaperAnchors(paper);
+      else { receiptPaperScanState = aiScanResponse ? 'failed' : ''; receiptPaperScanProblems = paper && paper.problems && paper.problems.length ? paper.problems : (aiScanResponse ? ['הפענוח השמור אינו תואם לכל נתוני התעודות'] : []); }
+    }
     recomputeNoteTotal();
     sharedReceiptLastUI = incoming.ui;
     sharedReceiptLastView = incoming.ui.view || 'receiving';

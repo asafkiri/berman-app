@@ -65,10 +65,19 @@ test('an identity issue asks for the code; a quantity issue for the quantity; a 
   assert.deepEqual(fields(r), [[2, 'itemCode']]);
 });
 
-test('a price issue has nothing to type: an explanation, no inputs, one confirmation', async () => {
+test('a price issue is not the receiving\'s business: nothing to type, nothing pending', async () => {
   const r = flagged([rowIssue(0, 'unitPriceExVat', 'disagreement')]);
   await r.scan();
   assert.deepEqual(fields(r), []);
+  assert.equal(r.run('bermanOcrPendingDocs().length'), 0);
+  assert.equal(r.run('bermanOcrReviewHtml()'), '');
+});
+
+test('an in-scope issue that yields no typeable field renders an explanation, never a no-op form', async () => {
+  const r = flagged([{ noteIndex: 0, field: 'docType', reason: 'unreadable' }]);
+  await r.scan();
+  assert.deepEqual(fields(r), []);
+  assert.equal(r.run('bermanOcrPendingDocs().length'), 1);
   const html = r.run('bermanOcrReviewHtml()');
   assert.equal((html.match(/<input/g) || []).length, 0);
   assert.ok(html.includes('הקריאה לא אומתה במלואה'), 'the user must be told what is unverified');
@@ -77,15 +86,56 @@ test('a price issue has nothing to type: an explanation, no inputs, one confirma
 });
 
 test('a document-level issue offers the two printed anchors — never a money field', async () => {
-  for (const field of ['document', 'totals']) {
-    const r = flagged([{ noteIndex: 0, field, reason: 'low_confidence' }]);
-    await r.scan();
-    assert.deepEqual(fields(r), [[-1, 'totalUnits'], [-1, 'printedLines']], field);
-    const html = r.run('bermanOcrReviewHtml()');
-    assert.equal((html.match(/<input/g) || []).length, 2);
-    assert.ok(html.includes('סה"כ כללי') && html.includes('סה"כ שורות'));
-    assert.ok(!html.includes('נטו לחיוב'));
-  }
+  const r = flagged([{ noteIndex: 0, field: 'document', reason: 'low_confidence' }]);
+  await r.scan();
+  assert.deepEqual(fields(r), [[-1, 'totalUnits'], [-1, 'printedLines']]);
+  const html = r.run('bermanOcrReviewHtml()');
+  assert.equal((html.match(/<input/g) || []).length, 2);
+  assert.ok(html.includes('סה"כ כללי') && html.includes('סה"כ שורות'));
+  assert.ok(!html.includes('נטו לחיוב'));
+});
+
+test('money-only issues from the server (net, VAT, totals, unit price) do not gate the receipt at all', async () => {
+  const r = flagged([
+    { noteIndex: 0, field: 'netToChargeExVat', reason: 'unreadable' },
+    { noteIndex: 0, field: 'totals', reason: 'inconsistent' },
+    { noteIndex: 0, field: 'vatAmountPrinted', reason: 'disagreement' },
+    rowIssue(0, 'unitPriceExVat', 'unreadable')
+  ]);
+  await r.scan();
+  assert.equal(r.requests.length, 1);
+  assert.equal(r.run('receiptPaperScanState'), 'ok');
+  assert.equal(r.run('bermanOcrPendingDocs().length'), 0, 'nothing to verify for the receiving');
+  assert.deepEqual(fields(r), []);
+  assert.equal(r.run('bermanOcrReviewHtml()'), '');
+  assert.ok(r.run('receiptQuantityPaperRows()'), 'the paper can still prove the count');
+  r.run('finishReceipt()');
+  assert.ok(r.run('pendingReceipt && pendingReceipt.status === "ok"'));
+  // mixed: a money issue beside a quantity issue — only the quantity is asked for
+  const m = flagged([{ noteIndex: 0, field: 'netToChargeExVat', reason: 'unreadable' }, rowIssue(1, 'quantity')]);
+  await m.scan();
+  assert.equal(m.run('bermanOcrPendingDocs().length'), 1);
+  assert.deepEqual(fields(m), [[1, 'quantity']]);
+});
+
+test('closing from the comparison screen also waits for the review; confirming inside the summary keeps the save valid', async () => {
+  const r = flagged([{ noteIndex: 0, field: 'document', reason: 'low_confidence' }]);
+  await r.scan();
+  r.run('openReconcile(); saveReconciledReceipt({ skipChecked: true, skipGap: true });');
+  assert.equal(r.run('pendingReceipt'), null, 'the summary does not open while a document waits for review');
+  assert.match(r.toasts.at(-1), /אימות הקריאה/);
+  r.context.document.querySelectorAll = selector => selector === '[data-ocr-doc]'
+    ? [{ dataset: { ocrDoc: '0', ocrKey: '-1:totalUnits' }, value: '18' }, { dataset: { ocrDoc: '0', ocrKey: '-1:printedLines' }, value: '3' }] : [];
+  // the confirm button also lives in the summary modal (rsBody); confirming there refreshes the host and the open summary's basis
+  r.run('pendingReceipt = { lines: [], status: "ok", sharedBasis: "stale" }; $("rsOcrReview").innerHTML = ocrReviewPanelHtml();');
+  assert.ok(r.node('rsOcrReview').innerHTML.includes('berman-ocr-confirm'));
+  r.events.get('rsBody:click')({ target: { dataset: { role: 'berman-ocr-confirm', id: '0' }, closest: s => s === '[data-role="berman-ocr-confirm"]' ? { dataset: { id: '0' } } : null } });
+  assert.equal(r.run('bermanOcrPendingDocs().length'), 0);
+  assert.equal(r.node('rsOcrReview').innerHTML, '', 'the panel in the summary is cleared');
+  assert.equal(r.run('pendingReceipt.sharedBasis === sharedReceiptSummaryBasis()'), true);
+  r.run('pendingReceipt = null; openReconcile(); saveReconciledReceipt({ skipChecked: true, skipGap: true });');
+  assert.ok(r.run('pendingReceipt && pendingReceipt.status === "ok"'));
+  assert.equal(r.requests.length, 1);
 });
 
 test('while a document waits for review, finishing stops and the paper cannot prove a count; confirming releases both', async () => {
