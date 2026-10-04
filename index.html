@@ -757,7 +757,7 @@ let receiptNotes = [];           // פירוט סכומי תעודות הספק 
 let receiptDocDate = null;       // v21: תאריך התעודה מהנייר — לזיכוי/חיוב שמוקלד באיחור
 let receiptDraftId = null;       // מזהה קבוע לטיוטה — מונע כפילות אחרי שמירה ממתינה/ניתוק
 let receiptPromoOnPaper = [];    // v61–v121: "המבצע ירד בתעודה" — לא נכתב יותר (v122); נשאר רק כמפתח בקליטה המשותפת עד שלב 6
-// v62: זרימת הצילום-תחילה. במקום להקליד את שלושת העוגנים לפני הקליטה,
+// v62: זרימת הצילום-תחילה. במקום להקליד את העוגנים לפני הקליטה,
 // מצלמים את התעודה, והמספרים נקראים ממנה בזמן שסורקים את הסחורה.
 let receiptEntryMode = 'photo';  // 'photo' — מצלמים תחילה · 'manual' — מקלידים את העוגנים
 let receiptAnchorSource = null;  // 'paper' | 'manual' — מאין הגיעו העוגנים של התעודה הנוכחית
@@ -1206,10 +1206,11 @@ function noteEditorBodyHtml() {
     if (n.units != null) parts.push(n.units + ' יח׳');
     if (n.lines != null) parts.push(n.lines + ' שורות');
     const extras = parts.join(' · ');
+    // v122: העוגנים הם יחידות ושורות; הסכום מוצג רק אם הוקלד, ולזיהוי בלבד.
     return '<div class="flex items-center justify-between gap-2 ' + (credit ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200') + ' border rounded-xl px-3 py-2 mb-1.5">' +
       '<div class="min-w-0"><span class="font-bold ' + (credit ? 'text-rose-700' : 'text-slate-700') + ' text-sm">' + (credit ? '<i class="fa-solid fa-rotate-left text-[10px]"></i> זיכוי ' : 'תעודה ') + (i + 1) + '</span>' +
-      (extras ? '<span class="text-[11px] ' + (credit ? 'text-rose-400' : 'text-slate-400') + ' font-bold"> · ' + extras + '</span>' : '') + '</div>' +
-      '<div class="flex items-center gap-2 shrink-0"><span class="font-black ' + (credit ? 'text-rose-700' : 'text-slate-800') + '">' + (credit ? '−' : '') + '₪' + fmtMoney(n.amount) + '</span>' +
+      (n.amount > 0 ? '<span class="text-[11px] ' + (credit ? 'text-rose-400' : 'text-slate-400') + ' font-bold"> · ' + (credit ? '−' : '') + '₪' + fmtMoney(n.amount) + ' (לזיהוי)</span>' : '') + '</div>' +
+      '<div class="flex items-center gap-2 shrink-0"><span class="font-black ' + (credit ? 'text-rose-700' : 'text-slate-800') + '">' + (extras || '—') + '</span>' +
       '<button data-role="rc-note-remove" data-idx="' + i + '" class="btn-tap text-red-500 px-1"><i class="fa-solid fa-xmark"></i></button></div>' +
     '</div>';
   }).join('');
@@ -1217,13 +1218,12 @@ function noteEditorBodyHtml() {
   const anchorsSummary = (receiptNoteUnits != null || receiptNoteLines != null)
     ? '<div class="text-[11px] font-bold text-slate-400 mt-1">' + (receiptNoteUnits != null ? 'סה"כ כללי (יחידות): ' + receiptNoteUnits + (hasCredit ? ' (נטו)' : '') : '') + (receiptNoteUnits != null && receiptNoteLines != null ? ' · ' : '') + (receiptNoteLines != null ? 'סה"כ שורות: ' + receiptNoteLines : '') + '</div>'
     : '';
-  // v51: כשיש זיכוי במקבץ מציגים את החשבון עצמו — חיובים פחות זיכויים —
-  // כדי שהמספר הכחול הגדול לא ייראה כמו טעות הקלדה.
+  // v51: כשיש זיכוי במקבץ מציגים את החשבון עצמו — חיובים פחות זיכויים.
   const breakdown = hasCredit
-    ? '<div class="text-[11px] font-bold text-slate-500 mt-1">חיובים ₪' + fmtMoney(noteSideSum('charge')) + ' פחות זיכויים ₪' + fmtMoney(noteSideSum('credit')) + '</div>' +
-      '<div class="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 mt-1.5 leading-relaxed"><i class="fa-solid fa-circle-info"></i> יש זיכוי במקבץ, ולכן עוגן "סה״כ שורות" הכולל מושהה — הוא אינו מתקזז. הכסף והיחידות ממשיכים להיבדק, וספירת השורות של כל תעודה בנפרד נבדקת בסריקת ה-AI.</div>'
+    ? (noteSideSum('charge') > 0 || noteSideSum('credit') > 0 ? '<div class="text-[11px] font-bold text-slate-500 mt-1">חיובים ₪' + fmtMoney(noteSideSum('charge')) + ' פחות זיכויים ₪' + fmtMoney(noteSideSum('credit')) + ' (לזיהוי)</div>' : '') +
+      '<div class="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 mt-1.5 leading-relaxed"><i class="fa-solid fa-circle-info"></i> יש זיכוי במקבץ, ולכן עוגן "סה״כ שורות" הכולל מושהה — הוא אינו מתקזז. היחידות ממשיכות להיבדק, וספירת השורות של כל תעודה בנפרד נבדקת בסריקת ה-AI.</div>'
     : '';
-  const total = receiptNotes.length ? '<div class="flex items-center justify-between mt-2 pt-2 border-t border-slate-200"><span class="font-bold text-slate-500 text-sm">' + (hasCredit ? 'נטו מ-' + receiptNotes.length + ' תעודות' : 'סה"כ ' + receiptNotes.length + ' תעודות') + '</span><span class="font-black text-blue-600 text-lg">₪' + fmtMoney(noteSum()) + '</span></div>' + breakdown + anchorsSummary : '';
+  const total = receiptNotes.length ? '<div class="flex items-center justify-between mt-2 pt-2 border-t border-slate-200"><span class="font-bold text-slate-500 text-sm">' + (hasCredit ? 'נטו מ-' + receiptNotes.length + ' תעודות' : 'סה"כ ' + receiptNotes.length + ' תעודות') + '</span><span class="font-black text-blue-600 text-lg">' + (receiptNoteUnits != null ? receiptNoteUnits + ' יח׳' : '—') + (receiptNoteLines != null ? ' · ' + receiptNoteLines + ' שורות' : '') + '</span></div>' + (noteSum() > 0 ? '<div class="text-[11px] font-bold text-slate-400 mt-0.5">₪' + fmtMoney(noteSum()) + ' — סכום מודפס, לזיהוי בלבד</div>' : '') + breakdown + anchorsSummary : '';
   const kindBtn = (kind, label, icon) => {
     const on = noteEntryKind === kind;
     const tone = kind === 'credit'
@@ -1232,35 +1232,34 @@ function noteEditorBodyHtml() {
     return '<button data-role="rc-note-kind" data-kind="' + kind + '" id="rcNoteKind_' + kind + '" class="btn-tap flex-1 py-2 rounded-xl border-2 font-black text-xs flex items-center justify-center gap-1.5 ' + tone + '"><i class="fa-solid ' + icon + '"></i> ' + label + '</button>';
   };
   return chips +
-    '<div class="text-xs text-slate-500 font-bold mb-1.5"><i class="fa-solid fa-circle-info"></i> לכל תעודה הקלד את שלושת המספרים שמודפסים בתחתית: <b class="text-slate-700">נטו לחיוב (ללא מע״מ)</b>, <b class="text-slate-700">סה"כ כללי</b> (סך היחידות) ו<b class="text-slate-700">סה"כ שורות</b></div>' +
+    '<div class="text-xs text-slate-500 font-bold mb-1.5"><i class="fa-solid fa-circle-info"></i> לכל תעודה הקלד את שני המספרים שמודפסים בתחתית: <b class="text-slate-700">סה"כ כללי</b> (סך היחידות) ו<b class="text-slate-700">סה"כ שורות</b>. "נטו לחיוב" — רשות, לזיהוי התעודה בלבד; הכסף מחושב במרכזת החודשית.</div>' +
     // v51: בורר סוג התעודה. במקלדת המספרית של הטלפון אין מינוס, ומינוס
     // מוקלד גם היה נבלע ב-parseNoteVal שדורש מספר חיובי. הבורר הוא גם
     // ההזדמנות לומר את הכלל: מה שיצא פיזית מהחנות שייך למסך החזרות.
     '<div class="flex gap-2 mb-1.5">' + kindBtn('charge', 'חיוב (תעודת משלוח)', 'fa-truck-ramp-box') + kindBtn('credit', 'זיכוי (מינוס)', 'fa-rotate-left') + '</div>' +
     '<div id="rcNoteKindHint" class="text-[11px] font-bold rounded-lg p-2 mb-1.5 leading-relaxed ' + (noteEntryKind === 'credit' ? 'text-rose-800 bg-rose-50 border border-rose-200' : 'text-slate-500 bg-slate-50 border border-slate-200') + '">' + noteKindHintHtml(noteEntryKind) + '</div>' +
-    // v50: המלכודת של תחתית התעודה. שלוש שורות זו מתחת לזו — נטו לחיוב,
-    // מע״מ, וסה״כ לתשלום — והתחתונה מהן היא הגדולה והבולטת. מי שלוקח אותה
-    // מקבל תעודה שכל היחידות בה תואמות ורק הכסף חורג בדיוק בשיעור המע״מ.
-    // עדיף לומר את זה כאן, לפני ההקלדה, מאשר לתפוס את זה אחר כך.
-    '<div class="text-[11px] font-black text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2 mb-1.5 leading-relaxed"><i class="fa-solid fa-triangle-exclamation"></i> לא "סה״כ לתשלום" — הוא כולל מע״מ. המספר הנכון הוא זה שמעל שורת המע״מ.</div>' +
-    '<div class="flex gap-2 items-stretch">' +
-      '<div class="flex-1 flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500"><span id="rcNoteSign" class="text-slate-400 font-black">' + (noteEntryKind === 'credit' ? '−₪' : '₪') + '</span><input id="rcNoteInput" type="text" inputmode="decimal" placeholder="נטו לחיוב — ללא מע״מ" class="w-full h-11 text-center text-base font-black outline-none bg-transparent"></div>' +
+    '<input id="rcNoteUnits" type="text" inputmode="numeric" placeholder="סה״כ כללי — סך היחידות בתעודה" class="w-full h-11 text-center text-sm font-black border-2 border-slate-200 rounded-xl outline-none focus:border-blue-500 bg-white">' +
+    '<input id="rcNoteLines" type="text" inputmode="numeric" placeholder="סה״כ שורות" class="w-full h-11 mt-1.5 text-center text-sm font-black border-2 border-slate-200 rounded-xl outline-none focus:border-blue-500 bg-white">' +
+    '<div class="flex gap-2 items-stretch mt-1.5">' +
+      '<div class="flex-1 flex items-center gap-1 border-2 border-slate-200 rounded-xl px-2 focus-within:border-blue-500"><span id="rcNoteSign" class="text-slate-400 font-black">' + (noteEntryKind === 'credit' ? '−₪' : '₪') + '</span><input id="rcNoteInput" type="text" inputmode="decimal" placeholder="נטו לחיוב — רשות, לזיהוי" class="w-full h-11 text-center text-sm font-black outline-none bg-transparent"></div>' +
       '<button data-role="rc-note-add" class="btn-tap px-4 rounded-xl font-black bg-slate-100 text-slate-700 flex items-center gap-1"><i class="fa-solid fa-plus"></i> הוסף</button>' +
     '</div>' +
-    '<input id="rcNoteUnits" type="text" inputmode="numeric" placeholder="סה״כ כללי — סך היחידות בתעודה" class="w-full h-11 mt-1.5 text-center text-sm font-black border-2 border-slate-200 rounded-xl outline-none focus:border-blue-500 bg-white">' +
-    '<input id="rcNoteLines" type="text" inputmode="numeric" placeholder="סה״כ שורות" class="w-full h-11 mt-1.5 text-center text-sm font-black border-2 border-slate-200 rounded-xl outline-none focus:border-blue-500 bg-white">' +
-    '<div class="text-xs text-slate-500 font-bold mt-1"><i class="fa-solid fa-wand-magic-sparkles"></i> שלושת העוגנים מודפסים בשורה התחתונה של תעודת ברמן. שים לב: מספרי השורות בתעודה יכולים לדלג — סופרים את מספר השורות בפועל</div>' +
+    '<div class="text-xs text-slate-500 font-bold mt-1"><i class="fa-solid fa-wand-magic-sparkles"></i> שני העוגנים מודפסים בשורה התחתונה של תעודת ברמן. שים לב: מספרי השורות בתעודה יכולים לדלג — סופרים את מספר השורות בפועל. אם מקלידים סכום, זה "נטו לחיוב" (מעל שורת המע״מ), לא "סה״כ לתשלום".</div>' +
     total;
 }
 // v51: זיכוי מקזז חיוב — הוא לא יכול לעמוד בפני עצמו. נטו אפס או שלילי
 // פירושו שאין כאן קליטת סחורה, ואז הנייר שייך למסך החזרות ולא לכאן.
+// v51/v122: זיכוי מקזז חיוב — הוא לא יכול לעמוד בפני עצמו. הסימן נמדד
+// ביחידות (חיובים פחות זיכויים חייבים להשאיר סחורה); הסכום — רק אם הוקלד.
 function receiptNetPositive() {
   if (!receiptNotes.length) return true;
-  if (!(noteSum() > 0)) return false;
-  return receiptNoteUnits == null || receiptNoteUnits > 0;
+  if (receiptNoteUnits != null) return receiptNoteUnits > 0;
+  if (!receiptNotes.some(x => normNote(x).kind === 'charge')) return false;
+  return noteSum() >= 0;
 }
 function receiptNetProblemText() {
-  return 'הזיכויים מקזזים את כל החיובים (נטו ₪' + fmtMoney(noteSum()) + (receiptNoteUnits != null ? ' · ' + receiptNoteUnits + ' יח׳' : '') + ') — זו אינה קליטת סחורה. אם הסחורה הוחזרה לנהג בפועל, רשום אותה במסך החזרות.';
+  const net = receiptNoteUnits != null ? receiptNoteUnits + ' יח׳' : '₪' + fmtMoney(noteSum());
+  return 'הזיכויים מקזזים את כל החיובים (נטו ' + net + ') — זו אינה קליטת סחורה. אם הסחורה הוחזרה לנהג בפועל, רשום אותה במסך החזרות.';
 }
 // הכלל שמפריד בין המסכים, בשורה אחת: האם משהו יצא פיזית מהחנות?
 function noteKindHintHtml(kind) {
@@ -1283,6 +1282,8 @@ function syncNoteKindUi() {
   const sign = $('rcNoteSign');
   if (sign) sign.textContent = noteEntryKind === 'credit' ? '−₪' : '₪';
 }
+// v122: שני עוגנים חובה — "סה״כ כללי" (יחידות) ו"סה״כ שורות". "נטו לחיוב"
+// הוא רשות ונשמר לזיהוי התעודה בלבד; הוא הסכום של המסופון, לא של החשבונית.
 function readNoteEntry(required) {
   const amountInp = $('rcNoteInput'), unitsInp = $('rcNoteUnits'), linesInp = $('rcNoteLines');
   const amountRaw = ((amountInp || {}).value || '').trim();
@@ -1290,10 +1291,15 @@ function readNoteEntry(required) {
   const linesRaw = ((linesInp || {}).value || '').replace(/[^0-9]/g, '');
   const kind = noteEntryKind === 'credit' ? 'credit' : 'charge';
   const what = kind === 'credit' ? 'תעודת הזיכוי' : 'התעודה';
-  const v = parseNoteVal(amountRaw);
-  if (v == null) {
-    if (!required && !unitsRaw && !linesRaw) return null;
-    showToast('הזן את "נטו לחיוב" ללא מע״מ — הסכום בשורה התחתונה של ' + what + (kind === 'credit' ? ', כמספר חיובי' : ''), null, null, 3200);
+  if (!amountRaw && !unitsRaw && !linesRaw) {
+    if (!required) return null;
+    showToast('הזן את "סה״כ כללי" (סך היחידות) ו"סה״כ שורות" מתחתית ' + what, null, null, 3400);
+    if (unitsInp) unitsInp.focus();
+    return false;
+  }
+  const v = amountRaw ? parseNoteVal(amountRaw) : null;
+  if (amountRaw && v == null) {
+    showToast('"נטו לחיוב" אינו מספר תקין — אפשר גם להשאיר אותו ריק (הוא לזיהוי בלבד)', null, null, 3200);
     if (amountInp) amountInp.focus();
     return false;
   }
@@ -1309,7 +1315,7 @@ function readNoteEntry(required) {
     if (linesInp) linesInp.focus();
     return false;
   }
-  return { amount: r2(v), units: uts, lines: lns, kind };
+  return { amount: v == null ? 0 : r2(v), units: uts, lines: lns, kind };
 }
 function saveReceiptDraft() {
   scheduleSharedReceiptSave();
@@ -5462,13 +5468,6 @@ function vatOnlyGapNet(paperTotal, netTotal, vatRate) {
   const derivedNet = r2(paper / (1 + rate));
   return { net: derivedNet, vat: r2(paper - derivedNet), rate, pctTxt: r2(rate * 100) + '%' };
 }
-// שווי השורות לפי מה שרשום בנייר (כמות התעודה, לא הכמות שהתקבלה) — המספר
-// שאמור להיות שווה ל"נטו לחיוב" המודפס בתחתיתה.
-function receiptPaperNetValue(rc) {
-  const items = (rc && rc.items) || [];
-  const paperValue = r2(items.reduce((a, l) => a + lineTotalFromUnit(Number(l.unitPrice) || 0, l.noteQty != null ? (Number(l.noteQty) || 0) : (Number(l.qty) || 0)), 0));
-  return r2(paperValue - (Number(rc && rc.supplierDiscount) || 0));
-}
 function discountedUnitPrice(base, pct) {
   return (Number(base) || 0) * (1 - (Number(pct) || 0) / 100);
 }
@@ -5644,32 +5643,6 @@ function monthEndForecastHtml(me, baseEx, title) {
     }).join('') +
     '<div class="flex justify-between font-bold text-slate-500 mt-0.5"><span>(צפי אחרי המרכזת)</span><span>(₪' + fmtMoney(r2(baseEx - meTotEx - onPaperTotEx)) + ')</span></div>' +
   '</div>';
-}
-// v91: ההשלמה לקיזוז שהוקפא בתעודה שנשמרה לפני התיקון. הרשומה שנשמרה עם
-// התעודה (monthEndPending) יודעת את הקיזוז האמיתי; ההשלמה היא ההפרש בינו
-// לבין מה שנגזר מהמחיר שרשום בשורה בפועל. אחרי v91 השורה נושאת את המחיר
-// שחויב, ההפרש יוצא אפס, והפונקציה מפסיקה להשפיע מעצמה.
-function monthEndPendingCorrections(rc) {
-  const out = new Map();
-  const mp = rc && rc.monthEndPending;
-  if (!mp || typeof mp !== 'object') return out;
-  const entries = Array.isArray(mp.items) ? mp.items : [mp];
-  entries.forEach(entry => {
-    if (!entry || entry.productId == null) return;
-    const expected = Number(entry.expectedRebate) || 0;
-    const fixed = Number(entry.promoFixedPrice) || 0;
-    if (!(expected > 0) || !(fixed > 0)) return;
-    const item = (rc.items || []).find(l => l && String(l.productId) === String(entry.productId));
-    if (!item) return;
-    const qty = Number(item.noteQty != null ? item.noteQty : item.qty) || 0;
-    const counted = Math.max(0, (Number(item.unitPrice) || 0) - fixed) * qty;
-    const extra = r2(expected - counted);
-    if (!(extra > 0.005)) return; // התקלה תמיד גורעת; השלמה שלילית אינה מתקנת דבר
-    const pr = monthEndPromoForProduct(entry.productId, storedReceiptDate(rc));
-    const key = (pr && pr.id) || (String(entry.promoName || '') + '|0');
-    out.set(key, r2((out.get(key) || 0) + extra));
-  });
-  return out;
 }
 function monthEndSnapshotForLines(lines, dateStr, promotionCatalog) {
   const groups = {};
@@ -6156,7 +6129,7 @@ function receivingPhotoCardHtml() {
     '<button data-role="rc-open-photo-quantity" ' + (ready ? '' : 'disabled') + ' class="btn-tap w-full py-3 mb-2 bg-white border-2 border-emerald-300 text-emerald-800 rounded-xl font-black text-base">פענח תעודה — הכמויות נבדקות ידנית</button>' +
     '<button data-role="rc-open-photo" ' + (ready ? '' : 'disabled') + ' class="btn-tap w-full rounded-2xl py-4 font-black text-lg flex items-center justify-center gap-2 mt-1 ' + (ready ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-400') + '"><i class="fa-solid fa-arrow-left"></i> התחל קליטה</button>' +
     '<div class="text-[11px] text-slate-500 font-bold text-center mt-1.5">הקריאה מהנייר תרוץ ברקע בזמן שאתה סורק את הסחורה. הכמויות שבתעודה לא יוצגו לך תוך כדי — הספירה נשארת עיוורת, וזה מה שתופס חוסר.</div>' +
-    '<button data-role="rc-entry-manual" class="btn-tap w-full text-slate-400 py-2.5 font-black text-xs underline mt-1">אין רשת או שהנייר לא קריא — הקלד את שלושת המספרים</button>';
+    '<button data-role="rc-entry-manual" class="btn-tap w-full text-slate-400 py-2.5 font-black text-xs underline mt-1">אין רשת או שהנייר לא קריא — הקלד את המספרים מתחתית התעודה</button>';
 }
 // v107: קליטה שכבר נספרה וחזרה לשלב צילום התעודה.
 function receiptPhotoStepPending() {
@@ -6389,10 +6362,10 @@ function renderReceivingScreen() {
     app.innerHTML = banner + pendingReturnsBannerHtml() + topButtons + receivingAttachBannerHtml() + receivingCountedBannerHtml() +
       '<div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm mt-2">' + steps +
         (photoMode
-          ? '<div class="text-center mb-3"><i class="fa-solid fa-camera-retro text-violet-600 text-4xl mb-2"></i><div class="font-black text-slate-800 text-lg">צלם את התעודה</div><div class="text-sm text-slate-500">בזמן שהנייר עוד ביד. שלושת המספרים ייקראו ממנו לבד — אין מה להקליד.</div></div>' +
+          ? '<div class="text-center mb-3"><i class="fa-solid fa-camera-retro text-violet-600 text-4xl mb-2"></i><div class="font-black text-slate-800 text-lg">צלם את התעודה</div><div class="text-sm text-slate-500">בזמן שהנייר עוד ביד. "סה"כ כללי" ו"סה"כ שורות" ייקראו ממנו לבד — אין מה להקליד.</div></div>' +
             '<div class="rounded-xl bg-blue-50 border border-blue-200 p-2 text-[11px] font-black text-blue-800 mb-3"><i class="fa-solid fa-expand"></i> כל צילום נפתח בגודל מלא. סובב עד שהכתב ישר ואשר — בלי אישור התמונה לא נשלחת.</div>' +
             receivingPhotoCardHtml() + dateBox
-          : '<div class="text-center mb-3"><i class="fa-solid fa-file-invoice text-blue-600 text-4xl mb-2"></i><div class="font-black text-slate-800 text-lg">נתוני התעודה</div><div class="text-sm text-slate-500">הזן את שלושת העוגנים מהשורה התחתונה: נטו לחיוב (ללא מע״מ), סה"כ כללי וסה"כ שורות.</div></div>' +
+          : '<div class="text-center mb-3"><i class="fa-solid fa-file-invoice text-blue-600 text-4xl mb-2"></i><div class="font-black text-slate-800 text-lg">נתוני התעודה</div><div class="text-sm text-slate-500">הזן את שני העוגנים מהשורה התחתונה: סה"כ כללי (יחידות) וסה"כ שורות. הסכום — רשות, לזיהוי בלבד.</div></div>' +
             noteEditorBodyHtml() + dateBox +
             '<button data-role="rc-open" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 font-black text-lg flex items-center justify-center gap-2 mt-4"><i class="fa-solid fa-arrow-left"></i> התחל קליטה</button>' +
             (AI_SCAN_ENABLED ? '<button data-role="rc-entry-photo" class="btn-tap w-full text-violet-600 py-2.5 font-black text-xs underline mt-1"><i class="fa-solid fa-camera-retro"></i> או: צלם את התעודה והמספרים ייקראו לבד</button>' : '')) +
@@ -6420,8 +6393,8 @@ function renderReceivingScreen() {
         receiptNotesEscapeHtml() +
       '</div>'
     : '<div class="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm mb-3 flex items-center justify-between gap-2">' +
-        '<div class="flex items-center gap-2 min-w-0"><i class="fa-solid fa-file-invoice text-blue-600"></i><div class="min-w-0"><div class="text-[11px] text-slate-400 font-bold">' + (receiptHasCreditNote() ? 'נטו לחיוב אחרי זיכויים' : 'נטו לחיוב (ללא מע״מ)') + (receiptNotes.length > 1 ? ' · ' + receiptNotes.length + ' תעודות' : '') + (receiptNoteUnits != null ? ' · ' + receiptNoteUnits + ' יח׳' : '') + (receiptNoteLines != null ? ' · ' + receiptNoteLines + ' שורות' : '') + '</div><div class="font-black text-slate-800">' + (receiptNoteTotal != null ? '₪' + fmtMoney(receiptNoteTotal) : 'ללא אימות') + (receiptDocDate ? '<span class="text-xs text-blue-600 mr-2">· ' + dDisp(receiptDocDate) + '</span>' : '') + '</div>' +
-        (receiptHasCreditNote() ? '<div class="text-[10px] font-black text-rose-600 mt-0.5"><i class="fa-solid fa-rotate-left"></i> ₪' + fmtMoney(noteSideSum('charge')) + ' פחות זיכוי ₪' + fmtMoney(noteSideSum('credit')) + '</div>' : '') +
+        '<div class="flex items-center gap-2 min-w-0"><i class="fa-solid fa-file-invoice text-blue-600"></i><div class="min-w-0"><div class="text-[11px] text-slate-400 font-bold">' + (receiptHasCreditNote() ? 'עוגני הנייר אחרי זיכויים' : 'עוגני הנייר') + (receiptNotes.length > 1 ? ' · ' + receiptNotes.length + ' תעודות' : '') + (receiptNoteTotal > 0 ? ' · ₪' + fmtMoney(receiptNoteTotal) + ' (לזיהוי)' : '') + '</div><div class="font-black text-slate-800">' + (receiptNoteUnits != null ? receiptNoteUnits + ' יח׳' + (receiptNoteLines != null ? ' · ' + receiptNoteLines + ' שורות' : '') : 'ללא אימות') + (receiptDocDate ? '<span class="text-xs text-blue-600 mr-2">· ' + dDisp(receiptDocDate) + '</span>' : '') + '</div>' +
+        (receiptHasCreditNote() && noteSum() > 0 ? '<div class="text-[10px] font-black text-rose-600 mt-0.5"><i class="fa-solid fa-rotate-left"></i> ₪' + fmtMoney(noteSideSum('charge')) + ' פחות זיכוי ₪' + fmtMoney(noteSideSum('credit')) + ' (לזיהוי)</div>' : '') +
         '</div></div>' +
         '<div class="flex items-center gap-1.5 shrink-0"><button data-role="rc-notes-edit" class="btn-tap text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-2 rounded-lg"><i class="fa-solid fa-pen"></i> ערוך</button><button data-role="rc-cancel" class="btn-tap text-xs font-bold text-red-500 bg-red-50 px-2.5 py-2 rounded-lg"><i class="fa-solid fa-xmark"></i></button></div>' +
       '</div>';
@@ -6616,11 +6589,11 @@ function finishReceipt() {
     }
   }
   // v121: סקירת ההנחה הנדחית ירדה מהסיום — תעודה נסגרת לפי כמויות; הכסף במרכזת.
-  // ברמן: שלושת העוגנים חובה — נטו לחיוב, סה"כ כללי (יחידות), סה"כ שורות.
-  // גם טיוטה ישנה אינה יכולה לעקוף את הבלש או להיסגר כתקינה בלעדיהם.
+  // v122: שני העוגנים חובה לכל תעודה — סה"כ כללי (יחידות) וסה"כ שורות.
+  // "נטו לחיוב" הוא רשות ולזיהוי בלבד. גם טיוטה ישנה אינה נסגרת בלעדיהם.
   const anchorsReady = receiptNotes.length > 0 && receiptNotes.every(raw => {
     const note = normNote(raw);
-    return note.amount > 0 && note.units != null && note.units > 0 && note.lines != null && note.lines > 0;
+    return note.units != null && note.units > 0 && note.lines != null && note.lines > 0;
   });
   // v51: עוגן השורות הכולל מושהה כשיש זיכוי במקבץ (הוא אינו מתקזז), ולכן
   // אסור לדרוש אותו כאן. הדרישה משלוש המספרים *לכל תעודה* נשארת בעינה —
@@ -6630,7 +6603,7 @@ function finishReceipt() {
   // הבדיקה אלא דחייה שלה: התעודה תישמר פתוחה, והבדיקה תרוץ במלואה כשהנייר
   // יגיע ויצורף אליה.
   const savingNoDoc = receiptNoDoc && !receiptNotes.length;
-  if (!savingNoDoc && (!anchorsReady || receiptNoteTotal == null || receiptNoteUnits == null || (linesAnchorRequired && receiptNoteLines == null))) {
+  if (!savingNoDoc && (!anchorsReady || receiptNoteUnits == null || (linesAnchorRequired && receiptNoteLines == null))) {
     // v62: בזרימת הצילום המספרים בדרך — הקריאה רצה ברקע בזמן הסריקה. אין
     // טעם לשלוח להקלדה שנייה לפני שהיא סיימה; רק אם היא נכשלה באמת.
     if (receiptEntryMode === 'photo' && (aiScanBusy || receiptPaperScanState === 'running')) {
@@ -6640,8 +6613,8 @@ function finishReceipt() {
     }
     editingNotes = true;
     showToast(receiptEntryMode === 'photo' && receiptPaperScanState === 'failed'
-      ? 'הנייר לא אישר את עצמו — הקלד את שלושת המספרים מתחתית התעודה'
-      : 'לפני האישור חובה להזין לכל תעודה את שלושת העוגנים: נטו לחיוב, סה"כ כללי וסה"כ שורות', null, null, 4200);
+      ? 'הנייר לא אישר את עצמו — הקלד את "סה"כ כללי" ו"סה"כ שורות" מתחתית התעודה'
+      : 'לפני האישור חובה להזין לכל תעודה את שני העוגנים: סה"כ כללי (יחידות) וסה"כ שורות', null, null, 4200);
     refreshReceipt();
     return;
   }
@@ -6701,7 +6674,7 @@ function finishReceipt() {
     '<div class="bg-slate-50 rounded-xl p-3 max-h-56 overflow-y-auto border border-slate-100 mb-3">' + listHtml + '</div>' +
     '<div class="flex items-center justify-between text-slate-900 font-black text-xl mt-2 pt-2 border-t border-slate-200"><span>נספר</span><span>' + scannedUnits + ' יח׳ · ' + receiptList.length + ' שורות</span></div>' +
     anchorsHtml +
-    (receiptNoteTotal != null ? '<div class="text-[11px] text-slate-400 font-bold mt-2">סכום מודפס בתעודה: ₪' + fmtMoney(receiptNoteTotal) + ' · לזיהוי בלבד, הכסף מחושב במרכזת החודשית</div>' : '');
+    (receiptNoteTotal > 0 ? '<div class="text-[11px] text-slate-400 font-bold mt-2">סכום מודפס בתעודה: ₪' + fmtMoney(receiptNoteTotal) + ' · לזיהוי בלבד, הכסף מחושב במרכזת החודשית</div>' : '');
   pendingReceipt = { lines, units: scannedUnits, noteTotal: receiptNoteTotal, status: savingNoDoc ? 'open' : 'ok', noDoc: savingNoDoc, noteParts: receiptNotes.slice() };
   pendingReceipt.sharedBasis = sharedReceiptSummaryBasis();
   const m = $('receiptSummaryModal'); m.classList.remove('hidden'); m.classList.add('flex');
@@ -8310,7 +8283,7 @@ function prepareAiInvoiceScan() { if (aiScanCanResume()) resumeAiInvoiceScan(); 
 // ===== v62: זרימת הצילום-תחילה =====
 // בזרימה הישנה הצילום היה המוצא האחרון, אחרי שהעוגנים הוקלדו והבלש נכשל.
 // כאן הוא הראשון: מצלמים את הנייר כשהוא ביד, והקריאה רצה ברקע בזמן שסורקים
-// את הסחורה — כך שההמתנה לא נספרת בכלל. שלושת העוגנים ממולאים ממה שנקרא,
+// את הסחורה — כך שההמתנה לא נספרת בכלל. העוגנים (יחידות, שורות) ממולאים ממה שנקרא,
 // ורק אם שער האמון (bermanPaperAnchorsFromScan) עבר במלואו.
 // חשוב: הכמויות שנקראו אינן מוצגות בזמן הסריקה הפיזית. סריקה עיוורת היא מה
 // שתופס חוסר — מי שרואה מראש "בתעודה כתוב 15" מאשר במקום לספור.
@@ -14172,23 +14145,6 @@ function reconcileSetPriceLive(productId, val) {
   const l = (reconcileData || []).find(x => x.productId === productId); if (!l) return;
   const n = parseFloat((val || '').toString().replace(/[^0-9.]/g, '')); l.price = isFinite(n) ? n : 0; reconcileDetectiveRoundingGap = null; refreshReconcileHeader();
 }
-// v50: המרת סכומי תעודות הספק שהוקלדו מ"כולל מע״מ" ל"נטו לחיוב". כשיש כמה
-// תעודות ספק כל אחת מומרת בנפרד — כל אחת מהן הוקלדה מאותה שורה שגויה.
-function convertNoteTotalsToNet(rate) {
-  if (!receiptNotes.length) return;
-  const useRate = Number(rate) > 0 ? Number(rate) : VAT;
-  receiptNotes = receiptNotes.map(raw => {
-    const n = normNote(raw);
-    return { amount: r2(n.amount / (1 + useRate)), units: n.units, lines: n.lines };
-  });
-  recomputeNoteTotal();
-  (aiScanDocuments || []).forEach((doc, i) => {
-    const n = receiptNotes[i] ? normNote(receiptNotes[i]) : null;
-    if (doc && n) doc.amount = n.amount;
-  });
-  saveReceiptDraft();
-  if (aiScanResponse) { try { aiRefreshScanEvaluation(); } catch (refreshError) {} }
-}
 function saveReconciledReceipt(opts) {
   opts = opts || {};
   if (!reconcileData) return;
@@ -14284,7 +14240,7 @@ function presentReconcileSummary(lines, open, extra) {
     '<div class="flex items-center justify-between text-slate-900 font-black text-xl mt-2 pt-2 border-t border-slate-200"><span>נספר</span><span>' + units + ' יח׳ · ' + docLines + ' שורות</span></div>' +
     (receiptNoteUnits != null ? '<div class="flex items-center justify-between text-sm font-bold text-slate-600 mt-1"><span>סה"כ כללי בנייר</span><span>' + receiptNoteUnits + ' יח׳' + (receiptNoteLines != null ? ' · ' + receiptNoteLines + ' שורות' : '') + '</span></div>' : '') +
     (open ? '<div class="text-xs font-bold text-slate-500 mt-1">חוסר יורד מהחיוב בחשבונית אחרי זיכוי · עודף מופיע כהערה בלבד</div>' : '') +
-    (receiptNoteTotal != null ? '<div class="text-[11px] text-slate-400 mt-1">סכום מודפס בתעודה: ₪' + fmtMoney(receiptNoteTotal) + ' · לזיהוי בלבד, הכסף מחושב במרכזת</div>' : '');
+    (receiptNoteTotal > 0 ? '<div class="text-[11px] text-slate-400 mt-1">סכום מודפס בתעודה: ₪' + fmtMoney(receiptNoteTotal) + ' · לזיהוי בלבד, הכסף מחושב במרכזת</div>' : '');
   const m = $('receiptSummaryModal'); m.classList.remove('hidden'); m.classList.add('flex');
 }
 // ===== תיקון תעודה פתוחה (מההיסטוריה) =====
@@ -14548,7 +14504,7 @@ async function confirmReceipt() {
   const opId = pendingReceipt.operationId || receiptDraftId || (pendingReceipt.operationId = makeOperationId('receipt'));
   const docDate = receiptDocDate || todayStr();
   const receiptVatRate = vatRateForNewDocument(docDate);
-  const data = { schemaVersion: 2, quantityCheck: receiptQuantityCheckAudit(), paperDocs: receiptPaperDocsSnapshot(), timestamp: (attach && Number(attach.timestamp)) || Date.now(), date: (attach && attach.date) || todayStr(), docDate, noDoc: !!(noDoc || attach), vatPct: r2(receiptVatRate * 100), items: lines, count: lines.length, units: receiptCountedUnits(lines), aiAudit: aiAudit ? cloneSafe(aiAudit) : null, paperScan: receiptScanSnapshot(), noteTotalInc: (noteTotal != null ? noteTotal : null), noteParts: (Array.isArray(noteParts) ? noteParts : []), unresolvedUnitsGap: Number(unresolvedUnitsGap) || 0, status: status || 'ok', operationId: opId };
+  const data = { schemaVersion: 2, quantityCheck: receiptQuantityCheckAudit(), paperDocs: receiptPaperDocsSnapshot(), timestamp: (attach && Number(attach.timestamp)) || Date.now(), date: (attach && attach.date) || todayStr(), docDate, noDoc: !!(noDoc || attach), vatPct: r2(receiptVatRate * 100), items: lines, count: lines.length, units: receiptCountedUnits(lines), aiAudit: aiAudit ? cloneSafe(aiAudit) : null, paperScan: receiptScanSnapshot(), noteTotalInc: (noteTotal > 0 ? noteTotal : null), noteParts: (Array.isArray(noteParts) ? noteParts : []), unresolvedUnitsGap: Number(unresolvedUnitsGap) || 0, status: status || 'ok', operationId: opId };
   const saved = await finishSharedReceipt(opId, data);
   if (!saved) return;
   hideReceiptSummary();
@@ -20361,8 +20317,8 @@ app.addEventListener('click', (e) => {
     if (en) receiptNotes.push(en);
     noteEntryKind = 'charge';
     recomputeNoteTotal();
-    const anchorsReady = receiptNotes.length > 0 && receiptNotes.every(raw => { const note = normNote(raw); return note.amount > 0 && note.lines != null && note.lines > 0; });
-    if (!anchorsReady) { showToast('חובה להשאיר לפחות תעודה אחת עם סכום ומספר שורות', null, null, 3200); refreshReceipt(); return; }
+    const anchorsReady = receiptNotes.length > 0 && receiptNotes.every(raw => { const note = normNote(raw); return note.units != null && note.units > 0 && note.lines != null && note.lines > 0; });
+    if (!anchorsReady) { showToast('חובה להשאיר לפחות תעודה אחת עם "סה"כ כללי" ו"סה"כ שורות"', null, null, 3200); refreshReceipt(); return; }
     // v51: מקבץ שכולו זיכויים אינו קליטה. עוצרים כאן ולא בסוף הסריקה.
     if (!receiptNetPositive()) { showToast(receiptNetProblemText(), null, null, 5000); saveReceiptDraft(); refreshReceipt(); return; }
     editingNotes = false; saveReceiptDraft(); refreshReceipt();
