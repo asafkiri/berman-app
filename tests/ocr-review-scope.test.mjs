@@ -126,14 +126,18 @@ test('closing from the comparison screen also waits for the review; confirming i
   assert.match(r.toasts.at(-1), /אימות הקריאה/);
   r.context.document.querySelectorAll = selector => selector === '[data-ocr-doc]'
     ? [{ dataset: { ocrDoc: '0', ocrKey: '-1:totalUnits' }, value: '18' }, { dataset: { ocrDoc: '0', ocrKey: '-1:printedLines' }, value: '3' }] : [];
-  // the confirm button also lives in the summary modal (rsBody); confirming there refreshes the host and the open summary's basis
-  r.run('pendingReceipt = { lines: [], status: "ok", sharedBasis: "stale" }; $("rsOcrReview").innerHTML = ocrReviewPanelHtml();');
+  // the confirm button also lives in the summary modal (rsBody). A summary that is open while a
+  // document still waits for review was built before the read came back, so it was never compared
+  // to this paper: confirming closes it and the worker summarizes again.
+  r.run('pendingReceipt = { lines: [], status: "ok", sharedBasis: "stale" }; $("receiptSummaryModal").classList.remove("hidden"); $("rsOcrReview").innerHTML = ocrReviewPanelHtml();');
   assert.ok(r.node('rsOcrReview').innerHTML.includes('berman-ocr-confirm'));
   r.events.get('rsBody:click')({ target: { dataset: { role: 'berman-ocr-confirm', id: '0' }, closest: s => s === '[data-role="berman-ocr-confirm"]' ? { dataset: { id: '0' } } : null } });
   assert.equal(r.run('bermanOcrPendingDocs().length'), 0);
   assert.equal(r.node('rsOcrReview').innerHTML, '', 'the panel in the summary is cleared');
-  assert.equal(r.run('pendingReceipt.sharedBasis === sharedReceiptSummaryBasis()'), true);
-  r.run('pendingReceipt = null; openReconcile(); saveReconciledReceipt({ skipChecked: true, skipGap: true });');
+  assert.equal(r.run('pendingReceipt'), null, 'a summary built before the read is dropped, never saved');
+  assert.ok(r.node('receiptSummaryModal').classList.contains('hidden'));
+  assert.match(r.toasts.at(-1), /סכם את התעודה שוב/);
+  r.run('openReconcile(); saveReconciledReceipt({ skipChecked: true, skipGap: true });');
   assert.ok(r.run('pendingReceipt && pendingReceipt.status === "ok"'));
   assert.equal(r.requests.length, 1);
 });

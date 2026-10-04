@@ -10589,8 +10589,9 @@ function bermanConfirmOcr(index) {
   aiRefreshScanEvaluation();
   if (receiptEntryMode === 'photo') bermanAdoptPaperAnchors();
   saveReceiptDraft(); refreshScanHost(); refreshOcrReviewViews();
-  // v122: הסיכום הפתוח (אם יש) נשען על הסריקה שאושרה כרגע — לא "התעדכנה במכשיר אחר".
-  if (pendingReceipt) pendingReceipt.sharedBasis = sharedReceiptSummaryBasis();
+  // v122: סיכום שנפתח לפני שהקריאה חזרה (הסיום לא מחכה לקריאה שרצה ברקע) לא
+  // הושווה לנייר הזה. אחרי האישור הוא נסגר, והסיכום הבא מריץ את ההשוואה מחדש.
+  if (pendingReceipt) { pendingReceipt = null; hideReceiptSummary(); showToast('הקריאה אושרה — סכם את התעודה שוב כדי להשוות את הספירה לנייר', null, null, 4000); }
   return true;
 }
 function aiMoneyCents(value) {
