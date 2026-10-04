@@ -1,7 +1,8 @@
 // v80 — שני מסלולים חדשים בכרטיס תעודת חזרות שטרם אומתה:
 //
-//   [א] "אישור" — הספק זיכה בדיוק את מה שהוחזר. זה המצב הרגיל, ועד v79 הוא
+//   [א] "אישור" — הספק זיכה על כל מה שהוחזר. זה המצב הרגיל, ועד v79 הוא
 //       חייב הקלדה של מספר שהאפליקציה כבר יודעת. עכשיו לחיצה אחת.
+//       v123: האישור הוא ביחידות ("כל 5 היחידות"); סכום שהוקלד — לזיהוי בלבד.
 //   [ב] "החזר את הפריטים לרשימת החזרות" — התעודה נשלחה מוקדם מדי (הנהג לא
 //       לקח, או נשלחה בטעות). הסחורה לא יצאה, ולכן הפריטים חוזרים לרשימה
 //       הפתוחה והתעודה נמחקת לגמרי. אילו הייתה נשארת, אותן יחידות היו
@@ -37,13 +38,12 @@ function saveReturnsDraft() { draftSaves++; }
 function refreshAfterReturnCarry() { refreshes++; }
 function restoreDoc(name, obj) { restored = { name, obj }; }
 
-const FNS = ['r2', 'fmtMoney', 'lineTotalFromUnit', 'vatRateForDoc', 'amountIncForDoc', 'returnTotals',
-  'creditAllocationList', 'creditAllocatedEx', 'anIsDepositLine', 'anIsCarriedLine',
-  'retVerifyAmount', 'retVerifyRowHtml', 'retUnsendLineKind', 'retUnsendPlan', 'retUnsendSameLine',
+const FNS = ['r2', 'fmtMoney', 'lineTotalFromUnit', 'anIsDepositLine', 'anIsCarriedLine',
+  'returnSentUnits', 'returnItemsSignature', 'retVerifyRowHtml', 'retUnsendLineKind', 'retUnsendPlan', 'retUnsendSameLine',
   'retUnsendNewId', 'applyReturnUnsend', 'undoReturnUnsend', 'retUnsendBtnHtml'];
 // eslint-disable-next-line no-eval
 const api = eval(extractSource(FNS, []) + '\n({ ' + FNS.join(', ') + ' })');
-const { r2, returnTotals, retVerifyAmount, retVerifyRowHtml, retUnsendLineKind, retUnsendPlan,
+const { r2, returnSentUnits, returnItemsSignature, retVerifyRowHtml, retUnsendLineKind, retUnsendPlan,
   retUnsendSameLine, applyReturnUnsend, undoReturnUnsend, retUnsendBtnHtml } = api;
 
 let pass = 0, fail = 0;
@@ -68,27 +68,28 @@ function openDoc(extra) {
 }
 const openEx = r2(pitaUnit * 4 + loafUnit);
 
-head('[1] אישור מהיר — הסכום שנרשם הוא מה שהוחזר');
+head('[1] אישור מהיר — כל היחידות שהוחזרו זוכו');
 {
   const r = openDoc();
-  ok('הסכום שווה לסך התעודה', near(retVerifyAmount(r), openEx), String(retVerifyAmount(r)));
-  ok('והוא בדיוק מה שמוצג בכרטיס', near(retVerifyAmount(r), returnTotals(r).ex));
+  ok('5 יחידות הוחזרו', returnSentUnits(r) === 5);
   const html = retVerifyRowHtml(r);
-  ok('שורת האימות מציעה גם הקלדה וגם אישור', html.indexOf('data-role="rv-verify-inline"') > -1 && html.indexOf('data-role="rv-approve"') > -1);
+  ok('שורת האימות מציעה גם בדיקה וגם אישור', html.indexOf('data-role="rv-verify-inline"') > -1 && html.indexOf('data-role="rv-approve"') > -1);
   ok('ושתיהן נושאות את מזהה התעודה', (html.match(/data-id="ret_open"/g) || []).length === 2);
-  ok('הסכום לאישור נאמר מראש', html.indexOf('כל מה שהוחזר') > -1 && html.indexOf('₪' + api.fmtMoney(openEx)) > -1);
+  ok('האישור נאמר ביחידות', html.indexOf('כל 5 היחידות') > -1);
+  ok('בלי ₪ ובלי סכום מחושב', html.indexOf('₪') === -1 && html.indexOf(api.fmtMoney(openEx)) === -1);
+  ok('הסכום — רשות, לזיהוי בלבד', html.indexOf('לזיהוי בלבד') > -1 && html.indexOf('(רשות)') > -1);
   ok('שדה ההקלדה מצטמצם ואינו דוחף את הכפתורים', html.indexOf('flex-1 min-w-0') > -1 && (html.match(/shrink-0/g) || []).length === 2);
 }
 
-head('[2] אישור כשחלק מהנייר שויך לחוסר בקליטה (v66)');
+head('[2] שורת פיקדון אינה נספרת ביחידות; חתימת השורות מזהה שינוי');
 {
-  // הנייר מכסה גם ₪21.88 של חוסר בתעודת קליטה. "אישור" אומר שהחלק של
-  // החזרות תואם במדויק — ולכן הסכום הנרשם חייב לכלול גם את השיוך, אחרת
-  // returnsCreditForReturns היה יוצא נמוך בדיוק בגובהו ונוצר פער מדומה.
-  const r = openDoc({ creditAllocations: [{ receiptId: 'rc_1', amount: 21.88 }] });
-  ok('הסכום כולל את השיוך', near(retVerifyAmount(r), r2(openEx + 21.88)), String(retVerifyAmount(r)));
-  ok('ומה שנשאר לחזרות הוא בדיוק מה שהוחזר', near(r2(retVerifyAmount(r) - 21.88), openEx));
-  ok('שיוך אפס אינו משנה דבר', near(retVerifyAmount(openDoc({ creditAllocations: [] })), openEx));
+  const withDeposit = openDoc();
+  withDeposit.items = withDeposit.items.concat([{ name: 'פיקדון · ' + PITA.name, barcode: '', qty: 4, isDeposit: true }]);
+  ok('פיקדון אינו יחידה שהוחזרה', returnSentUnits(withDeposit) === 5);
+  ok('אותה תעודה — אותה חתימה', returnItemsSignature(openDoc()) === returnItemsSignature(openDoc()));
+  const changed = openDoc(); changed.items[0].qty = 5;
+  ok('כמות שהשתנתה — חתימה אחרת', returnItemsSignature(changed) !== returnItemsSignature(openDoc()));
+  ok('כסף שהשתנה אינו משנה את החתימה', returnItemsSignature(openDoc({ totalExVat: 1 })) === returnItemsSignature(openDoc()));
 }
 
 head('[3] תוכנית ההחזרה — מה חוזר לרשימה ומה לא');
@@ -97,7 +98,7 @@ head('[3] תוכנית ההחזרה — מה חוזר לרשימה ומה לא')
   const plan = retUnsendPlan(r);
   ok('שתי השורות חוזרות', plan && plan.items.length === 2);
   ok('הכמות הכוללת נאמרת', plan.units === 5, String(plan.units));
-  ok('והכסף תואם לסך התעודה', near(plan.val, openEx), String(plan.val));
+  ok('בלי כסף בתוכנית', !('val' in plan) && plan.items.every(x => !('unitPrice' in x)));
   ok('שורת קטלוג מזוהה ככזאת', plan.items.every(x => x.kind === 'catalog'));
 
   // שורת פיקדון נגזרת לבד בכל שליחה — החזרתה הייתה מכפילה אותה בתעודה הבאה.
@@ -119,8 +120,8 @@ head('[4] סוג השורה — קטלוג, ידנית, הוחזר-מפער, ו�
   ok('שורה ידנית', retUnsendLineKind({ productId: 'manual_17' }) === 'manual');
   ok('שורה שהוחזרה מפער זיכוי', retUnsendLineKind({ productId: 'carry_17' }) === 'carried');
   ok('גם לפי הדגל ולא רק לפי המזהה', retUnsendLineKind({ productId: PITA.id, carried: true }) === 'carried');
-  // מוצר שנמחק מהקטלוג מאז — השורה חוזרת כידנית עם המחיר ששמור בה, כדי
-  // שהכמות והכסף לא ייעלמו רק מפני שהכרטיס כבר לא קיים.
+  // מוצר שנמחק מהקטלוג מאז — השורה חוזרת כידנית, כדי שהכמות לא תיעלם רק
+  // מפני שהכרטיס כבר לא קיים.
   ok('מוצר שכבר לא בקטלוג חוזר כידני', retUnsendLineKind({ productId: 'code_gone' }) === 'manual');
 }
 
@@ -148,28 +149,34 @@ head('[5] איחוד לשורה אחת — הכרעת המשתמש');
   ok('והתעודה שוחזרה מהגיבוי', restored && restored.name === 'returns' && restored.obj.id === 'ret_open');
 }
 
-head('[6] שורה ידנית ושורה שהוחזרה מפער — המחיר והסימון נשמרים');
+head('[6] שורה ידנית ושורה שהוחזרה מפער — הסימון נשמר, בלי מחיר');
 {
   returnsList = [];
   const r = openDoc({ items: [
     { name: 'לחם מיוחד', barcode: '', productId: 'manual_9', qty: 3, unitPrice: 7.5, lineTotal: 22.5 },
-    { name: PITA.name, barcode: PITA.barcode || 'bc-401', productId: 'carry_9', qty: 3, unitPrice: pitaUnit, lineTotal: r2(pitaUnit * 3), carried: true, carriedFrom: 'ret_8_9' }
+    { name: PITA.name, barcode: PITA.barcode || 'bc-401', productId: 'carry_9', code: '401', qty: 3, carried: true, carriedFrom: 'ret_8_9' }
   ] });
   applyReturnUnsend(retUnsendPlan(r));
   const manual = returnsList.find(x => x.name === 'לחם מיוחד');
-  ok('השורה הידנית חזרה עם המחיר שלה', manual && manual.manual === true && near(manual.unitPrice, 7.5) && manual.qty === 3);
+  ok('השורה הידנית חזרה כידנית', manual && manual.manual === true && manual.qty === 3);
+  ok('בלי המחיר הישן שהיה עליה', !('unitPrice' in manual));
   ok('ומזהה חדש שאינו מתנגש', manual.productId.indexOf('manual_') === 0 && manual.productId !== 'manual_9');
   const carried = returnsList.find(x => x.carried);
   ok('שורת הפער חזרה מסומנת', carried && carried.carried === true && carried.carriedFrom === 'ret_8_9');
-  ok('עם מחיר הזיכוי הנעול', near(carried.unitPrice, pitaUnit) && carried.qty === 3);
+  ok('עם הכמות והקוד, בלי מחיר', carried.qty === 3 && carried.code === '401' && !('unitPrice' in carried));
   ok('ומזהה carry_ כדי שהניתוח ידלג עליה', carried.productId.indexOf('carry_') === 0);
 
-  // איחוד נכון: ידנית מתאחדת רק עם ידנית בעלת אותו שם ומחיר, ושורת פער רק
-  // עם שורת פער מאותה תעודה — מחיר שונה הוא בפירוש תביעה אחרת.
-  ok('ידנית באותו שם ומחיר — מתאחדת', retUnsendSameLine({ manual: true, name: 'לחם מיוחד', unitPrice: 7.5 }, { kind: 'manual', name: 'לחם מיוחד', unitPrice: 7.5 }) === true);
-  ok('ידנית במחיר אחר — לא', retUnsendSameLine({ manual: true, name: 'לחם מיוחד', unitPrice: 8 }, { kind: 'manual', name: 'לחם מיוחד', unitPrice: 7.5 }) === false);
-  ok('שורת פער מתעודה אחרת — לא', retUnsendSameLine({ manual: true, carried: true, carriedFrom: 'ret_x', name: PITA.name, unitPrice: pitaUnit }, { kind: 'carried', carriedFrom: 'ret_8_9', name: PITA.name, unitPrice: pitaUnit }) === false);
-  ok('שורת קטלוג אינה מתאחדת עם ידנית באותו שם', retUnsendSameLine({ manual: true, name: PITA.name, unitPrice: pitaUnit }, { kind: 'catalog', productId: PITA.id, name: PITA.name }) === false);
+  // איחוד: ידנית מתאחדת עם ידנית באותו שם; שורת פער רק עם שורת פער מאותה תעודה,
+  // באותו שם וברקוד (v123: המחיר כבר אינו חלק מהזהות).
+  ok('ידנית באותו שם — מתאחדת', retUnsendSameLine({ manual: true, name: 'לחם מיוחד' }, { kind: 'manual', name: 'לחם מיוחד' }) === true);
+  ok('ידנית ישנה במחיר אחר — גם מתאחדת', retUnsendSameLine({ manual: true, name: 'לחם מיוחד', unitPrice: 8 }, { kind: 'manual', name: 'לחם מיוחד' }) === true);
+  ok('שורת פער מתעודה אחרת — לא', retUnsendSameLine({ manual: true, carried: true, carriedFrom: 'ret_x', name: PITA.name, barcode: 'b' }, { kind: 'carried', carriedFrom: 'ret_8_9', name: PITA.name, barcode: 'b' }) === false);
+  ok('שורת פער מאותה תעודה — מתאחדת', retUnsendSameLine({ manual: true, carried: true, carriedFrom: 'ret_8_9', name: PITA.name, barcode: 'b', unitPrice: 4.5 }, { kind: 'carried', carriedFrom: 'ret_8_9', name: PITA.name, barcode: 'b' }) === true);
+  ok('שורת קטלוג אינה מתאחדת עם ידנית באותו שם', retUnsendSameLine({ manual: true, name: PITA.name }, { kind: 'catalog', productId: PITA.id, name: PITA.name }) === false);
+  // ported from credit-price-forms: a carried unsend merges into the identical carried row (2 + 13 = 15)
+  returnsList = [{ productId: 'carry_1', name: LOAF.name, barcode: 'bc-l', qty: 2, manual: true, carried: true, carriedFrom: 'older' }];
+  applyReturnUnsend(retUnsendPlan(openDoc({ items: [{ productId: 'carry_2', name: LOAF.name, barcode: 'bc-l', qty: 13, carried: true, carriedFrom: 'older' }] })));
+  ok('שורת פער זהה מתאחדת לשורה אחת של 15', returnsList.length === 1 && returnsList[0].qty === 15);
 }
 
 head('[7] החיווט — כל תפקיד שנפלט חייב מטפל, ובכרטיס החזרה שבמסך התעודות המאוחד');
@@ -211,13 +218,14 @@ head('[8] מקצה לקצה — "אישור" סוגר את התעודה בלי �
   ok('הכרטיס מציע אישור לצד ההקלדה', card.indexOf('data-role="rv-approve" data-id="ret_open"') > -1 && card.indexOf('data-role="rv-verify-inline" data-id="ret_open"') > -1);
 
   rt.click('rv-approve', 'ret_open');
-  ok('נפתח אישור עם הסכום', rt.node('confirmMsg').textContent.indexOf('₪' + api.fmtMoney(openEx)) > -1);
-  ok('והוא מסביר שאין צורך להקליד', rt.node('confirmMsg').textContent.indexOf('בלי להקליד') > -1);
+  ok('נפתח אישור ביחידות', rt.node('confirmMsg').textContent.indexOf('כל 5 היחידות') > -1);
+  ok('בלי סכום מחושב', rt.node('confirmMsg').textContent.indexOf('₪') === -1);
 
   await rt.events.get('confirmOk:click')();
   const write = rt.writes[rt.writes.length - 1];
   ok('התעודה סומנה מאומתת', !!write && write.data.credited === true && write.data.creditStatus === 'ok');
-  ok('עם סכום הנייר שהאפליקציה ידעה', near(write.data.creditNoteTotal, openEx), String(write.data.creditNoteTotal));
+  ok('בלי סכום שהאפליקציה "יודעת"', !('creditNoteTotal' in write.data), JSON.stringify(write.data.creditNoteTotal));
+  ok('והשורות נכתבות בלי כמות זיכוי ישנה', Array.isArray(write.data.items) && write.data.items.every(l => !('noteQty' in l)));
   ok('הכרטיס הפך ירוק', rt.run('renderReceiptsHistory(); document.getElementById("app").innerHTML').indexOf('<i class="fa-solid fa-circle-check"></i> אומתה') > -1);
   ok('ואין יותר פער פתוח', rt.run('JSON.stringify(returnsDiscrepancyInfo(returns[0]).open)') === 'false');
 }
@@ -232,7 +240,7 @@ head('[9] מקצה לקצה — "החזר לרשימה" מוחק את התעוד
 
   rt.click('ret-unsend', 'ret_open');
   const msg = rt.node('confirmMsg').textContent;
-  ok('האישור אומר כמה חוזר', msg.indexOf('5 יח׳') > -1 && msg.indexOf('₪' + api.fmtMoney(openEx)) > -1);
+  ok('האישור אומר כמה חוזר — ביחידות', msg.indexOf('5 יח׳') > -1 && msg.indexOf('₪') === -1);
   ok('ואומר במפורש שהתעודה תימחק', msg.indexOf('תימחק') > -1 && msg.indexOf('כאילו לא נשלחה') > -1);
 
   await rt.events.get('confirmOk:click')();
@@ -296,10 +304,10 @@ head('[11] v103 — כפתור "מחק תעודה" אחד בכל כרטיס, ל�
   ok('ומוחקת עם גיבוי לסל המחזור', del.length === 1 && del[0].name === 'returns' && del[0].id === 'ret_open' && (del[0].data.items || []).length === 2);
 }
 
-head('[12] v103 — "אישור" עם סכום שכבר הוקלד, ותעודה שהשתנתה בזמן החלון');
+head('[12] "אישור" עם סכום שהוקלד, "בדוק", ותעודה שהשתנתה בזמן החלון');
 {
-  // סכום שהוקלד בשדה הוא סכום הנייר: "אישור" מגיש אותו כמו "בדוק" — ולא מחליף
-  // אותו בשקט בסך התעודה, מה שהיה סוגר תעודה חסרה כ"בלי פער".
+  // v123: הסכום שהוקלד הוא לזיהוי בלבד. "אישור" = כל היחידות זוכו, והסכום נשמר איתו;
+  // "בדוק" פותח את מסך האימות עם אותו סכום.
   const fresh = () => {
     const rt = stubbedRuntime();
     rt.context.testDoc = JSON.parse(JSON.stringify(openDoc()));
@@ -310,27 +318,25 @@ head('[12] v103 — "אישור" עם סכום שכבר הוקלד, ותעודה
   const short = r2(openEx - 5);
   const a = fresh();
   a.node('rvNote_ret_open').value = String(short);
-  const writesBefore = a.writes.length;
   a.click('rv-approve', 'ret_open');
-  ok('סכום שהוקלד אינו נסגר כ"זיכה בדיוק"', a.writes.length === writesBefore && a.run('currentView') === 'returnReconcile', a.run('currentView'));
-  ok('ונפתח מסך ההתאמה עם הסכום שהוקלד', near(a.run('returnVerify.noteTotal'), short));
+  ok('האישור מזכיר את הסכום שהוקלד כזיהוי', a.node('confirmMsg').textContent.indexOf('לזיהוי') > -1);
+  await a.events.get('confirmOk:click')();
+  const aw = a.writes[a.writes.length - 1];
+  ok('סכום שהוקלד + אישור — נסגר עם הסכום שהוקלד', !!aw && aw.data.credited === true && aw.data.creditStatus === 'ok' && near(aw.data.creditNoteTotal, short));
   const b = fresh();
   b.node('rvNote_ret_open').value = String(short);
   b.click('rv-verify-inline', 'ret_open');
-  ok('בדיוק כמו "בדוק" עם אותו סכום', b.run('currentView') === 'returnReconcile' && near(b.run('returnVerify.noteTotal'), short));
+  ok('"בדוק" פותח את מסך האימות עם הסכום שהוקלד', b.run('currentView') === 'returnReconcile' && near(b.run('returnVerify.noteTotal'), short));
+  const e = fresh();
+  e.click('rv-verify-inline', 'ret_open');
+  ok('"בדוק" בלי סכום — פותח בכל זאת', e.run('currentView') === 'returnReconcile' && e.run('returnVerify.noteTotal') === null);
 
-  const same = fresh();
-  same.node('rvNote_ret_open').value = String(openEx);
-  same.click('rv-approve', 'ret_open');
-  const w = same.writes[same.writes.length - 1];
-  ok('סכום תואם שהוקלד נסגר עם הסכום שהוקלד', !!w && w.data.credited === true && near(w.data.creditNoteTotal, openEx));
-
-  // התעודה נערכה ממכשיר אחר בזמן שחלון האישור היה פתוח — הסכום שאושר כבר אינו
-  // "כל מה שהוחזר", ולכן היא אינה נסגרת בשמו.
+  // התעודה נערכה ממכשיר אחר בזמן שחלון האישור היה פתוח — היא כבר אינה "כל מה
+  // שהוחזר", ולכן אינה נסגרת בשמו.
   const c = fresh();
   c.click('rv-approve', 'ret_open');
   const cw = c.writes.length;
-  c.run('returns[0].totalExVat = r2(returns[0].totalExVat + 5); returns[0].totalIncVat = r2(returns[0].totalExVat * 1.18);');
+  c.run('returns[0].items[0].qty = 7;');
   await c.events.get('confirmOk:click')();
   ok('תעודה שהשתנתה אינה נסגרת', c.writes.length === cw && c.run('returns[0].credited') === false);
   ok('והמשתמש שומע על זה', c.run('testToasts2[testToasts2.length - 1].text').indexOf('השתנתה') > -1);

@@ -104,7 +104,7 @@ test('renderReturnsHistory and rvOrigin are gone; the only "returnsHistory" left
   assert.ok(v114 > -1 && v113 > v114, 'README has a v114 section before v113');
 });
 
-test('the unified screen carries a card for every return — pending, verified and open gap — with status, actions and prices', () => {
+test('the unified screen carries a card for every return — pending, verified and open gap — with status, actions and units', () => {
   const rt = open([pendingReturn(), verifiedReturn(), openGapReturn()]);
   rt.run("currentView = 'receiptsHistory'; renderReceiptsHistory();");
   const page = html(rt);
@@ -128,7 +128,10 @@ test('the unified screen carries a card for every return — pending, verified a
   assert.equal(roleCount(page, 'ret-merge'), 0, 'merge is offered only with two pending documents');
   assert.match(pendingCard, /rounded px-1">יומית<\/span>/, 'daily tag on the date line');
   assert.match(pendingCard, /id="rvNote_ret_pending"/);
-  assert.match(pendingCard, /3 יח׳<\/div><div class="text-\[11px\] text-slate-400 mt-0\.5">₪30\.00<\/div>/, 'line total (3 × ₪10) under the qty badge');
+  // v123: הכרטיס ביחידות — בלי סכום שורה ובלי "זיכוי ללא מע״מ"
+  assert.match(pendingCard, /3 יח׳<\/div><\/div>/, 'qty badge alone, no line total');
+  assert.match(pendingCard, /הוחזרו<\/div><div class="font-black text-emerald-700">3 יח׳ · 1 שורות<\/div>/);
+  assert.doesNotMatch(pendingCard, /₪|זיכוי ללא מע/);
   assert.match(pendingCard, /<i class="fa-solid fa-barcode"><\/i> 7290001001/);
 
   // --- אומתה ---
@@ -143,13 +146,13 @@ test('the unified screen carries a card for every return — pending, verified a
   ['ret-resend', 'rv-approve', 'rv-verify-inline', 'ret-unsend', 'ret-carry'].forEach(role =>
     assert.ok(!okCard.includes(roleFor(role, 'ret_ok')), 'verified card does not offer ' + role));
   assert.doesNotMatch(okCard, /פירוט הפער|הספק חייב לך עוד/);
+  assert.match(okCard, /תעודת זיכוי ₪40\.00 \(לזיהוי\)/, 'the paper total is identification only');
 
   // --- אומתה עם פער פתוח ---
   const gapCard = cardOf(page, 'ret_gap');
   assert.match(gapCard, /^border-rose-300 /);
   assert.match(gapCard, /<i class="fa-solid fa-triangle-exclamation"><\/i> פתוח — חסר זיכוי/);
-  assert.match(gapCard, /הספק חייב לך עוד ₪25\.00 בזיכוי!/);
-  assert.match(gapCard, /החזרת ₪55\.00 · בתעודת הזיכוי ₪30\.00/);
+  assert.doesNotMatch(gapCard, /הספק חייב לך|החזרת ₪/, 'no money banner on the card');
   assert.match(gapCard, /פירוט הפער/);
   assert.match(gapCard, /<span>חסר זיכוי: לחם מקמח כוסמין E-FREE<\/span><span class="shrink-0">2 יח׳<\/span>/);
   assert.doesNotMatch(gapCard, /חסר זיכוי על:/, 'the partial berman box was replaced, not duplicated');
@@ -161,10 +164,10 @@ test('the unified screen carries a card for every return — pending, verified a
   assert.ok(gapCard.includes(roleFor('ret-edit-items', 'ret_gap')));
   assert.ok(gapCard.includes(roleFor('ret-delete', 'ret_gap')));
 
-  // שורות הפריטים מראות ברקוד וכסף
+  // שורות הפריטים מראות ברקוד, כמה הוחזר, וכמה זוכה כשזה שונה
   assert.match(gapCard, /<i class="fa-solid fa-barcode"><\/i> 7290001004/);
-  assert.match(gapCard, /2 יח׳<\/div><div class="text-\[11px\] text-slate-400 mt-0\.5">₪25\.00<\/div>/, 'qty badge with the line total (2 × ₪12.50) under it');
-  assert.match(gapCard, /3 יח׳<\/div><div class="text-\[11px\] text-slate-400 mt-0\.5">₪30\.00<\/div>/);
+  assert.match(gapCard, /2 יח׳<\/div><div class="text-\[11px\] font-black text-rose-600 mt-0\.5">זוכה 0<\/div>/);
+  assert.match(gapCard, /3 יח׳<\/div><\/div>/, 'a fully credited row shows only its qty');
 
   // שורות המצב בראש המסך
   assert.match(page, /<div class="px-1 mb-2 text-sm font-bold text-amber-600"><i class="fa-solid fa-hourglass-half"><\/i> תעודת חזרה אחת ממתינה לאימות זיכוי<\/div>/);
@@ -174,8 +177,8 @@ test('the unified screen carries a card for every return — pending, verified a
 
   // באנר מאזן הזיכויים — בדיוק מה ש-returnsBalanceBannerHtml מחזיר, ולפני המרכזת החודשית
   const banner = rt.run('returnsBalanceBannerHtml()');
-  assert.match(banner, /הספק חייב לך ₪25\.00<\/div>/);
-  assert.match(banner, /מאזן מצטבר מכל הזיכויים/);
+  assert.match(banner, /חסר זיכוי על 2 יח׳ בתעודה אחת<\/div>/);
+  assert.doesNotMatch(banner, /₪/);
   assert.ok(page.includes(banner), 'the balance banner is on the unified screen');
   assert.ok(page.indexOf(banner) < page.indexOf('מרכזת חודשית'), 'banner before the monthly range box');
   assert.ok(page.indexOf(banner) < bodyStart);
@@ -201,27 +204,31 @@ test('status lines count in plural and vanish when nothing needs attention; the 
   assert.match(html(two), /2 תעודות חזרה ממתינות לאימות זיכוי/);
   assert.doesNotMatch(html(two), /פער פתוח בזיכוי/);
   assert.equal(two.run('returnsBalanceBannerHtml()'), '');
-  assert.doesNotMatch(html(two), /מאזן הזיכויים|הספק חייב לך ₪|זוכית ₪/);
+  assert.doesNotMatch(html(two), /כל מה שהחזרת זוכה|חסר זיכוי על|יותר ממה שהחזרת/);
   assert.equal(roleCount(html(two), 'ret-merge'), 2);
   assert.equal(roleCount(html(two), 'ret-resend'), 2);
 
   // מאומתת בדיוק: מאוזן, ובלי שורות מצב
   const ok = open([verifiedReturn()]);
   ok.run("currentView = 'receiptsHistory'; renderReceiptsHistory();");
-  assert.match(html(ok), /מאזן הזיכויים מול הספק מאוזן ✓/);
+  assert.match(html(ok), /כל מה שהחזרת זוכה ✓/);
   assert.doesNotMatch(html(ok), /ממתינ(ה|ות) לאימות זיכוי|פער פתוח בזיכוי/);
   assert.match(html(ok), /ניהול תעודות/);
 
-  // זוכתה יותר מדי: הבאנר הכחול
-  const over = open([verifiedReturn({ creditNoteTotal: 50 })]);
+  // v123: סכום נייר גבוה מהשורות אינו "זיכוי יתר" — רק יחידות שזוכו בעודף
+  const paperOnly = open([verifiedReturn({ creditNoteTotal: 50 })]);
+  paperOnly.run("currentView = 'receiptsHistory'; renderReceiptsHistory();");
+  assert.match(html(paperOnly), /כל מה שהחזרת זוכה ✓/);
+  // זוכו יותר יחידות: הבאנר הכחול
+  const over = open([verifiedReturn({ creditStatus: 'open', items: [{ name: 'אחיד פרוס ברמן', barcode: '7290001002', productId: 'code_101', qty: 4, noteQty: 5 }] })]);
   over.run("currentView = 'receiptsHistory'; renderReceiptsHistory();");
-  assert.match(html(over), new RegExp('זוכית ₪' + money(over, 10).replace('.', '\\.') + ' יותר מסך הכל'));
+  assert.match(html(over), /זוכו 1 יח׳ יותר ממה שהחזרת/);
 
   // שני פערים פתוחים: לשון רבים
   const gaps = open([openGapReturn(), { ...openGapReturn(), id: 'ret_gap2', timestamp: Date.UTC(2026, 8, 1, 5, 30) }]);
   gaps.run("currentView = 'receiptsHistory'; renderReceiptsHistory();");
   assert.match(html(gaps), /2 תעודות חזרה עם פער פתוח בזיכוי/);
-  assert.match(html(gaps), new RegExp('הספק חייב לך ₪' + money(gaps, 50).replace('.', '\\.') + '</div>'));
+  assert.match(html(gaps), /חסר זיכוי על 4 יח׳ ב-2 תעודות<\/div>/);
 
   // ריק: אין שורות מצב, אין "ניהול תעודות"
   const empty = open([]);
@@ -328,7 +335,7 @@ test('receipts and returns share one list, one order, both balance banners and o
   const credits = page.indexOf(rt.run('returnsBalanceBannerHtml()'));
   assert.ok(goods > -1, 'goods balance banner');
   assert.ok(credits > goods, 'credits balance banner right after the goods balance');
-  assert.match(page, /הספק חייב לך ₪25\.00<\/div><div class="text-xs text-white\/90 mt-1">מאזן מצטבר מכל הזיכויים/);
+  assert.match(page, /חסר זיכוי על 2 יח׳ בתעודה אחת<\/div><div class="text-xs text-white\/90 mt-1">יחידות שהחזרת והספק טרם זיכה/);
   assert.ok(credits < page.indexOf('מרכזת חודשית') && credits < page.indexOf('<div class="space-y-2.5'));
 
   // "ניהול תעודות": בלוק אחד, שני הכפתורים — קליטות ואז חזרות — כל אחד בשורה משלו
@@ -351,41 +358,44 @@ test('receipts and returns share one list, one order, both balance banners and o
 });
 
 test('the gap breakdown on the card has both directions, the carried-forward note, and escaped names', () => {
-  // זוכה יתר: הספק זיכה 5 חלות במקום 3 — הבאנר "זיכה יותר מדי", השורה הכתומה והמאזן הכחול
+  // זוכה יתר: הספק זיכה 5 חלות במקום 3 — השורה הכתומה והמאזן הכחול, ביחידות
   const over = open([{ ...openGapReturn(), id: 'ret_over', creditNoteTotal: 75,
     items: [{ name: 'חלה מתוקה', barcode: '7290001003', productId: 'code_238', qty: 3, unitPrice: 10, lineTotal: 30, noteQty: 5 },
       { name: 'לחם מקמח כוסמין E-FREE', barcode: '7290001004', productId: 'code_2381', qty: 2, unitPrice: 12.5, lineTotal: 25, noteQty: 2 }] }]);
   over.run("currentView = 'receiptsHistory'; renderReceiptsHistory();");
   const overCard = cardOf(html(over), 'ret_over');
   assert.match(overCard, /^border-rose-300 /);
-  assert.match(overCard, /<i class="fa-solid fa-triangle-exclamation"><\/i> פתוח — פער בזיכוי/);
-  assert.match(overCard, /<i class="fa-solid fa-triangle-exclamation"><\/i> הספק זיכה ₪20\.00 יותר מדי<\/div><div class="text-\[11px\] text-white\/90 mt-1">החזרת ₪55\.00 · בתעודת הזיכוי ₪75\.00<\/div>/);
+  assert.match(overCard, /<i class="fa-solid fa-triangle-exclamation"><\/i> פתוח — זוכה ביתר/);
   assert.match(overCard, /פירוט הפער<\/div><div class="flex justify-between text-amber-600"><span>זוכה יתר: חלה מתוקה<\/span><span>2 יח׳<\/span><\/div>/);
-  assert.doesNotMatch(overCard, /חסר זיכוי:|הספק חייב לך עוד/);
-  assert.match(html(over), /זוכית ₪20\.00 יותר מסך הכל/);
+  assert.match(overCard, /זוכה 5/);
+  assert.doesNotMatch(overCard, /חסר זיכוי:|הספק חייב לך|הספק זיכה ₪/);
+  assert.match(html(over), /זוכו 2 יח׳ יותר ממה שהחזרת/);
   assert.match(html(over), /תעודת חזרה אחת עם פער פתוח בזיכוי/);
 
-  // הוחזר לחזרות: יחידה אחת מהחוסר כבר עברה לרשימת החזרות הפתוחה — יורדת מהחוב ונאמרת בשורה
+  // הוחזר לחזרות: יחידה אחת מהחוסר כבר עברה לרשימת החזרות הפתוחה — יורדת מהחוסר ונאמרת בהערה
   const carried = open([{ ...openGapReturn(), id: 'ret_carried',
     carriedNotes: [{ name: 'לחם מקמח כוסמין E-FREE', barcode: '7290001004', qty: 1, price: 12.5, amountOnly: false, at: Date.UTC(2026, 8, 10, 8, 0) }] }]);
   carried.run("currentView = 'receiptsHistory'; renderReceiptsHistory();");
   const carriedCard = cardOf(html(carried), 'ret_carried');
-  assert.match(carriedCard, /הספק חייב לך עוד ₪12\.50 בזיכוי!/);
-  assert.match(carriedCard, /החזרת ₪55\.00 · בתעודת הזיכוי ₪30\.00 · הוחזר לחזרות ₪12\.50<\/div>/);
   assert.match(carriedCard, /<span>חסר זיכוי: לחם מקמח כוסמין E-FREE<\/span><span class="shrink-0">1 יח׳<\/span>/);
-  assert.match(html(carried), new RegExp('הספק חייב לך ₪' + money(carried, 12.5).replace('.', '\\.') + '</div>'), 'the balance banner also drops what was carried');
+  assert.match(carriedCard, /1 יח׳ הוחזרו לרשימת החזרות הפתוחה/);
+  assert.match(html(carried), /חסר זיכוי על 1 יח׳ בתעודה אחת/, 'the balance banner also drops what was carried');
 
-  // סכום ששויך לחוסר בקליטה (v66): לחזרות נשארו ₪20 מתוך ₪30 שעל הנייר — החוב גדל בהתאם, והשיוך נראה בתיבה שלו
-  const split = open([{ ...openGapReturn(), id: 'ret_split', creditAllocations: [{ receiptId: 'rc_1', amount: 10 }] }]);
+  // זיכוי ששויך לחוסר בקליטה: אינו משנה את החוסר של החזרות, והשיוך נראה בתיבה שלו
+  const split = open([{ ...openGapReturn(), id: 'ret_split', creditAllocations: [{ id: 'a1', receiptId: 'rc_1', receiptDate: '2026-09-10', items: [{ productId: 'code_401', name: 'פיתות כוסמין 10 בשקית', qty: 2 }] }] }]);
   split.run("currentView = 'receiptsHistory'; renderReceiptsHistory();");
   const splitCard = cardOf(html(split), 'ret_split');
-  assert.match(splitCard, /הספק חייב לך עוד ₪35\.00 בזיכוי!/);
-  assert.match(splitCard, /החזרת ₪55\.00 · בתעודת הזיכוי ₪20\.00<\/div>/);
-  assert.match(splitCard, /מהתעודה שויכו ₪10\.00 להשלמת זיכוי בתעודות אחרות/);
-  // נייר שהורכב משני חלקים (₪20 + ₪10): החלקים נאמרים בסוגריים, כמו במסך הישן
+  assert.match(splitCard, /<span>חסר זיכוי: לחם מקמח כוסמין E-FREE<\/span><span class="shrink-0">2 יח׳<\/span>/);
+  assert.match(splitCard, /בתעודה זוכו גם מוצרים שלא הוחזרו — שויכו לחוסר בתעודות אחרות/);
+  assert.match(splitCard, /פיתות כוסמין 10 בשקית × 2/);
+  // שיוך ישן (v66) בסכום בלבד — מוצג כרישום ישן
+  const legacy = open([{ ...openGapReturn(), id: 'ret_legacy', creditAllocations: [{ id: 'a0', receiptId: 'rc_1', amount: 10 }] }]);
+  legacy.run("currentView = 'receiptsHistory'; renderReceiptsHistory();");
+  assert.match(cardOf(html(legacy), 'ret_legacy'), /₪10\.00 \(רישום ישן\)/);
+  // נייר שהורכב משני חלקים (₪20 + ₪10): החלקים נאמרים, לזיהוי בלבד
   const parts = open([{ ...openGapReturn(), id: 'ret_parts', creditNoteParts: [20, 10] }]);
   parts.run("currentView = 'receiptsHistory'; renderReceiptsHistory();");
-  assert.match(cardOf(html(parts), 'ret_parts'), /החזרת ₪55\.00 · בתעודת הזיכוי ₪30\.00 \(₪20\.00 \+ ₪10\.00\)<\/div>/);
+  assert.match(cardOf(html(parts), 'ret_parts'), /2 תעודות זיכוי: ₪20\.00 \+ ₪10\.00 = ₪30\.00 \(לזיהוי\)/);
 
   // שמות וברקודים עוברים htmlEscape — תו "<" בשם אינו הופך לתגית, לא בשורה ולא בפירוט הפער
   const esc = open([{ ...openGapReturn(), id: 'ret_esc', creditNoteTotal: 0, totalExVat: 5, totalIncVat: 5.9,
@@ -426,6 +436,11 @@ test('the flows that used to go back to the returns screen — a saved verificat
   assert.equal(write.data.sentTo, 'נמסר ידנית');
   assert.equal(write.data.returnKind, 'weekly');
   assert.equal(write.data.timestamp, Date.UTC(2026, 8, 23, 6, 0));
+  // v123: תעודה חדשה היא כמויות בלבד
+  assert.equal(write.data.schemaVersion, 2);
+  assert.equal(write.data.vatPct, 18);
+  ['totalExVat', 'totalIncVat'].forEach(k => assert.equal(Object.hasOwn(write.data, k), false, k));
+  assert.deepEqual(write.data.items, [{ name: 'פיתות כוסמין 10 בשקית', barcode: '7290001001', code: '401', productId: 'code_401', qty: 2 }]);
   // הענן מחזיר את התעודה החדשה לרשימה (גבול שההארנס אינו מדמה) — והמסך מצייר אותה כממתינה, עם כל הפעולות
   const newId = write.path.slice(-1)[0];
   saved.context.testNewDoc = structuredClone(write.data);
@@ -441,6 +456,9 @@ test('the flows that used to go back to the returns screen — a saved verificat
   assert.equal(sent.run('currentView'), 'receiptsHistory');
   assert.equal(sent.run('returnsList.length'), 0);
   assert.equal(sent.writes[sent.writes.length - 1].data.sentTo, 'הנהג');
+  assert.equal(sent.writes[sent.writes.length - 1].data.schemaVersion, 2);
+  ['totalExVat', 'totalIncVat'].forEach(k => assert.equal(Object.hasOwn(sent.writes[sent.writes.length - 1].data, k), false, k));
+  assert.ok(sent.writes[sent.writes.length - 1].data.items.every(l => !('unitPrice' in l) && !('lineTotal' in l)));
   assert.match(sent.run('window.location.href'), /^https:\/\/wa\.me\/972501234567\?text=/);
   assert.equal(sent.requests.length, 0, 'no network');
 });
@@ -452,13 +470,13 @@ test('approving, checking and un-verifying on the unified screen redraw it in pl
   assert.match(html(rt), /תעודת חזרה אחת ממתינה לאימות זיכוי/);
   await rt.click('rv-approve', 'ret_pending');
   assert.equal(rt.node('confirmTitle').textContent, 'אישור תעודת זיכוי');
-  assert.match(rt.node('confirmMsg').textContent, /לאשר שהספק זיכה בדיוק ₪30\.00/);
+  assert.match(rt.node('confirmMsg').textContent, /לאשר שהספק זיכה על כל 3 היחידות/);
   assert.equal(rt.run('returns[0].credited'), false, 'nothing changes before the confirmation');
   await rt.events.get('confirmOk:click')();
   await rt.run('Promise.resolve()');
   assert.equal(rt.run('currentView'), 'receiptsHistory', 'still on the unified screen');
   assert.equal(rt.run('returns[0].credited'), true);
-  assert.equal(rt.run('returns[0].creditNoteTotal'), 30);
+  assert.equal(rt.run('returns[0].creditNoteTotal'), undefined, 'no computed amount is stored');
   let page = html(rt);
   assert.match(cardOf(page, 'ret_pending'), /^border-emerald-300 /, 'the card was redrawn green');
   assert.match(cardOf(page, 'ret_pending'), /<i class="fa-solid fa-circle-check"><\/i> אומתה/);
@@ -470,7 +488,7 @@ test('approving, checking and un-verifying on the unified screen redraw it in pl
   const write = rt.writes[rt.writes.length - 1];
   assert.equal(write.op, 'update');
   assert.equal(write.path.slice(-1)[0], 'ret_pending');
-  assert.deepEqual([write.data.credited, write.data.creditNoteTotal, write.data.creditStatus], [true, 30, 'ok']);
+  assert.deepEqual([write.data.credited, write.data.creditNoteTotal, write.data.creditStatus], [true, undefined, 'ok']);
 
   // ביטול אימות (uncredit → חלון אישור → clearReturnVerification): הכרטיס חוזר להיות כתום, עם כל הפעולות
   await rt.click('uncredit', 'ret_pending');
@@ -486,22 +504,34 @@ test('approving, checking and un-verifying on the unified screen redraw it in pl
     assert.ok(page.includes(roleFor(role, 'ret_pending')), 'reopened card offers ' + role));
   assert.deepEqual([rt.writes[rt.writes.length - 1].data.credited, rt.writes[rt.writes.length - 1].data.creditNoteTotal], [false, null]);
 
-  // "בדוק" עם סכום שהוקלד בשדה שעל הכרטיס (rv-verify-inline → markReturnVerified): סכום תואם סוגר בלי חלון
+  // "בדוק" עם סכום שהוקלד בשדה שעל הכרטיס: פותח את מסך האימות (v123 — הסכום לזיהוי בלבד),
+  // והשמירה משם נוחתת שוב במסך המאוחד עם כרטיס ירוק
   rt.node('rvNote_ret_pending').value = '30';
   await rt.click('rv-verify-inline', 'ret_pending');
+  assert.equal(rt.run('currentView'), 'returnReconcile');
+  assert.equal(rt.run('returnVerify.noteTotal'), 30);
+  rt.run('returnVerify.items.forEach(l => { l.checked = true; })');
+  await rt.click('rv-save');
   await rt.run('Promise.resolve()');
   assert.equal(rt.run('currentView'), 'receiptsHistory');
   assert.equal(rt.run('returns[0].credited'), true);
+  assert.equal(rt.run('returns[0].creditNoteTotal'), 30);
   assert.match(cardOf(html(rt), 'ret_pending'), /^border-emerald-300 /);
   assert.doesNotMatch(html(rt), /ממתינ(ה|ות) לאימות זיכוי/);
   assert.equal(rt.requests.length, 0, 'no network');
 });
 
 test('a filter chip chosen earlier never hides the returns the entry points promise: the returns-side entries and the post-send landings reset to "הכול"', async () => {
-  // המסך הישן הראה תמיד את כל החזרות; במסך המאוחד המסנן האחרון דביק, ו"פתוחות" מעולם לא כלל חזרות
+  // המסך הישן הראה תמיד את כל החזרות; במסך המאוחד המסנן האחרון דביק. v123: "פתוחות" כולל
+  // תעודת חזרות שאומתה ונשאר בה פער ביחידות — ורק אותה
   const rt = open([pendingReturn(), verifiedReturn(), openGapReturn()]);
   rt.run("receiptHistoryFilter = 'open'; setView('receiptsHistory')");
-  assert.equal((html(rt).match(/תעודת חזרות \/ זיכוי/g) || []).length, 0, 'under "פתוחות" no return card is listed — the chips themselves did not change');
+  assert.equal((html(rt).match(/תעודת חזרות \/ זיכוי/g) || []).length, 1, 'under "פתוחות" only the open-gap return is listed');
+  assert.ok(html(rt).includes(roleFor('rv-open', 'ret_gap')));
+  rt.run("receiptHistoryFilter = 'done'; renderReceiptsHistory()");
+  assert.equal((html(rt).match(/תעודת חזרות \/ זיכוי/g) || []).length, 1, 'under "הושלמו" only the fully credited return');
+  assert.ok(html(rt).includes(roleFor('rv-open', 'ret_ok')));
+  rt.run("receiptHistoryFilter = 'open'; renderReceiptsHistory()");
   assert.match(html(rt), /תעודת חזרה אחת ממתינה לאימות זיכוי/, 'but the status line still counts it');
   rt.run("setView('returns')");
   await rt.click('ret-history');

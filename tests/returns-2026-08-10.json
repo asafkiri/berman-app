@@ -1,0 +1,1353 @@
+{
+ "note": "צמצום מנוקה של 19 תעודות החזרה מהגיבוי של 4.10.2026 19:08 (אוגוסט–אוקטובר): השורות, הכמויות, סטטוס הזיכוי וקישור הזיכוי היחיד (5.9 → קליטת 6.9). שדות הכסף הישנים נשמרו כמו שהם כדי לוודא שהקוראים מתעלמים מהם (v123). sentTo הוחלף בקבוע.",
+ "returns": [
+  {
+   "id": "returns_8fc18d35-7963-4abc-9f37-8b87bd34970b",
+   "docDate": "2026-08-20",
+   "date": "2026-08-20",
+   "timestamp": 1787201613611,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1787456233841,
+   "creditStatus": "ok",
+   "creditNoteTotal": 53.17,
+   "mergedFrom": [
+    {
+     "sentTo": "נמסר ידנית",
+     "returnKind": "weekly",
+     "mergedAt": 1787233569599,
+     "docDate": "2026-08-19",
+     "totalExVat": 12.05,
+     "itemsCount": 1
+    }
+   ],
+   "totalExVat": 53.17,
+   "totalIncVat": 62.74,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_349",
+     "code": "349",
+     "name": "לחם עננים בסגנון בריוש עם פ' עבות",
+     "barcode": "4033736",
+     "qty": 1,
+     "unitPrice": 9.883999999999999,
+     "lineTotal": 9.88
+    },
+    {
+     "productId": "code_2387",
+     "code": "2387",
+     "name": "פיתות עננים 8",
+     "barcode": "4033057",
+     "qty": 2,
+     "unitPrice": 10.7068,
+     "lineTotal": 21.41
+    },
+    {
+     "productId": "code_238",
+     "code": "238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 2,
+     "unitPrice": 4.9131,
+     "lineTotal": 9.83
+    },
+    {
+     "productId": "code_339",
+     "code": "339",
+     "name": "ברמן אקטיב",
+     "barcode": "497044",
+     "qty": 1,
+     "unitPrice": 12.047,
+     "lineTotal": 12.05
+    }
+   ]
+  },
+  {
+   "id": "returns_ab133d13-92a3-4608-a509-ad5b625fc7fe",
+   "docDate": "2026-08-22",
+   "date": "2026-08-22",
+   "timestamp": 1787422250034,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1787456252515,
+   "creditStatus": "ok",
+   "creditNoteTotal": 46.81,
+   "totalExVat": 46.81,
+   "totalIncVat": 55.24,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_451",
+     "code": "451",
+     "name": "חלה קלועה ברמן",
+     "barcode": "498430",
+     "qty": 1,
+     "unitPrice": 4.6276,
+     "lineTotal": 4.63
+    },
+    {
+     "productId": "code_242",
+     "code": "242",
+     "name": "שמיניה שומשום",
+     "barcode": "498157",
+     "qty": 4,
+     "unitPrice": 1.8678070000000002,
+     "lineTotal": 7.47
+    },
+    {
+     "productId": "code_450",
+     "code": "450",
+     "name": "חלה מרובעת ברמן",
+     "barcode": "498393",
+     "qty": 2,
+     "unitPrice": 4.6276,
+     "lineTotal": 9.26
+    },
+    {
+     "productId": "code_2387",
+     "code": "2387",
+     "name": "פיתות עננים 8",
+     "barcode": "4033057",
+     "qty": 1,
+     "unitPrice": 10.7068,
+     "lineTotal": 10.71
+    },
+    {
+     "productId": "code_238",
+     "code": "238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 3,
+     "unitPrice": 4.9131,
+     "lineTotal": 14.74
+    }
+   ]
+  },
+  {
+   "id": "returns_f02acf3f-4e75-4b43-afd9-2aca8b35d583",
+   "docDate": "2026-08-26",
+   "date": "2026-08-26",
+   "timestamp": 1787723243413,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1787888783928,
+   "creditStatus": "ok",
+   "creditNoteTotal": 31.47,
+   "mergedFrom": [
+    {
+     "sentTo": "נמסר ידנית",
+     "totalExVat": 7.08,
+     "itemsCount": 2,
+     "returnKind": "weekly",
+     "mergedAt": 1787723283474,
+     "docDate": "2026-08-25"
+    }
+   ],
+   "totalExVat": 31.47,
+   "totalIncVat": 37.13,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_238",
+     "code": "238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 4,
+     "unitPrice": 4.9131,
+     "lineTotal": 19.64
+    },
+    {
+     "productId": "code_2381",
+     "code": "2381",
+     "name": "פיתות פרימיום 10",
+     "barcode": "4033033",
+     "qty": 1,
+     "unitPrice": 9.6512,
+     "lineTotal": 9.65
+    },
+    {
+     "productId": "code_233",
+     "code": "233",
+     "name": "זוג לחמניות אצבע בש'",
+     "barcode": "497297",
+     "qty": 1,
+     "unitPrice": 2.1660299999999997,
+     "lineTotal": 2.17
+    }
+   ]
+  },
+  {
+   "id": "returns_23914cfd-3cdc-47fe-9cef-b6003ddf0e52",
+   "docDate": "2026-08-27",
+   "date": "2026-08-27",
+   "timestamp": 1787807967216,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1788079977915,
+   "creditStatus": "ok",
+   "creditNoteTotal": 54.21,
+   "totalExVat": 54.22,
+   "totalIncVat": 63.98,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_349",
+     "code": "349",
+     "name": "לחם עננים בסגנון בריוש עם פ' עבות",
+     "barcode": "4033736",
+     "qty": 3,
+     "unitPrice": 9.883999999999999,
+     "lineTotal": 29.65
+    },
+    {
+     "productId": "code_238",
+     "code": "238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 5,
+     "unitPrice": 4.9131,
+     "lineTotal": 24.57
+    }
+   ]
+  },
+  {
+   "id": "returns_fc075a03-8585-4776-b61a-f0da2d832340",
+   "docDate": "2026-08-29",
+   "date": "2026-08-29",
+   "timestamp": 1788026304620,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1788147219250,
+   "creditStatus": "ok",
+   "creditNoteTotal": 135.58,
+   "totalExVat": 135.6,
+   "totalIncVat": 160.01,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_450",
+     "name": "חלה מרובעת ברמן",
+     "barcode": "498393",
+     "qty": 2,
+     "unitPrice": 4.63,
+     "lineTotal": 9.26
+    },
+    {
+     "productId": "code_238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 1,
+     "unitPrice": 4.91,
+     "lineTotal": 4.91
+    },
+    {
+     "productId": "code_242",
+     "name": "שמיניה שומשום",
+     "barcode": "498157",
+     "qty": 8,
+     "unitPrice": 1.87,
+     "lineTotal": 14.96
+    },
+    {
+     "productId": "code_233",
+     "name": "זוג לחמניות אצבע בש'",
+     "barcode": "497297",
+     "qty": 1,
+     "unitPrice": 2.17,
+     "lineTotal": 2.17
+    },
+    {
+     "productId": "code_458",
+     "name": "חלומית ארוזה ברמן",
+     "barcode": "497358",
+     "qty": 3,
+     "unitPrice": 10.41,
+     "lineTotal": 31.23
+    },
+    {
+     "productId": "code_1244",
+     "name": "לחמניות מזונות 4 בשקית",
+     "barcode": "4033682",
+     "qty": 1,
+     "unitPrice": 9.34,
+     "lineTotal": 9.34
+    },
+    {
+     "productId": "code_3701",
+     "name": "חלומית אישית 3 יח׳",
+     "barcode": "4033484",
+     "qty": 1,
+     "unitPrice": 11.5,
+     "lineTotal": 11.5
+    },
+    {
+     "productId": "code_333",
+     "name": "דגני קלות",
+     "barcode": "497570",
+     "qty": 1,
+     "unitPrice": 12.05,
+     "lineTotal": 12.05
+    },
+    {
+     "productId": "code_101",
+     "name": "אחיד פרוס ברמן",
+     "barcode": "497112",
+     "qty": 7,
+     "unitPrice": 5.74,
+     "lineTotal": 40.18
+    }
+   ]
+  },
+  {
+   "id": "returns_f5e72f01-930d-40e2-a935-e37b9ff66aa1",
+   "docDate": "2026-09-01",
+   "date": "2026-09-01",
+   "timestamp": 1788235378414,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1788407230497,
+   "creditStatus": "ok",
+   "creditNoteTotal": 63.84,
+   "mergedFrom": [
+    {
+     "returnKind": "weekly",
+     "sentTo": "נמסר ידנית",
+     "mergedAt": 1788407221822,
+     "totalExVat": 10.71,
+     "itemsCount": 1,
+     "docDate": "2026-09-01"
+    }
+   ],
+   "totalExVat": 63.84,
+   "totalIncVat": 75.33,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_649",
+     "code": "649",
+     "name": "6 לחמניות כוסמין",
+     "barcode": "4685447",
+     "qty": 1,
+     "unitPrice": 10.458,
+     "lineTotal": 10.46
+    },
+    {
+     "productId": "code_344",
+     "code": "344",
+     "name": "לחם מקמח כוסמין E-FREE",
+     "barcode": "498034",
+     "qty": 1,
+     "unitPrice": 12.305999999999997,
+     "lineTotal": 12.31
+    },
+    {
+     "productId": "code_2387",
+     "code": "2387",
+     "name": "פיתות עננים 8",
+     "barcode": "4033057",
+     "qty": 2,
+     "unitPrice": 10.7068,
+     "lineTotal": 21.42
+    },
+    {
+     "productId": "code_238",
+     "code": "238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 4,
+     "unitPrice": 4.9131,
+     "lineTotal": 19.65
+    }
+   ]
+  },
+  {
+   "id": "returns_fe2c873f-84cc-493d-bcb6-58bb89249047",
+   "docDate": "2026-09-03",
+   "date": "2026-09-03",
+   "timestamp": 1788410442758,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1788839927920,
+   "creditStatus": "ok",
+   "creditNoteTotal": 98.03,
+   "totalExVat": 98.02,
+   "totalIncVat": 115.66,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_2381",
+     "code": "2381",
+     "name": "פיתות פרימיום 10",
+     "barcode": "4033033",
+     "qty": 4,
+     "unitPrice": 9.6512,
+     "lineTotal": 38.6
+    },
+    {
+     "productId": "code_2387",
+     "code": "2387",
+     "name": "פיתות עננים 8",
+     "barcode": "4033057",
+     "qty": 1,
+     "unitPrice": 10.7068,
+     "lineTotal": 10.71
+    },
+    {
+     "productId": "code_238",
+     "code": "238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 3,
+     "unitPrice": 4.9131,
+     "lineTotal": 14.74
+    },
+    {
+     "productId": "code_339",
+     "code": "339",
+     "name": "ברמן אקטיב",
+     "barcode": "497044",
+     "qty": 2,
+     "unitPrice": 12.047,
+     "lineTotal": 24.09
+    },
+    {
+     "productId": "code_349",
+     "code": "349",
+     "name": "לחם עננים בסגנון בריוש עם פ' עבות",
+     "barcode": "4033736",
+     "qty": 1,
+     "unitPrice": 9.883999999999999,
+     "lineTotal": 9.88
+    }
+   ]
+  },
+  {
+   "id": "returns_84f367b7-7408-4aa4-a303-8a98e971a28b",
+   "docDate": "2026-09-05",
+   "date": "2026-09-05",
+   "timestamp": 1788631321584,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1788754751265,
+   "creditStatus": "ok",
+   "creditNoteTotal": 207.6,
+   "creditAllocations": [
+    {
+     "at": 1788754749607,
+     "receiptDate": "2026-09-06",
+     "source": "shortage-credit",
+     "amount": 21.88,
+     "receiptId": "receipt_6771fe19-82e4-4f34-b81a-42ef5c9904b4",
+     "items": [
+      {
+       "name": "פיתות כוסמין 10 בשקית",
+       "productId": "code_401",
+       "qty": 2
+      }
+     ],
+     "id": "cs1|returns_84f367b7-7408-4aa4-a303-8a98e971a28b|receipt_6771fe19-82e4-4f34-b81a-42ef5c9904b4|mtqqe65jleqk"
+    }
+   ],
+   "totalExVat": 185.72,
+   "totalIncVat": 219.15,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_2387",
+     "name": "פיתות עננים 8",
+     "barcode": "4033057",
+     "qty": 1,
+     "unitPrice": 10.71,
+     "lineTotal": 10.71
+    },
+    {
+     "productId": "code_2381",
+     "name": "פיתות פרימיום 10",
+     "barcode": "4033033",
+     "qty": 1,
+     "unitPrice": 9.65,
+     "lineTotal": 9.65
+    },
+    {
+     "productId": "code_238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 3,
+     "unitPrice": 4.91,
+     "lineTotal": 14.73
+    },
+    {
+     "productId": "code_450",
+     "name": "חלה מרובעת ברמן",
+     "barcode": "498393",
+     "qty": 2,
+     "unitPrice": 4.63,
+     "lineTotal": 9.26
+    },
+    {
+     "productId": "code_459",
+     "name": "חלומית",
+     "barcode": "498423",
+     "qty": 2,
+     "unitPrice": 8.81,
+     "lineTotal": 17.62
+    },
+    {
+     "productId": "code_451",
+     "name": "חלה קלועה ברמן",
+     "barcode": "498430",
+     "qty": 3,
+     "unitPrice": 4.63,
+     "lineTotal": 13.89
+    },
+    {
+     "productId": "code_242",
+     "name": "שמיניה שומשום",
+     "barcode": "498157",
+     "qty": 13,
+     "unitPrice": 1.87,
+     "lineTotal": 24.31
+    },
+    {
+     "productId": "code_349",
+     "name": "לחם עננים בסגנון בריוש עם פ' עבות",
+     "barcode": "4033736",
+     "qty": 2,
+     "unitPrice": 9.88,
+     "lineTotal": 19.76
+    },
+    {
+     "productId": "code_119",
+     "name": "לחם מלא בטוב",
+     "barcode": "2037194",
+     "qty": 1,
+     "unitPrice": 7.25,
+     "lineTotal": 7.25
+    },
+    {
+     "productId": "code_339",
+     "name": "ברמן אקטיב",
+     "barcode": "497044",
+     "qty": 2,
+     "unitPrice": 12.05,
+     "lineTotal": 24.1
+    },
+    {
+     "productId": "code_101",
+     "name": "אחיד פרוס ברמן",
+     "barcode": "497112",
+     "qty": 6,
+     "unitPrice": 5.74,
+     "lineTotal": 34.44
+    }
+   ]
+  },
+  {
+   "id": "returns_b1920410-04ce-4c31-bc18-97fce8e05c7f",
+   "docDate": "2026-09-09",
+   "date": "2026-09-09",
+   "timestamp": 1788937739524,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1789098398667,
+   "creditStatus": "ok",
+   "creditNoteTotal": 73.87,
+   "mergedFrom": [
+    {
+     "returnKind": "weekly",
+     "docDate": "2026-09-08",
+     "mergedAt": 1788937758105,
+     "sentTo": "נמסר ידנית",
+     "totalExVat": 19.65,
+     "itemsCount": 1
+    }
+   ],
+   "totalExVat": 73.87,
+   "totalIncVat": 87.17,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_339",
+     "code": "339",
+     "name": "ברמן אקטיב",
+     "barcode": "497044",
+     "qty": 3,
+     "unitPrice": 12.047,
+     "lineTotal": 36.14
+    },
+    {
+     "productId": "code_220",
+     "code": "220",
+     "name": "6 לחמניות עננים בסגנון בריוש",
+     "barcode": "4033750",
+     "qty": 1,
+     "unitPrice": 8.200962,
+     "lineTotal": 8.2
+    },
+    {
+     "productId": "code_349",
+     "code": "349",
+     "name": "לחם עננים בסגנון בריוש עם פ' עבות",
+     "barcode": "4033736",
+     "qty": 1,
+     "unitPrice": 9.883999999999999,
+     "lineTotal": 9.88
+    },
+    {
+     "productId": "code_238",
+     "code": "238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 4,
+     "unitPrice": 4.9131,
+     "lineTotal": 19.65
+    }
+   ]
+  },
+  {
+   "id": "returns_894754a0-33f6-41eb-837d-07f562b869af",
+   "docDate": "2026-09-13",
+   "date": "2026-09-13",
+   "timestamp": 1789321666446,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1789442979952,
+   "creditStatus": "ok",
+   "creditNoteTotal": 218,
+   "creditNoteParts": [
+    205.69,
+    12.31
+   ],
+   "totalExVat": 217.96,
+   "totalIncVat": 257.19,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 6,
+     "unitPrice": 4.91,
+     "lineTotal": 29.46
+    },
+    {
+     "name": "פיתות עננים 8",
+     "barcode": "4033057",
+     "qty": 2,
+     "unitPrice": 10.71,
+     "lineTotal": 21.42
+    },
+    {
+     "name": "לחמנ' עננים בריוש 10",
+     "barcode": "4033361",
+     "qty": 1,
+     "unitPrice": 14.28,
+     "lineTotal": 14.28
+    },
+    {
+     "name": "6 לחמניות עננים בסגנון בריוש",
+     "barcode": "4033750",
+     "qty": 2,
+     "unitPrice": 8.2,
+     "lineTotal": 16.4
+    },
+    {
+     "name": "חלומית ארוזה ברמן",
+     "barcode": "497358",
+     "qty": 1,
+     "unitPrice": 10.41,
+     "lineTotal": 10.41
+    },
+    {
+     "name": "לחם מקמח כוסמין E-FREE",
+     "barcode": "498034",
+     "qty": 1,
+     "unitPrice": 12.31,
+     "lineTotal": 12.31
+    },
+    {
+     "name": "דגני קלות",
+     "barcode": "497570",
+     "qty": 1,
+     "unitPrice": 12.05,
+     "lineTotal": 12.05
+    },
+    {
+     "name": "ברמן אקטיב",
+     "barcode": "497044",
+     "qty": 1,
+     "unitPrice": 12.05,
+     "lineTotal": 12.05
+    },
+    {
+     "name": "לחם עננים בסגנון בריוש עם פ' עבות",
+     "barcode": "4033736",
+     "qty": 5,
+     "unitPrice": 9.88,
+     "lineTotal": 49.4
+    },
+    {
+     "name": "אחיד פרוס ברמן",
+     "barcode": "497112",
+     "qty": 7,
+     "unitPrice": 5.74,
+     "lineTotal": 40.18
+    }
+   ]
+  },
+  {
+   "id": "returns_e82e179d-8382-4f3e-9984-e6c282b36378",
+   "docDate": "2026-09-19",
+   "date": "2026-09-19",
+   "timestamp": 1789839119908,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1789876173870,
+   "creditStatus": "ok",
+   "creditNoteTotal": 150.8,
+   "creditNoteParts": null,
+   "totalExVat": 150.86,
+   "totalIncVat": 178.01,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_101",
+     "code": "101",
+     "name": "אחיד פרוס ברמן",
+     "barcode": "497112",
+     "qty": 5,
+     "unitPrice": 5.7408,
+     "lineTotal": 28.7
+    },
+    {
+     "productId": "code_238",
+     "code": "238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 3,
+     "unitPrice": 4.9131,
+     "lineTotal": 14.74
+    },
+    {
+     "productId": "code_2387",
+     "code": "2387",
+     "name": "פיתות עננים 8",
+     "barcode": "4033057",
+     "qty": 1,
+     "unitPrice": 10.7068,
+     "lineTotal": 10.71
+    },
+    {
+     "productId": "code_450",
+     "code": "450",
+     "name": "חלה מרובעת ברמן",
+     "barcode": "498393",
+     "qty": 6,
+     "unitPrice": 4.6276,
+     "lineTotal": 27.77
+    },
+    {
+     "productId": "code_458",
+     "code": "458",
+     "name": "חלומית ארוזה ברמן",
+     "barcode": "497358",
+     "qty": 6,
+     "unitPrice": 10.406210000000002,
+     "lineTotal": 62.44
+    },
+    {
+     "productId": "code_233",
+     "code": "233",
+     "name": "זוג לחמניות אצבע בש'",
+     "barcode": "497297",
+     "qty": 3,
+     "unitPrice": 2.1660299999999997,
+     "lineTotal": 6.5
+    }
+   ]
+  },
+  {
+   "id": "returns_607f7ee3-e5e2-4923-afc7-09aecf943cf6",
+   "docDate": "2026-09-21",
+   "date": "2026-09-21",
+   "timestamp": 1790017218631,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1790135887384,
+   "creditStatus": "ok",
+   "creditNoteTotal": 33.22,
+   "totalExVat": 33.1,
+   "totalIncVat": 39.06,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_458",
+     "name": "חלומית ארוזה ברמן",
+     "barcode": "497358",
+     "qty": 3,
+     "unitPrice": 10.41,
+     "lineTotal": 31.23
+    },
+    {
+     "productId": "code_242",
+     "name": "שמיניה שומשום",
+     "barcode": "498157",
+     "qty": 1,
+     "unitPrice": 1.87,
+     "lineTotal": 1.87
+    }
+   ]
+  },
+  {
+   "id": "returns_87b5d486-9147-4395-96eb-a6073dc69634",
+   "docDate": "2026-09-24",
+   "date": "2026-09-24",
+   "timestamp": 1790230891209,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1790573351324,
+   "creditStatus": "ok",
+   "creditNoteTotal": 62.54,
+   "totalExVat": 62.53,
+   "totalIncVat": 73.79,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_233",
+     "code": "233",
+     "name": "זוג לחמניות אצבע בש'",
+     "barcode": "497297",
+     "qty": 1,
+     "unitPrice": 2.1660299999999997,
+     "lineTotal": 2.17
+    },
+    {
+     "productId": "code_2381",
+     "code": "2381",
+     "name": "פיתות פרימיום 10",
+     "barcode": "4033033",
+     "qty": 2,
+     "unitPrice": 9.6512,
+     "lineTotal": 19.3
+    },
+    {
+     "productId": "code_2387",
+     "code": "2387",
+     "name": "פיתות עננים 8",
+     "barcode": "4033057",
+     "qty": 2,
+     "unitPrice": 10.7068,
+     "lineTotal": 21.41
+    },
+    {
+     "productId": "code_238",
+     "code": "238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 4,
+     "unitPrice": 4.9131,
+     "lineTotal": 19.65
+    }
+   ]
+  },
+  {
+   "id": "returns_c28da537-776c-4099-aea9-bf3f7c6d6855",
+   "docDate": "2026-09-26",
+   "date": "2026-09-26",
+   "timestamp": 1790444112208,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1790577397533,
+   "creditStatus": "ok",
+   "creditNoteTotal": 78.2,
+   "totalExVat": 77.99,
+   "totalIncVat": 92.03,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_451",
+     "code": "451",
+     "name": "חלה קלועה ברמן",
+     "barcode": "498430",
+     "qty": 1,
+     "unitPrice": 4.6276,
+     "lineTotal": 4.63
+    },
+    {
+     "productId": "code_3701",
+     "code": "3701",
+     "name": "חלומית אישית 3 יח׳",
+     "barcode": "4033484",
+     "qty": 1,
+     "unitPrice": 11.5,
+     "lineTotal": 11.5
+    },
+    {
+     "productId": "code_458",
+     "code": "458",
+     "name": "חלומית ארוזה ברמן",
+     "barcode": "497358",
+     "qty": 5,
+     "unitPrice": 10.406210000000002,
+     "lineTotal": 52.03
+    },
+    {
+     "productId": "code_238",
+     "code": "238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 2,
+     "unitPrice": 4.9131,
+     "lineTotal": 9.83
+    }
+   ]
+  },
+  {
+   "id": "returns_9f0d5217-6358-479f-82c8-42200d902895",
+   "docDate": "2026-09-28",
+   "date": "2026-09-28",
+   "timestamp": 1790577470099,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1790831478699,
+   "creditStatus": "ok",
+   "creditNoteTotal": 84.58,
+   "totalExVat": 84.58,
+   "totalIncVat": 99.8,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_2381",
+     "code": "2381",
+     "name": "פיתות פרימיום 10",
+     "barcode": "4033033",
+     "qty": 4,
+     "unitPrice": 9.6512,
+     "lineTotal": 38.6
+    },
+    {
+     "productId": "code_2387",
+     "code": "2387",
+     "name": "פיתות עננים 8",
+     "barcode": "4033057",
+     "qty": 2,
+     "unitPrice": 10.7068,
+     "lineTotal": 21.41
+    },
+    {
+     "productId": "code_238",
+     "code": "238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 5,
+     "unitPrice": 4.9131,
+     "lineTotal": 24.57
+    }
+   ]
+  },
+  {
+   "id": "returns_d9ed10ba-5900-44d4-acb3-c9ec9eb3aa46",
+   "docDate": "2026-09-29",
+   "date": "2026-09-29",
+   "timestamp": 1790662739879,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1790833218864,
+   "creditStatus": "ok",
+   "creditNoteTotal": 40.72,
+   "totalExVat": 40.71,
+   "totalIncVat": 48.04,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_2381",
+     "code": "2381",
+     "name": "פיתות פרימיום 10",
+     "barcode": "4033033",
+     "qty": 2,
+     "unitPrice": 9.6512,
+     "lineTotal": 19.3
+    },
+    {
+     "productId": "code_2387",
+     "code": "2387",
+     "name": "פיתות עננים 8",
+     "barcode": "4033057",
+     "qty": 2,
+     "unitPrice": 10.7068,
+     "lineTotal": 21.41
+    }
+   ]
+  },
+  {
+   "id": "returns_2c14e178-331b-485b-a72b-b09ab789415a",
+   "docDate": "2026-10-01",
+   "date": "2026-09-30",
+   "timestamp": 1790750025649,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1790913962285,
+   "creditStatus": "ok",
+   "creditNoteTotal": 233.35,
+   "totalExVat": 233.34,
+   "totalIncVat": 275.34,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_220",
+     "code": "220",
+     "name": "6 לחמניות עננים בסגנון בריוש",
+     "barcode": "4033750",
+     "qty": 4,
+     "unitPrice": 8.200962,
+     "lineTotal": 32.8
+    },
+    {
+     "productId": "code_233",
+     "code": "233",
+     "name": "זוג לחמניות אצבע בש'",
+     "barcode": "497297",
+     "qty": 10,
+     "unitPrice": 2.1660299999999997,
+     "lineTotal": 21.66
+    },
+    {
+     "productId": "code_119",
+     "code": "119",
+     "name": "לחם מלא בטוב",
+     "barcode": "2037194",
+     "qty": 1,
+     "unitPrice": 7.2502650000000015,
+     "lineTotal": 7.25
+    },
+    {
+     "productId": "code_339",
+     "code": "339",
+     "name": "ברמן אקטיב",
+     "barcode": "497044",
+     "qty": 1,
+     "unitPrice": 12.047,
+     "lineTotal": 12.05
+    },
+    {
+     "productId": "code_349",
+     "code": "349",
+     "name": "לחם עננים בסגנון בריוש עם פ' עבות",
+     "barcode": "4033736",
+     "qty": 6,
+     "unitPrice": 9.883999999999999,
+     "lineTotal": 59.3
+    },
+    {
+     "productId": "code_2387",
+     "code": "2387",
+     "name": "פיתות עננים 8",
+     "barcode": "4033057",
+     "qty": 2,
+     "unitPrice": 10.7068,
+     "lineTotal": 21.41
+    },
+    {
+     "productId": "code_2381",
+     "code": "2381",
+     "name": "פיתות פרימיום 10",
+     "barcode": "4033033",
+     "qty": 5,
+     "unitPrice": 9.6512,
+     "lineTotal": 48.26
+    },
+    {
+     "productId": "code_401",
+     "code": "401",
+     "name": "פיתות כוסמין 10 בשקית",
+     "barcode": "4685478",
+     "qty": 1,
+     "unitPrice": 10.962,
+     "lineTotal": 10.96
+    },
+    {
+     "productId": "code_238",
+     "code": "238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 4,
+     "unitPrice": 4.9131,
+     "lineTotal": 19.65
+    }
+   ]
+  },
+  {
+   "id": "returns_d7ca5e1b-a8b9-45dd-a7de-34fc4fad4378",
+   "docDate": "2026-10-01",
+   "date": "2026-10-01",
+   "timestamp": 1790838280224,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1791086716908,
+   "creditStatus": "ok",
+   "creditNoteTotal": 146.67,
+   "totalExVat": 146.67,
+   "totalIncVat": 173.07,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_333",
+     "code": "333",
+     "name": "דגני קלות",
+     "barcode": "497570",
+     "qty": 2,
+     "unitPrice": 12.047,
+     "lineTotal": 24.09
+    },
+    {
+     "productId": "code_2387",
+     "code": "2387",
+     "name": "פיתות עננים 8",
+     "barcode": "4033057",
+     "qty": 5,
+     "unitPrice": 10.7068,
+     "lineTotal": 53.53
+    },
+    {
+     "productId": "code_401",
+     "code": "401",
+     "name": "פיתות כוסמין 10 בשקית",
+     "barcode": "4685478",
+     "qty": 1,
+     "unitPrice": 10.962,
+     "lineTotal": 10.96
+    },
+    {
+     "productId": "code_238",
+     "code": "238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 2,
+     "unitPrice": 4.9131,
+     "lineTotal": 9.83
+    },
+    {
+     "productId": "code_2381",
+     "code": "2381",
+     "name": "פיתות פרימיום 10",
+     "barcode": "4033033",
+     "qty": 5,
+     "unitPrice": 9.6512,
+     "lineTotal": 48.26
+    }
+   ]
+  },
+  {
+   "id": "returns_43eb7cdd-5e32-4524-aa86-b87ca8e88650",
+   "docDate": "2026-10-04",
+   "date": "2026-10-04",
+   "timestamp": 1791089298438,
+   "vatPct": 18,
+   "returnKind": "weekly",
+   "credited": true,
+   "creditedAt": 1791090458786,
+   "creditStatus": "open",
+   "creditNoteTotal": 316.34,
+   "totalExVat": 392.36,
+   "totalIncVat": 462.98,
+   "sentTo": "נמסר ידנית",
+   "items": [
+    {
+     "productId": "code_101",
+     "code": "101",
+     "name": "אחיד פרוס ברמן",
+     "barcode": "497112",
+     "qty": 13,
+     "unitPrice": 5.74,
+     "lineTotal": 74.62
+    },
+    {
+     "productId": "code_3701",
+     "code": "3701",
+     "name": "חלומית אישית 3 יח׳",
+     "barcode": "4033484",
+     "qty": 2,
+     "unitPrice": 11.5,
+     "lineTotal": 23
+    },
+    {
+     "productId": "code_1231",
+     "code": "1231",
+     "name": "לחמניות 10 בשקית",
+     "barcode": "498256",
+     "qty": 1,
+     "unitPrice": 10.4,
+     "lineTotal": 10.4
+    },
+    {
+     "productId": "code_1220",
+     "code": "1220",
+     "name": "לחמנ' עננים בריוש 10",
+     "barcode": "4033361",
+     "qty": 1,
+     "unitPrice": 14.28,
+     "lineTotal": 14.28
+    },
+    {
+     "productId": "code_220",
+     "code": "220",
+     "name": "6 לחמניות עננים בסגנון בריוש",
+     "barcode": "4033750",
+     "qty": 3,
+     "unitPrice": 8.2,
+     "lineTotal": 24.6
+    },
+    {
+     "productId": "code_349",
+     "code": "349",
+     "name": "לחם עננים בסגנון בריוש עם פ' עבות",
+     "barcode": "4033736",
+     "qty": 5,
+     "unitPrice": 9.88,
+     "lineTotal": 49.4
+    },
+    {
+     "productId": "code_450",
+     "code": "450",
+     "name": "חלה מרובעת ברמן",
+     "barcode": "498393",
+     "qty": 7,
+     "unitPrice": 4.63,
+     "lineTotal": 32.41
+    },
+    {
+     "productId": "code_458",
+     "code": "458",
+     "name": "חלומית ארוזה ברמן",
+     "barcode": "497358",
+     "qty": 2,
+     "unitPrice": 10.41,
+     "lineTotal": 20.82
+    },
+    {
+     "productId": "code_1244",
+     "code": "1244",
+     "name": "לחמניות מזונות 4 בשקית",
+     "barcode": "4033682",
+     "qty": 1,
+     "unitPrice": 9.34,
+     "lineTotal": 9.34
+    },
+    {
+     "productId": "code_2387",
+     "code": "2387",
+     "name": "פיתות עננים 8",
+     "barcode": "4033057",
+     "qty": 3,
+     "unitPrice": 10.71,
+     "lineTotal": 32.13
+    },
+    {
+     "productId": "code_2381",
+     "code": "2381",
+     "name": "פיתות פרימיום 10",
+     "barcode": "4033033",
+     "qty": 1,
+     "unitPrice": 9.65,
+     "lineTotal": 9.65
+    },
+    {
+     "productId": "code_238",
+     "code": "238",
+     "name": "ברמן אסלי 5 פיתות",
+     "barcode": "497204",
+     "qty": 1,
+     "noteQty": 0,
+     "unitPrice": 4.91,
+     "lineTotal": 4.91
+    },
+    {
+     "productId": "code_232",
+     "code": "232",
+     "name": "לחמניות 6 בשקית",
+     "barcode": "497228",
+     "qty": 1,
+     "unitPrice": 6.73,
+     "lineTotal": 6.73
+    },
+    {
+     "productId": "code_333",
+     "code": "333",
+     "name": "דגני קלות",
+     "barcode": "497570",
+     "qty": 1,
+     "unitPrice": 12.05,
+     "lineTotal": 12.05
+    },
+    {
+     "productId": "code_119",
+     "code": "119",
+     "name": "לחם מלא בטוב",
+     "barcode": "2037194",
+     "qty": 1,
+     "unitPrice": 7.25,
+     "lineTotal": 7.25
+    },
+    {
+     "productId": "code_339",
+     "code": "339",
+     "name": "ברמן אקטיב",
+     "barcode": "497044",
+     "qty": 3,
+     "unitPrice": 12.05,
+     "lineTotal": 36.15
+    },
+    {
+     "productId": "code_344",
+     "code": "344",
+     "name": "לחם מקמח כוסמין E-FREE",
+     "barcode": "498034",
+     "qty": 2,
+     "noteQty": 0,
+     "unitPrice": 12.31,
+     "lineTotal": 24.62
+    }
+   ]
+  }
+ ],
+ "receiptTwins": [
+  {
+   "id": "receipt_6771fe19-82e4-4f34-b81a-42ef5c9904b4",
+   "shortCreditNotes": [
+    {
+     "at": 1788754749607,
+     "source": "returns-note",
+     "amount": 21.88,
+     "returnsDate": "2026-09-05",
+     "fromReturnsId": "returns_84f367b7-7408-4aa4-a303-8a98e971a28b",
+     "items": [
+      {
+       "name": "פיתות כוסמין 10 בשקית",
+       "productId": "code_401",
+       "qty": 2
+      }
+     ],
+     "id": "cs1|returns_84f367b7-7408-4aa4-a303-8a98e971a28b|receipt_6771fe19-82e4-4f34-b81a-42ef5c9904b4|mtqqe65jleqk"
+    }
+   ]
+  }
+ ]
+}

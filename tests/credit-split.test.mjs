@@ -1,16 +1,17 @@
 // v66 — תעודת זיכוי אחת שסוגרת גם חזרות וגם חוסר של תעודת קליטה אחרת.
 // המקרה שהוליד את זה: תעודת החזרות של 5.9 חזרה מודפסת למחרת עם שורה שלא
-// החזרנו — 2 יח' פיתות כוסמין, בדיוק החוסר של הקליטה מאותו בוקר. ערך החוסר
-// לפי המחירון ₪21.92, והספק זיכה ₪21.88 אחרי שעיגל את השורה בדרכו.
+// החזרנו — 2 יח' פיתות כוסמין, בדיוק החוסר של הקליטה מאותו בוקר.
 //
-// הבדיקות רצות על הפונקציות האמיתיות מ-index.html (ראה extract.mjs), כדי
-// ששני הכללים לא ייעלמו בשקט: עודף על תעודת זיכוי נבדק מול חוסר פתוח לפני
-// שהוא נחשב "הספק זיכה יותר מדי", וזיכוי חוסר נסגר בסיבולת עיגול ולא באגורה.
+// v123: הקישור ביחידות. באימות הזיכוי מסמנים "זוכה גם על מוצר שלא הוחזר"
+// (מוצר + כמות), והבלש מחפש חוסר פתוח באותו מוצר בחלון של 14 יום. שתי
+// הרשומות התאומות נושאות מוצר וכמות בלי סכום. הכלל הכספי הישן (סיבולת עיגול
+// מול shortCreditNotes) נשאר לתעודות שנרשמו לפני v123 — [1]–[3].
+//
+// הבדיקות רצות על הפונקציות האמיתיות מ-index.html (ראה extract.mjs).
 //
 // הרצה:            node tests/credit-split.test.mjs
 // מול גיבוי אמיתי: node tests/credit-split.test.mjs --backup ~/bermanbackup.json
-// (המסמכים בתרחיש נבנים כאן בכל מקרה — מה שמגיע מהגיבוי הוא מחירי הקטלוג
-//  האמיתיים, כדי שסיבולת העיגול תיבדק מול המחירים שבאמת רצים בענן.)
+// (המסמכים בתרחיש נבנים כאן בכל מקרה — מה שמגיע מהגיבוי הוא הקטלוג האמיתי.)
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -39,20 +40,20 @@ const FNS = ['r2', 'moneyDiffCents', 'lineTotalFromUnit', 'todayStr', 'storedRec
   'supplierCreditClaimDeferred', 'aiPriceFindingPromoMatch', 'promoForProduct', 'promoActive',
   'promoTriggered', 'promoFixedPrice', 'promoPctOf', 'basketQty', 'promoMinUnitsP',
   'discountedUnitPrice', 'receiptDiscrepancyInfo', 'productListPrice', 'priceAt', 'receiptPaperLineCount',
-  // v66
-  'shortCreditToleranceCents', 'shortCreditFullyCovers', 'ymdDayDiff', 'receiptOpenShortEx',
-  'shortageCreditCandidates', 'returnsCreditSourcesForShortage', 'creditAllocationList',
-  'creditAllocatedEx', 'returnsCreditForReturns', 'returnsCreditSurplus', 'returnsBalance',
+  // v66 / v123
+  'shortCreditToleranceCents', 'shortCreditFullyCovers', 'ymdDayDiff',
+  'shortageCreditCandidates', 'returnsCreditSourcesForShortage', 'creditAllocationList', 'returnsBalance',
   'buildCreditSplitRecords', 'creditSplitPairId', 'vatRateForDoc', 'amountIncForDoc', 'returnTotals',
+  'receiptCreditedShortUnits',
   // v78 — החזרת פריטים מתעודת חזרות לרשימת החזרות הפתוחה
   'returnCarriedNotes', 'retCarryKey', 'consumeReturnCarriedNotes', 'returnsDiscrepancyInfo',
-  'returnCarriedVal', 'returnCreditNotes', 'returnLinkedCreditEx', 'consumeReturnLinkedCredit'];
+  'returnCreditNotes', 'consumeReturnLinkedCredit'];
 const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;'];
 // eslint-disable-next-line no-eval
 const api = eval(extractSource(FNS, CONSTS) + '\n({ ' + FNS.join(', ') + ' })');
 const { r2, receiptDiscrepancyInfo, shortCreditToleranceCents, shortCreditFullyCovers, ymdDayDiff,
-  shortageCreditCandidates, returnsCreditSourcesForShortage, creditAllocatedEx,
-  returnsCreditForReturns, returnsCreditSurplus, returnsBalance, buildCreditSplitRecords } = api;
+  shortageCreditCandidates, returnsCreditSourcesForShortage, creditAllocationList, returnsBalance,
+  buildCreditSplitRecords, receiptCreditedShortUnits, returnTotals } = api;
 
 let pass = 0, fail = 0;
 const ok = (name, cond) => { if (cond) { pass++; console.log('  ✓ ' + name); } else { fail++; console.log('  ✗ ' + name); } };
@@ -132,87 +133,106 @@ const dPartial = receiptDiscrepancyInfo(rcPartial);
 ok('זיכוי חלקי אמיתי נשאר חוב פתוח', dPartial.shortFullyCredited === false && dPartial.open === true);
 ok('היתרה היא ההפרש', dPartial.shortVal === r2(SHORT_EX - 12));
 
-head('[4] הבלש — לאיזה חוסר שייך העודף שעל תעודת החזרות');
+// v123: זיכוי ביחידות סוגר את החוסר לפני הכלל הכספי, ומתועד לתצוגה
+const rcUnits = makeReceipt({ shortCreditUnits: [{ id: 'u1', productId: PITA.id, name: PITA.name, qty: 2, source: 'credit-note', at: 1788700000000, noteNumber: '290094052' }] });
+const dUnits = receiptDiscrepancyInfo(rcUnits);
+ok('שתי יחידות שזוכו סוגרות את החוסר', dUnits.open === false && dUnits.shortItems.length === 0);
+ok('מה שזוכה מתועד ביחידות', dUnits.creditedUnits.length === 1 && dUnits.creditedUnits[0].qty === 2 && dUnits.creditedUnits[0].id === 'u1');
+ok('עם מספר התעודה לזיהוי', dUnits.creditedUnits[0].noteNumber === '290094052');
+ok('השם החדש של יתרת החוסר ביחידות', dUnits.shortUnitsLeft === 0 && !('shortCreditUnits' in dUnits));
+const dUnitsHalf = receiptDiscrepancyInfo(makeReceipt({ shortCreditUnits: [{ id: 'u1', productId: PITA.id, qty: 1 }] }));
+ok('יחידה אחת מתוך שתיים — נשאר חוסר של אחת', dUnitsHalf.open === true && dUnitsHalf.shortUnits === 1);
+// קורא המרכזת: יחידות קודם, ואחריהן הזיכוי הכספי הישן על מה שנשאר
+const twoShort = makeReceipt({ items: [
+  { productId: LOAF.id, name: LOAF.name, qty: 28, noteQty: 30, unitPrice: LOAF.price },
+  { productId: PITA.id, name: PITA.name, qty: 0, noteQty: 2, unitPrice: PITA.price }] });
+const both = receiptCreditedShortUnits({ ...twoShort, shortCreditUnits: [{ id: 'u', productId: LOAF.id, qty: 2 }], shortCreditNotes: [{ amount: CREDITED_EX, at: 1 }] }, '2026-09-06');
+ok('המרכזת: יחידות ללחם, והזיכוי הכספי הישן לפיתות', both[LOAF.id] === 2 && both[PITA.id] === 2);
+ok('המרכזת: יחידות לא נספרות מעבר לחוסר', receiptCreditedShortUnits({ ...makeReceipt(), shortCreditUnits: [{ productId: PITA.id, qty: 5 }] }, '2026-09-06')[PITA.id] === 2);
+
+head('[4] הבלש — לאיזה חוסר שייך מוצר שזוכה בלי שהוחזר');
 receipts = [makeReceipt()];
-const cands = shortageCreditCandidates(CREDITED_EX, receipts, { anchorDate: '2026-09-05' });
+const PITA2 = [{ productId: PITA.id, name: PITA.name, qty: 2 }];
+const cands = shortageCreditCandidates(PITA2, receipts, { anchorDate: '2026-09-05' });
 ok('נמצא מועמד אחד', cands.length === 1);
-ok('התאמה ברמת השורה', cands[0].kind === 'item');
-ok('המוצר הנכון', cands[0].items[0].productId === PITA.id && cands[0].items[0].qty === 2);
+ok('כמות מדויקת', cands[0].kind === 'item' && cands[0].partial === false);
+ok('המוצר והכמות', cands[0].items.length === 1 && cands[0].items[0].productId === PITA.id && cands[0].items[0].qty === 2);
 ok('התעודה הנכונה', cands[0].receiptId === 'receipt_0609');
-ok('מה שמשויך הוא הכסף שעל הנייר', cands[0].amountEx === CREDITED_EX);
-ok('החוב הפתוח מוצג לצידו', cands[0].remainingEx === SHORT_EX);
-ok('הפרש העיגול נאמר', cands[0].diffCents === 4);
-ok('עודף שאינו תואם לשום חוסר — אין מועמד', shortageCreditCandidates(50, receipts, { anchorDate: '2026-09-05' }).length === 0);
-ok('עודף אפס — אין מועמד', shortageCreditCandidates(0, receipts, { anchorDate: '2026-09-05' }).length === 0);
-ok('מחוץ לחלון התאריכים — אין מועמד', shortageCreditCandidates(CREDITED_EX, receipts, { anchorDate: '2026-06-01' }).length === 0);
-ok('חלון מפורש רחב מספיק כן מוצא', shortageCreditCandidates(CREDITED_EX, receipts, { anchorDate: '2026-06-01', windowDays: 200 }).length === 1);
-ok('תעודה בלי חוסר — אין מועמד', shortageCreditCandidates(CREDITED_EX, [makeReceipt({ items: [{ productId: LOAF.id, name: LOAF.name, qty: 30, unitPrice: LOAF.price, lineTotal: r2(LOAF.price * 30) }] })], { anchorDate: '2026-09-05' }).length === 0);
-ok('חוסר שכבר זוכה — אין מועמד', shortageCreditCandidates(CREDITED_EX, [rcCredited], { anchorDate: '2026-09-05' }).length === 0);
+ok('בלי סכום במועמד', !('amountEx' in cands[0]) && !('remainingEx' in cands[0]));
+ok('יחידה אחת מתוך שתיים — מועמד חלקי', shortageCreditCandidates([{ ...PITA2[0], qty: 1 }], receipts, { anchorDate: '2026-09-05' })[0].partial === true);
+ok('זיכוי על 3 כשחסרו 2 — משויכות רק 2', shortageCreditCandidates([{ ...PITA2[0], qty: 3 }], receipts, { anchorDate: '2026-09-05' })[0].items[0].qty === 2);
+ok('מוצר אחר — אין מועמד', shortageCreditCandidates([{ productId: BRIOCHE.id, name: BRIOCHE.name, qty: 2 }], receipts, { anchorDate: '2026-09-05' }).length === 0);
+ok('בלי כמות — אין מועמד', shortageCreditCandidates([{ ...PITA2[0], qty: 0 }], receipts, { anchorDate: '2026-09-05' }).length === 0);
+ok('מחוץ לחלון 14 הימים — אין מועמד', shortageCreditCandidates(PITA2, receipts, { anchorDate: '2026-08-20' }).length === 0);
+ok('חלון מפורש רחב מספיק כן מוצא', shortageCreditCandidates(PITA2, receipts, { anchorDate: '2026-06-01', windowDays: 200 }).length === 1);
+ok('חוסר שכבר זוכה ביחידות — אין מועמד', shortageCreditCandidates(PITA2, [rcUnits], { anchorDate: '2026-09-05' }).length === 0);
+ok('חוסר שזוכה בכסף לפני v123 — אין מועמד', shortageCreditCandidates(PITA2, [rcCredited], { anchorDate: '2026-09-05' }).length === 0);
+const near = makeReceipt({ id: 'near', date: '2026-09-06', docDate: '2026-09-06' });
+const far = makeReceipt({ id: 'far', date: '2026-09-15', docDate: '2026-09-15' });
+ok('הקרובה בתאריך קודם', shortageCreditCandidates(PITA2, [far, near], { anchorDate: '2026-09-05' }).map(c => c.receiptId).join() === 'near,far');
 ok('מרחק ימים נמדד נכון', ymdDayDiff('2026-09-06', '2026-09-05') === 1 && ymdDayDiff('2026-09-05', '2026-09-06') === -1);
 ok('תאריך לא תקין אינו מפיל', ymdDayDiff('', '2026-09-05') === null);
 
 head('[5] הכיוון ההפוך — מאיזו תעודת חזרות הגיע הזיכוי');
 const pending = makeReturn();
-const withSurplus = makeReturn({ id: 'returns_surplus', credited: true, creditNoteTotal: PAPER_EX });
-const exact = makeReturn({ id: 'returns_exact', credited: true, creditNoteTotal: RETURNED_EX });
-const srcs = returnsCreditSourcesForShortage(SHORT_EX, [exact, pending, withSurplus], { anchorDate: '2026-09-06', units: 2 });
-ok('שתי תעודות רלוונטיות', srcs.length === 2);
-ok('העודף המזוהה קודם', srcs[0].kind === 'surplus' && srcs[0].returnsId === 'returns_surplus');
-ok('העודף הוא ₪' + CREDITED_EX, srcs[0].surplusEx === CREDITED_EX);
-ok('תעודה שממתינה לאימות נכנסת אחריה', srcs[1].kind === 'pending' && srcs[1].returnsId === 'returns_0509');
-ok('תעודה שסוגרת בדיוק אינה מקור', !srcs.some(s => s.returnsId === 'returns_exact'));
-ok('חוב אפס — אין מקורות', returnsCreditSourcesForShortage(0, [withSurplus], { anchorDate: '2026-09-06', units: 2 }).length === 0);
-ok('מחוץ לחלון — אין מקורות', returnsCreditSourcesForShortage(SHORT_EX, [withSurplus], { anchorDate: '2026-12-01', units: 2 }).length === 0);
+const verified = makeReturn({ id: 'returns_verified', date: '2026-09-07', docDate: '2026-09-07', credited: true, creditNoteTotal: 70 });
+const old = makeReturn({ id: 'returns_old', date: '2026-08-01', docDate: '2026-08-01', credited: true });
+const srcs = returnsCreditSourcesForShortage(PITA2, [old, verified, pending], { anchorDate: '2026-09-06' });
+ok('שתי תעודות בחלון', srcs.length === 2 && !srcs.some(s => s.returnsId === 'returns_old'));
+ok('גם תעודה שממתינה לאימות וגם שאומתה', srcs.some(s => s.kind === 'pending') && srcs.some(s => s.kind === 'verified'));
+ok('כמה יחידות הוחזרו בה — בלי ₪', srcs[0].units === 8 && !('returnedEx' in srcs[0]) && !('surplusEx' in srcs[0]));
+ok('בלי יחידות שנבחרו — אין מקורות', returnsCreditSourcesForShortage([{ ...PITA2[0], qty: 0 }], [pending], { anchorDate: '2026-09-06' }).length === 0);
 
-head('[6] חשבון הכסף על תעודת החזרות');
-const notSplit = makeReturn({ credited: true, creditNoteTotal: PAPER_EX });
-ok('בלי שיוך — עודף של ₪' + CREDITED_EX, returnsCreditSurplus(notSplit) === CREDITED_EX);
-ok('הסכום שנחשב לחזרות הוא הנייר המלא', returnsCreditForReturns(notSplit) === PAPER_EX);
-
-const split = makeReturn({ credited: true, creditNoteTotal: PAPER_EX, creditNoteNumber: '290094052',
-  creditAllocations: [{ id: 'cs1|a|b|1', amount: CREDITED_EX, at: 1788700000000, receiptId: 'receipt_0609', receiptDate: '2026-09-06', items: [{ productId: PITA.id, name: PITA.name, qty: 2 }] }] });
-ok('ההקצאה נספרת', creditAllocatedEx(split) === CREDITED_EX);
-ok('מה שנשאר לחזרות הוא בדיוק מה שהוחזר', returnsCreditForReturns(split) === RETURNED_EX);
-ok('אין יותר עודף', returnsCreditSurplus(split) === 0);
-ok('הקצאה בסכום אפס אינה נספרת', creditAllocatedEx(makeReturn({ creditAllocations: [{ id: 'x', amount: 0 }] })) === 0);
-ok('תעודה בלי סכום נייר — אין מה להשוות', returnsCreditForReturns(makeReturn()) === null);
-
-// הבאג שהמנגנון בא למנוע: בלי שיוך, יתרת החזרות מדווחת חוב דמיוני לנצח
-returns = [notSplit];
-ok('בלי שיוך — יתרת חזרות שקרית של ₪' + CREDITED_EX, returnsBalance().bal === r2(-CREDITED_EX));
-returns = [split];
-ok('עם שיוך — היתרה מתאפסת', returnsBalance().bal === 0);
+head('[6] מאזן החזרות ביחידות');
+const shortRet = makeReturn({ id: 'r_short', credited: true, creditStatus: 'open', items: [{ ...RET_LINES[0], noteQty: 4 }, { ...RET_LINES[1] }] });
+const overRet = makeReturn({ id: 'r_over', credited: true, creditStatus: 'open', items: [{ ...RET_LINES[1], noteQty: 3 }] });
+returns = [shortRet, overRet, makeReturn({ id: 'r_ok', credited: true, creditStatus: 'ok' }), makeReturn({ id: 'r_pending' })];
+const bal = returnsBalance();
+ok('חוסר 2 יח׳ ועודף 1 יח׳ בשתי תעודות', bal.shortUnits === 2 && bal.overUnits === 1 && bal.openDocs === 2);
+ok('נספרות רק תעודות שאומתו', bal.n === 3);
+ok('בלי ₪', !('bal' in bal));
 returns = [];
 
-head('[7] שתי רשומות תאומות — והשורות של החזרות לא זזות');
-const rec = buildCreditSplitRecords(makeReturn(), makeReceipt(), CREDITED_EX,
-  { id: 'cs1|fixed', at: 1788700000000, noteNumber: ' 290094052 ', items: [{ productId: PITA.id, name: PITA.name, qty: 2 }] });
-ok('מזהה משותף לשני הצדדים', rec.allocation.id === 'cs1|fixed' && rec.shortNote.id === 'cs1|fixed');
-ok('אותו סכום בשני הצדדים', rec.allocation.amount === CREDITED_EX && rec.shortNote.amount === CREDITED_EX);
+head('[7] שתי רשומות תאומות — מוצר וכמות, והשורות של החזרות לא זזות');
+const rec = buildCreditSplitRecords(makeReturn(), makeReceipt(), PITA2,
+  { id: 'cs1|fixed', at: 1788700000000, noteNumber: ' 290094052 ' });
+ok('מזהה משותף לשני הצדדים', rec.allocation.id === 'cs1|fixed' && rec.units.every(u => u.id === 'cs1|fixed'));
+ok('בלי סכום בשני הצדדים', !('amount' in rec.allocation) && rec.units.every(u => !('amount' in u)));
+ok('ההקצאה נושאת מוצר וכמות', JSON.stringify(rec.allocation.items) === JSON.stringify([{ productId: PITA.id, name: PITA.name, qty: 2 }]));
 ok('צד החזרות מצביע על תעודת הקליטה', rec.allocation.receiptId === 'receipt_0609' && rec.allocation.receiptDate === '2026-09-06');
-ok('צד הקליטה מצביע על תעודת החזרות', rec.shortNote.fromReturnsId === 'returns_0509' && rec.shortNote.returnsDate === '2026-09-05');
-ok('מספר התעודה נשמר נקי בשני הצדדים', rec.allocation.noteNumber === '290094052' && rec.shortNote.noteNumber === '290094052');
-ok('בלי מספר תעודה — השדה לא נוצר', !('noteNumber' in buildCreditSplitRecords(makeReturn(), makeReceipt(), 5, { id: 'x' }).allocation));
-ok('הפריטים נשמרים לתיאור', rec.shortNote.items[0].productId === PITA.id && rec.shortNote.items[0].qty === 2);
+ok('צד הקליטה: רשומת יחידות שמצביעה על תעודת החזרות', rec.units.length === 1 && rec.units[0].productId === PITA.id && rec.units[0].qty === 2 &&
+  rec.units[0].fromReturnsId === 'returns_0509' && rec.units[0].returnsDate === '2026-09-05' && rec.units[0].source === 'returns-note');
+ok('מספר התעודה נשמר נקי בשני הצדדים', rec.allocation.noteNumber === '290094052' && rec.units[0].noteNumber === '290094052');
+ok('בלי מספר תעודה — השדה לא נוצר', !('noteNumber' in buildCreditSplitRecords(makeReturn(), makeReceipt(), PITA2, { id: 'x' }).allocation));
+ok('שורה בלי מוצר אינה נרשמת', buildCreditSplitRecords(makeReturn(), makeReceipt(), [{ name: 'x', qty: 2 }], { id: 'x' }).units.length === 0);
 // הכלל שבגללו לא פשוט מוסיפים שורה לתעודת החזרות
 const retAfter = makeReturn({ creditAllocations: [rec.allocation] });
 ok('פיתות הכוסמין אינן שורת חזרה', !(retAfter.items || []).some(l => l.productId === PITA.id));
-ok('הן נשארות חוסר בתעודת הקליטה', receiptDiscrepancyInfo(makeReceipt({ shortCreditNotes: [rec.shortNote] })).shortValRaw === SHORT_EX);
+ok('הקצאה ביחידות בלי סכום נספרת כקישור (חוסמת מחיקה ומיזוג)', creditAllocationList(retAfter).length === 1);
+ok('הקצאה ריקה אינה נספרת', creditAllocationList(makeReturn({ creditAllocations: [{ id: 'x', amount: 0, items: [] }] })).length === 0);
+ok('החוסר בתעודת הקליטה נסגר בתאום', receiptDiscrepancyInfo(makeReceipt({ shortCreditUnits: rec.units })).open === false);
 ok('כמות שהתקבלה נשארת אפס — לא תיספר כחזרה בניתוח', (makeReceipt().items.find(l => l.productId === PITA.id) || {}).qty === 0);
 ok('מזהה זוג נוצר עם שני הצדדים בתוכו', creditSplitPairIdHas());
 function creditSplitPairIdHas() { const s = api.creditSplitPairId('returns_0509', 'receipt_0609'); return s.indexOf('returns_0509') > -1 && s.indexOf('receipt_0609') > -1; }
+ok('תעודת חזרות חדשה (schemaVersion 2) אינה ממציאה סכום', returnTotals({ schemaVersion: 2, items: RET_LINES }).ex === 0);
 
 head('[8] החיווט — חלון שיושב מחוץ ל-#app וכפתורים מתים');
 // זה כבר קרה כאן פעמיים (ראה ההערות ליד shortCreditModal ו-retMergeModal):
 // האצלת ה-data-role קשורה ל-#app בלבד, ולכן חלון מחוצה לו חייב מאזין משלו.
 const appSrc = fs.readFileSync(APP_PATH, 'utf8');
-const emitted = [...new Set([...appSrc.matchAll(/data-role="(credit-split-[a-z-]+|credit-alloc-cancel|short-credit-from-returns)"/g)].map(m => m[1]))];
+const emitted = [...new Set([...appSrc.matchAll(/data-role="(credit-split-[a-z-]+|credit-alloc-cancel|short-credit-[a-z-]+|rc-short-credit-undo|rv-extra-[a-z]+)"/g)].map(m => m[1]))];
 ok('שלושת התפקידים של חלון הפיצול נפלטים', ['credit-split-pick', 'credit-split-none', 'credit-split-cancel'].every(r => emitted.includes(r)));
 ok('גם ביטול שיוך וגם הכיוון ההפוך נפלטים', emitted.includes('credit-alloc-cancel') && emitted.includes('short-credit-from-returns'));
+ok('בורר היחידות בחלון הזיכוי נפלט', emitted.includes('short-credit-minus') && emitted.includes('short-credit-plus'));
+ok('"זוכה גם על מוצר שלא הוחזר" נפלט', ['rv-extra-minus', 'rv-extra-plus', 'rv-extra-remove'].every(r => emitted.includes(r)) && appSrc.includes("addListRowHtml(p, 'rv-extra-add', q)") && /role === 'rv-extra-add'/.test(appSrc));
 emitted.forEach(role => ok('ל-' + role + ' יש מטפל בקוד', new RegExp("role === '" + role + "'").test(appSrc) || new RegExp('data-role="' + role + '"\\]').test(appSrc)));
 ok('לחלון הפיצול יש מאזין משלו', /\$\('creditSplitModal'\)\.addEventListener/.test(appSrc));
-['creditSplitModal', 'creditSplitSurplus', 'creditSplitReturned', 'creditSplitPaper', 'creditSplitList',
-  'creditSplitNoteNumber', 'shortCreditSources'].forEach(el => ok('קיים אלמנט ' + el, appSrc.includes('id="' + el + '"')));
+ok('לחלון הזיכוי יש מאזין משלו', /\$\('shortCreditModal'\)\.addEventListener/.test(appSrc));
+['creditSplitModal', 'creditSplitExtra', 'creditSplitList', 'creditSplitNoteNumber', 'shortCreditSources', 'shortCreditLines', 'shortCreditNoteNumber']
+  .forEach(el => ok('קיים אלמנט ' + el, appSrc.includes('id="' + el + '"')));
+['creditSplitSurplus', 'creditSplitReturned', 'creditSplitPaper', 'shortCreditAmount']
+  .forEach(el => ok('האלמנט הכספי ' + el + ' ירד — וגם כל התייחסות אליו', !appSrc.includes(el)));
+ok('אין יותר הצעת "השלמת זיכוי אפשרית" לפי סכום', !appSrc.includes('credit-split-open'));
 
 console.log('\n' + (fail ? '✗ נכשלו ' + fail + ' מתוך ' + (pass + fail) : '✓ הכל עבר (' + pass + '/' + pass + ')'));
 process.exit(fail ? 1 : 0);
