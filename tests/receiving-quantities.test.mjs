@@ -171,3 +171,46 @@ test('מסלול הצילום: ספירה שתואמת לנייר נסגרת ב�
     assert.equal(r.requests.length, 1, 'בלי קריאה נוספת לשרת הסריקה');
   });
 });
+
+// v122: "נטו לחיוב" הוא רשות — שני העוגנים (סה"כ כללי, סה"כ שורות) מספיקים
+// לפתיחה מהעורך, לסיום ולשמירה. הסכום, אם הוקלד, נשמר לזיהוי בלבד.
+test('v122: בלי "נטו לחיוב" — פתיחה, סיום ושמירה עם שני העוגנים בלבד', async () => {
+  const r = runtime();
+  r.run(`receiptEntryMode = 'manual'; receiptOpened = false; receiptDocDate = '2026-09-09'; openReceivingScanner = () => {};
+    globalThis.toasts = []; showToast = t => toasts.push(t); currentView = 'receiving'; mainMode = 'receiving'; renderReceiving();`);
+  assert.match(r.node('app').innerHTML, /שני העוגנים/);
+  // רק שורות — חסר "סה"כ כללי": נעצר
+  r.node('rcNoteLines').value = '5';
+  r.click('rc-open');
+  assert.equal(r.run('receiptOpened'), false);
+  assert.match(r.run('toasts.at(-1)'), /סה״כ כללי/);
+  // יחידות ושורות, בלי סכום: נפתח
+  r.node('rcNoteUnits').value = '29';
+  r.click('rc-open');
+  assert.equal(r.run('receiptOpened'), true);
+  assert.deepEqual(json(r, 'receiptNotes'), [{ amount: 0, units: 29, lines: 5, kind: 'charge' }]);
+  assert.deepEqual(json(r, '[receiptNoteUnits, receiptNoteLines, receiptNoteTotal]'), [29, 5, 0]);
+  r.context.testItems = fixture().items;
+  r.run('receiptList = structuredClone(testItems); saveReceiptDraft(); renderReceiving();');
+  assert.match(r.node('app').innerHTML, /29 יח׳ · 5 שורות/);
+  assert.ok(!/₪0\.00/.test(r.node('app').innerHTML), 'סכום שלא הוקלד אינו מוצג כאפס');
+  r.run('finishReceipt()');
+  assert.ok(r.run('pendingReceipt && pendingReceipt.status === "ok"'), JSON.stringify(json(r, 'toasts')));
+  assert.ok(!/סכום מודפס בתעודה/.test(r.node('rsBody').innerHTML));
+  await r.run('confirmReceipt()');
+  const saved = savedReceipt(r);
+  assert.equal(saved.status, 'ok');
+  assert.equal(saved.noteTotalInc, null, 'בלי סכום — אין מה לשמור לזיהוי');
+  assert.deepEqual(saved.noteParts, [{ amount: 0, units: 29, lines: 5, kind: 'charge' }]);
+  // סכום שאינו מספר נעצר; סכום תקין נשמר לזיהוי בלבד
+  const s = runtime();
+  s.run(`receiptEntryMode = 'manual'; receiptOpened = false; openReceivingScanner = () => {}; globalThis.toasts = []; showToast = t => toasts.push(t);
+    currentView = 'receiving'; mainMode = 'receiving'; renderReceiving();`);
+  s.node('rcNoteUnits').value = '29'; s.node('rcNoteLines').value = '5'; s.node('rcNoteInput').value = 'abc';
+  s.click('rc-open');
+  assert.equal(s.run('receiptOpened'), false);
+  assert.match(s.run('toasts.at(-1)'), /לזיהוי בלבד/);
+  s.node('rcNoteInput').value = '219.92';
+  s.click('rc-open');
+  assert.deepEqual(json(s, 'receiptNotes'), [{ amount: 219.92, units: 29, lines: 5, kind: 'charge' }]);
+});
