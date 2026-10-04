@@ -189,12 +189,13 @@ const mq = rangeProductMatrixData(dq);
 const q3604 = mq.list.find(r => r.code === '3604'), q101 = mq.list.find(r => r.code === '101');
 ok('פרנה: חויב 2, נספר 0, זוכה 1', q3604.billed === 2 && q3604.received === 0 && q3604.credited === 1);
 ok('פרנה: צפוי בחשבונית 1, מגיע 0, חוסר 1 שטרם זוכה', q3604.expectedQty === 1 && q3604.fairQty === 0 && q3604.openUnits === 1);
-ok('פרנה: הכסף במחיר הלקוח (9.03) על מה שצפוי בחשבונית', r2(q3604.amount) === 9.03 && r2(q3604.fair) === 0);
+const u3604 = invoiceUnit(P3604, '2026-09-29');
+ok('פרנה: הכסף במחיר הלקוח על מה שצפוי בחשבונית', r2(q3604.amount) === r2(u3604) && r2(q3604.fair) === 0);
 ok('101: חויב 18, נספר 17, זיכוי חוסר באגורות חסרות = יחידה מלאה', q101.billed === 18 && q101.received === 17 && q101.credited === 1 + 1 + 1);
 ok('101: נשלח 6 (4 שטרם אומתו + 2), לא כולל השורה שהועברה', q101.sent === 6);
 ok('101: צפוי בחשבונית 18−3=15, מגיע 17−6=11 — 4 יחידות שהוחזרו וטרם זוכו', q101.expectedQty === 15 && q101.fairQty === 11 && q101.openUnits === 4);
 ok('101: הסכום הצפוי לפי מחיר הלקוח', Math.abs(q101.amount - 15 * priceAt(P.b101, '2026-09-29')) < 0.011);
-ok('סך החוסרים שטרם זוכו', mq.openUnits === 5 && Math.abs(mq.total - mq.fairTotal - (9.03 + 4 * priceAt(P.b101, '2026-09-29'))) < 0.02);
+ok('סך החוסרים שטרם זוכו', mq.openUnits === 5 && Math.abs(mq.total - mq.fairTotal - (u3604 + 4 * priceAt(P.b101, '2026-09-29'))) < 0.02);
 ok('כולל מע״מ 18% על הצפוי', Math.abs(mq.totalInc - mq.total * 1.18) < 0.02);
 delete P.b101.priceHistory;
 
