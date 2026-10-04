@@ -3182,7 +3182,12 @@ function creditLineSameProduct(w, s) {
   if (a && b) return a === b;
   const ca = String((w && w.code) || ''), cb = String((s && s.code) || '');
   if (ca && cb) return ca === cb;
-  if (w && s && w.barcode && s.barcode) return String(w.barcode) === String(s.barcode);
+  if (w && s && w.barcode && s.barcode && String(w.barcode) === String(s.barcode)) {
+    // אותו ברקוד: מספיק כשהשמות זהים, או כשהברקוד שייך למוצר אחד בלבד במאגר
+    if (!w.name || !s.name || w.name === s.name) return true;
+    return (products || []).filter(p => p && String(p.barcode || '') === String(w.barcode)).length <= 1;
+  }
+  if (w && s && w.barcode && s.barcode) return false;
   return !!(w && s && w.name) && w.name === s.name;
 }
 function creditAllocationList(r) {
@@ -3216,7 +3221,9 @@ function returnsBalanceBannerHtml() {
 function retCarryPlan(r) {
   if (!r || !r.credited) return null;
   const di = returnsDiscrepancyInfo(r);
-  const items = (di.shortItems || []).map(x => ({ productId: x.productId || '', code: x.code || '', name: x.name || '', barcode: x.barcode || '', qty: Number(x.n) || 0 }));
+  // קוד הפריט נלקח מהקטלוג כשהשורה עצמה לא שמרה אותו — השורה המועברת תזוהה לפיו (ברקוד יכול להיות משותף)
+  const codeOf = x => { if (x.code) return String(x.code); const p = x.productId && products.find(q => q && q.id === x.productId); return String((p && p.code) || ''); };
+  const items = (di.shortItems || []).map(x => ({ productId: x.productId || '', code: codeOf(x), name: x.name || '', barcode: x.barcode || '', qty: Number(x.n) || 0 }));
   if (!items.length) return null;
   return { items, units: items.reduce((a, x) => a + x.qty, 0) };
 }
@@ -3258,6 +3265,14 @@ async function saveReturnCarry(id, plan) {
   refreshAfterReturnCarry();
   showToast('הפריטים חזרו לרשימת החזרות ✓', null, null, 3000);
 }
+// מוריד מרשימת החזרות הפתוחה את השורות שהועברו מתעודה — במקום, בלי להחליף את המערך
+// (returnsList הוא אותו מערך שיושב ב-returnsSlots)
+function dropCarriedRowsFrom(id) {
+  let removed = 0;
+  for (let i = returnsList.length - 1; i >= 0; i--) if (returnsList[i] && returnsList[i].carriedFrom === id) { returnsList.splice(i, 1); removed++; }
+  if (removed) saveReturnsDraft();
+  return removed;
+}
 async function undoReturnCarry(id, opts) {
   opts = opts || {};
   const r = returns.find(x => x.id === id); if (!r) return false;
@@ -3265,10 +3280,7 @@ async function undoReturnCarry(id, opts) {
   const saved = await runCloudTask('undo carry credit gap', { op: 'update', path: dataPath('returns', id), data: { carriedNotes: [] }, operationId: makeOperationId('carry_gap_undo') });
   if (!saved) return false;
   r.carriedNotes = [];
-  // מחיקה במקום, בלי להחליף את המערך — returnsList הוא אותו מערך שיושב ב-returnsSlots
-  let removed = 0;
-  for (let i = returnsList.length - 1; i >= 0; i--) if (returnsList[i] && returnsList[i].carriedFrom === id) { returnsList.splice(i, 1); removed++; }
-  if (removed) saveReturnsDraft();
+  dropCarriedRowsFrom(id);
   if (opts.silent) return true;
   buzz(8);
   refreshAfterReturnCarry();
@@ -3676,7 +3688,7 @@ function rvExtraHtml() {
     '<div class="font-black text-slate-700 text-sm mb-1"><i class="fa-solid fa-plus text-emerald-600"></i> זוכה גם על מוצר שלא הוחזר?</div>' +
     '<div class="text-[11px] text-slate-400 font-bold mb-2">למשל חוסר מקליטה שהספק סגר באותה תעודת זיכוי. אחרי השמירה נחפש לו חוסר פתוח באותו מוצר.</div>' +
     (((returnVerify && returnVerify.allocated) || []).length ? '<div class="bg-indigo-50 border border-indigo-200 rounded-xl p-2 mb-2 text-[11px] font-bold text-indigo-800"><div class="font-black mb-0.5">כבר שויך מהתעודה הזאת:</div>' +
-      returnVerify.allocated.map(a => '<div>' + htmlEscape(a.name) + ' × ' + a.qty + ' · ' + htmlEscape(a.target) + '</div>').join('') + '<div class="mt-0.5 text-indigo-700/80">אל תוסיף אותם שוב — רק מה שזוכה מעבר לזה.</div></div>' : '') +
+      returnVerify.allocated.map(a => '<div>' + htmlEscape(a.name) + ' × ' + a.qty + ' · ' + htmlEscape(a.target) + '</div>').join('') + '<div class="mt-0.5 text-indigo-700/80">הזן למטה את <b>כל</b> מה שזוכה בתעודה בלי שהוחזר, כולל אלה — מה שכבר שויך יורד מעצמו, ורק היתרה תוצע לשיוך.</div></div>' : '') +
     list.map((x, i) => '<div class="flex items-center justify-between gap-2 py-1.5 border-b border-slate-100 last:border-0"><div class="min-w-0 font-bold text-sm text-slate-700 truncate">' + htmlEscape(x.name) + '</div><div class="flex items-center gap-1 shrink-0">' +
       '<button data-role="rv-extra-minus" data-id="' + i + '" aria-label="הפחת" class="btn-tap w-11 h-11 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center"><i class="fa-solid fa-minus text-xs"></i></button>' +
       '<span class="w-8 text-center font-black text-slate-800">' + (Number(x.qty) || 0) + '</span>' +
@@ -3721,13 +3733,14 @@ async function markReturnVerified(id, noteTotal, signature) {
   const data = { credited: true, creditedAt: at, creditStatus: 'ok' };
   if (noteTotal != null) data.creditNoteTotal = noteTotal;
   if ((r.items || []).some(l => l && l.noteQty != null)) data.items = (r.items || []).map(l => { const c = { ...l }; delete c.noteQty; return c; });
+  if (returnCarriedNotes(r).length) data.carriedNotes = [];
   const saved = await runCloudTask('mark return verified', { op: 'return-approve', returnsId: id, signature: signature || returnItemsSignature(r),
     noteTotal: noteTotal == null ? null : noteTotal, at, data, operationId: makeOperationId('return_verified') });
   if (!saved) return false;
   Object.assign(r, data);
   buzz(18);
-  // v78: הספק זיכה הכל — פריטים שהועברו מהתעודה הזאת לרשימה יורדים ממנה
-  const undone = await undoReturnCarry(id, { silent: true });
+  // v78: הספק זיכה הכל — פריטים שהועברו מהתעודה הזאת לרשימה יורדים ממנה (הרישום נמחק באותה כתיבה)
+  const undone = dropCarriedRowsFrom(id) > 0;
   if (currentView === 'receiptsHistory') renderReceiptsHistory();
   if (undone) updateCart();
   showToast(undone ? 'הזיכוי אושר ✓ הפריטים ירדו מרשימת החזרות' : 'הזיכוי אושר — כל היחידות זוכו ✓', null, null, undone ? 3200 : 2200);
@@ -3781,13 +3794,14 @@ async function saveReturnVerify(opts) {
   if (!saved) return;
   const r = returns.find(x => x.id === id);
   if (r) Object.assign(r, updateData);
-  // v78: אימות מחודש שסוגר את הפער מבטל גם החזרה קודמת לרשימת החזרות
-  const undone = !open ? await undoReturnCarry(id, { silent: true }) : false;
+  // v78: אימות מחודש שסוגר את החוסר מבטל גם החזרה קודמת לרשימת החזרות (זיכוי ביתר אינו חוסר)
+  const stillShort = outItems.some(l => !rvIsDepositLine(l) && l.noteQty != null && Number(l.noteQty) < Number(l.qty));
+  const undone = !stillShort ? await undoReturnCarry(id, { silent: true }) : false;
   returnVerify = null;
   setView('receiptsHistory');
   if (undone) updateCart();
   // v123: מוצר שזוכה בלי שהוחזר — מחפשים לו חוסר פתוח באותו מוצר
-  if (extraAll.length && !extra.length) { showToast('הזיכוי נשמר. מה שזוכה בלי שהוחזר כבר משויך מהתעודה הזאת ✓', null, null, 3400); return; }
+  if (extraAll.length && !extra.length) { showToast('הזיכוי נשמר. כל מה שהזנת כ"זוכה בלי שהוחזר" כבר משויך מהתעודה הזאת — לא נותר מה לקשר', null, null, 4200); return; }
   if (extra.length) {
     if (openCreditSplitPrompt(id, extra)) { showToast('זוכה גם על מוצר שלא הוחזר — לאיזה חוסר הוא שייך?', null, null, 3400); return; }
     showToast('הזיכוי נשמר. לא נמצא חוסר פתוח (14 יום) במוצר שזוכה בלי שהוחזר — לא נרשם קישור', null, null, 4200);
@@ -3865,8 +3879,8 @@ function retEditConvertPack(idx) {
   // שורות המארז מחליפות את שורת הבודדים. בתעודה שאומתה מגיעים לכאן רק כשהשורה זוכתה
   // במלואה (retEditPackInfo) — אז גם המארזים זוכו; הפיצול רק מתקן את הרישום לפי הנייר.
   const fully = !!returnEdit.wasCredited;
-  const out = [{ key: 'p' + Date.now(), productId: info.pack.id, code: productCode(info.pack), name: info.pack.name, barcode: info.pack.barcode || '', qty: info.n, noteQty: null, origQty: 0, isNew: true, fullyCredited: fully }];
-  if (info.remainder > 0) out.push({ key: 's' + Date.now(), productId: info.single.id, code: productCode(info.single), name: info.single.name, barcode: info.single.barcode || '', qty: info.remainder, noteQty: null, origQty: 0, isNew: true, fullyCredited: fully });
+  const out = [{ key: 'p' + Date.now(), productId: info.pack.id, code: productCode(info.pack), name: info.pack.name, barcode: info.pack.barcode || '', qty: info.n, noteQty: null, origQty: 0, isNew: true, creditedQty: fully ? info.n : 0 }];
+  if (info.remainder > 0) out.push({ key: 's' + Date.now(), productId: info.single.id, code: productCode(info.single), name: info.single.name, barcode: info.single.barcode || '', qty: info.remainder, noteQty: null, origQty: 0, isNew: true, creditedQty: fully ? info.remainder : 0 });
   returnEdit.items.splice(idx, 1);
   out.forEach((x, k) => returnEdit.items.splice(idx + k, 0, x));
   buzz(30);
@@ -3879,7 +3893,8 @@ function retEditSetNameLive(idx, v) { const l = ((returnEdit && returnEdit.items
 // v123: כמה זוכה על שורה בעורך — לפי מה שנשמר, לא לפי מה שנערך עכשיו
 function retEditCreditedOf(l) {
   if (!l) return 0;
-  if (l.isNew) return l.fullyCredited ? (Number(l.qty) || 0) : 0;
+  if (l.creditedQty != null) return Number(l.creditedQty) || 0; // שורה מפיצול מארז — נקבע ברגע הפיצול
+  if (l.isNew) return 0;
   return l.origNoteQty != null ? Number(l.origNoteQty) : (Number(l.origQty) || 0);
 }
 function retEditRemove(idx) {
@@ -3887,7 +3902,7 @@ function retEditRemove(idx) {
   const l = returnEdit.items[idx]; if (!l) return;
   // בתעודה שאומתה, שורה שזוכתה אינה נעלמת עם הזיכוי שלה: היא נשארת בכמות 0, והזיכוי
   // עליה יופיע כזיכוי ביתר
-  if (returnEdit.wasCredited && !l.isDeposit && !l.isNew && retEditCreditedOf(l) > 0) { l.qty = 0; showToast('השורה זוכתה — היא נשארת בכמות 0 והזיכוי עליה יופיע כזיכוי ביתר', null, null, 3400); }
+  if (returnEdit.wasCredited && !l.isDeposit && retEditCreditedOf(l) > 0) { l.qty = 0; showToast('השורה זוכתה — היא נשארת בכמות 0 והזיכוי עליה יופיע כזיכוי ביתר', null, null, 3400); }
   else returnEdit.items.splice(idx, 1);
   if (returnEdit.replaceIdx === idx) returnEdit.replaceIdx = -1;
   buzz(10); renderReturnItemsEdit();
@@ -4001,7 +4016,7 @@ async function saveReturnItemsEdit(opts) {
   const wasCredited = !!returnEdit.wasCredited;
   const src = (returnEdit.items || []);
   // v123: בתעודה שאומתה, שורה שזוכתה ונשארה בכמות 0 נשמרת (הזיכוי עליה = זיכוי ביתר)
-  const keepZero = l => wasCredited && !l.isDeposit && !l.isNew && (l.name || '').trim() && !((Number(l.qty) || 0) > 0) && retEditCreditedOf(l) > 0;
+  const keepZero = l => wasCredited && !l.isDeposit && (l.name || '').trim() && !((Number(l.qty) || 0) > 0) && retEditCreditedOf(l) > 0;
   const live = l => (Number(l.qty) || 0) > 0 && (l.name || '').trim();
   const dropped = src.filter(l => !live(l) && !keepZero(l)).length;
   const zeroKept = src.filter(keepZero).length;
@@ -4015,7 +4030,7 @@ async function saveReturnItemsEdit(opts) {
   }
   const outItems = items.map(l => {
     const line = { ...l };
-    ['key', 'origQty', 'origNoteQty', 'origProductId', 'origBarcode', 'isNew', 'fullyCredited', 'noteQty'].forEach(k => delete line[k]);
+    ['key', 'origQty', 'origNoteQty', 'origProductId', 'origBarcode', 'isNew', 'creditedQty', 'noteQty'].forEach(k => delete line[k]);
     line.name = (l.name || '').trim(); line.barcode = l.barcode || ''; line.qty = Number(l.qty) || 0;
     if (!line.productId) delete line.productId;
     if (!line.code) delete line.code;
@@ -4044,8 +4059,10 @@ async function saveReturnItemsEdit(opts) {
   const id = returnEdit.id, origin = returnEdit.origin;
   returnEdit = null;
   buzz(18);
-  // v78: עריכה שסגרה את הפער מבטלת גם החזרה קודמת לרשימת החזרות (כמו אימות שסוגר אותו)
-  const undone = (r && r.credited && !open) ? await undoReturnCarry(id, { silent: true }) : false;
+  // v78: עריכה שסגרה את החוסר מבטלת גם החזרה קודמת לרשימת החזרות (כמו אימות שסוגר אותו).
+  // זיכוי ביתר שנשאר אינו חוסר — ההעברה כבר לא תביעה פתוחה
+  const stillShort = outItems.some(l => !l.isDeposit && l.noteQty != null && Number(l.noteQty) < Number(l.qty));
+  const undone = (r && r.credited && !stillShort) ? await undoReturnCarry(id, { silent: true }) : false;
   setView(origin);
   if (undone) updateCart();
   showToast((r && r.credited && open) ? 'הפריטים עודכנו — נותר פער בזיכוי' : (undone ? 'הפריטים עודכנו ✓ הפריטים שהועברו ירדו מרשימת החזרות' : 'הפריטים עודכנו ✓'), null, null, 2800);
@@ -4294,7 +4311,7 @@ function openReturnDateEdit(r) {
 }
 function openReturnsResend(r) {
   // שליחה חוזרת: אותה הודעה — עם קוד הפריט, ובלי לספור פיקדון בסיכום
-  const items = (r.items || []).map(i => {
+  const items = (r.items || []).filter(i => (Number(i && i.qty) || 0) > 0).map(i => {
     const line = { name: i.name, barcode: i.barcode || '', qty: i.qty };
     if (i.code) line.code = i.code;
     if (i.isDeposit) line.isDeposit = true;
@@ -14544,7 +14561,7 @@ function returnCardInReceipts(r) {
       : '<i class="fa-solid fa-circle-check"></i> אומתה' + (r.creditedAt ? ' · ' + new Date(r.creditedAt).toLocaleDateString('he-IL') : ''));
   // v123: התעודה ביחידות — כמה הוחזר בכל שורה, וכמה זוכה כשזה שונה
   const isDep = l => !!(l && (l.isDeposit || String(l.productId || '').indexOf('deposit-') === 0));
-  const live = (r.items || []).filter(l => !isDep(l));
+  const live = (r.items || []).filter(l => !isDep(l) && (Number(l.qty) || 0) > 0);
   const units = live.reduce((a, l) => a + (Number(l.qty) || 0), 0);
   const rows = (r.items || []).map(it => {
     const dep = isDep(it);
@@ -14730,7 +14747,7 @@ function receiptCreditedShortUnits(rc, day) {
   (rc && rc.items || []).forEach(l => {
     if (!l || l.isDeposit || l.noteQty == null) return;
     const short = (Number(l.noteQty) || 0) - (Number(l.qty) || 0);
-    if (short > 0) lines.push({ l, left: short });
+    if (short > 0) lines.push({ l, left: short, orig: short });
   });
   (Array.isArray(rc && rc.shortCreditUnits) ? rc.shortCreditUnits : []).forEach(x => {
     if (!x || !x.productId || !(Number(x.qty) > 0)) return;
@@ -14751,7 +14768,8 @@ function receiptCreditedShortUnits(rc, day) {
     const p = (l.productId && products.find(x => x.id === l.productId)) || null;
     const unit = Number(l.unitPrice) || priceAt(p, day) || 0;
     if (!(unit > 0)) return;
-    const covered = Math.min(s.left, Math.floor((money + 0.05 * s.left) / unit + 1e-9));
+    // הסיבולת לפי החוסר המקורי של השורה — הכסף קדם לזיכוי ביחידות
+    const covered = Math.min(s.left, Math.floor((money + 0.05 * s.orig) / unit + 1e-9));
     if (covered > 0) { out[l.productId] = (out[l.productId] || 0) + covered; money -= covered * unit; }
   });
   return out;
@@ -14835,12 +14853,15 @@ function rangeProductMatrixData(d) {
     // v123: תעודת הזיכוי הזאת זיכתה גם חוסר בזיכוי של תעודת חזרות קודמת (קישור v87).
     // היחידות זוכו על הנייר הזה — נספרות כאן, ביום שלו; בתעודה הקודמת השורה נשארה "לא זוכה".
     if (!credited) return;
+    // קישור ישן (v87, עם סכום) לא נספר כאן — כך היה לפני v123, ושורות שלו אינן נושאות זהות
+    // מוצר (רק שם וברקוד), ולכן היו נרשמות על מוצר אחר או פעמיים.
     (Array.isArray(rt.creditAllocations) ? rt.creditAllocations : []).forEach(al => {
-      if (!al || al.targetType !== 'return') return;
+      if (!al || al.targetType !== 'return' || (Number(al.amount) || 0) > 0) return;
       (al.items || []).forEach(it => {
-        const q = Number(it && it.qty) || 0; if (!(q > 0)) return;
+        const q = Number(it && it.qty) || 0; if (!(q > 0) || isDepositLine(it)) return;
         const row = rowFor(it);
         const pu = unitFor(row, it, day);
+        if (!row.product && !(pu.unit > 0)) row.unpriced = true;
         const c = cell(row, day); c.r += q; c.amt -= pu.unit * q;
         row.credited += q; row.amount -= pu.unit * q; row.inc -= pu.unit * q * vat;
         row.creditedEx += pu.unit * q; row.rebate -= pu.rebate * q;
@@ -15141,7 +15162,10 @@ function receiptDiscrepancyInfo(rc, opts) {
   // ולעולם אינו מסתיר חוסר/עודף אחר שנשאר באותה תעודה.
   const externalOffsets = opts.skipExternal ? [] : consumeStoredReceiptOffsets(rc, shortItems, overItems);
   // v123: חוסר שזוכה ביחידות (shortCreditUnits) — זיכוי חוסר שסומן ביחידות, או
-  // קישור לתעודת חזרות. הרישום הזה קודם לכלל הכספי הישן שלמטה.
+  // קישור לתעודת חזרות. החוסר לפני היחידות נשמר על השורה (n0): הזיכוי הכספי הישן
+  // שלמטה קודם להן בזמן, והסיבולת שלו נמדדת על החוסר כפי שהיה.
+  shortItems.forEach(it => { it.n0 = Number(it.n) || 0; });
+  const shortUnitsBeforeUnitCredit = shortItems.reduce((a, x) => a + (Number(x.n0) || 0), 0);
   const creditedUnits = [];
   (Array.isArray(rc && rc.shortCreditUnits) ? rc.shortCreditUnits : []).forEach(x => {
     if (!x || !x.productId || !(Number(x.qty) > 0)) return;
@@ -15177,7 +15201,7 @@ function receiptDiscrepancyInfo(rc, opts) {
   const shortValRaw = r2(shortVal);
   const shortUnitsLeft = (finalShort || []).reduce((a, x) => a + (Number(x.n) || 0), 0);
   const shortCreditGapCents = Math.max(0, Math.round(shortValRaw * 100) - Math.round(shortCreditEx * 100));
-  const shortFullyCredited = finalShort.length > 0 && (shortCreditFullyCovers(shortValRaw, shortCreditEx, shortUnitsLeft));
+  const shortFullyCredited = finalShort.length > 0 && (shortCreditFullyCovers(shortValRaw, shortCreditEx, creditedUnits.length ? (shortUnitsBeforeUnitCredit || shortUnitsLeft) : shortUnitsLeft));
   if (shortFullyCredited) shortVal = 0;
   else if (shortCreditEx > 0) shortVal = Math.max(0, r2(shortVal - shortCreditEx));
   // ממצאי כמות של הסריקה נשמרים בהיסטוריה; הם אינם פותחים תעודה בעצמם —
@@ -15218,12 +15242,16 @@ function receiptOpenShortUnits(rc, di) {
   let money = Number(di.shortCreditEx) || 0;
   (di.shortItems || []).forEach(x => {
     let n = Number(x.n) || 0;
-    const price = Number(x.price) || 0;
-    if (money > 0 && price > 0 && n > 0) { const covered = Math.min(n, Math.floor((money + 0.05 * n) / price + 1e-9)); n -= covered; money -= covered * price; }
+    const price = Number(x.price) || 0, n0 = Number(x.n0) || n;
+    if (money > 0 && price > 0 && n > 0) { const covered = Math.min(n, Math.floor((money + 0.05 * n0) / price + 1e-9)); n -= covered; money -= covered * price; }
     if (n > 0 && x.productId) out[x.productId] = (out[x.productId] || 0) + n;
   });
+  // התעודה פתוחה (הזיכוי הכספי לא סגר אותה בכלל הכללי) אבל הכלל לפי שורה מכסה הכל:
+  // מציעים את מה שנשאר בשורות — אחרת אין דרך לסגור אותה
+  if (!Object.keys(out).length) (di.shortItems || []).forEach(x => { const n = Number(x.n) || 0; if (n > 0 && x.productId) out[x.productId] = (out[x.productId] || 0) + n; });
   return out;
 }
+function receiptOpenShortTotal(rc, di) { const o = receiptOpenShortUnits(rc, di); return Object.keys(o).reduce((a, k) => a + o[k], 0); }
 // v123: למי שייך מוצר שזוכה בתעודת הזיכוי בלי שהוחזר — חוסר פתוח באותו מוצר
 // בתעודת קליטה, בחלון של 14 יום. כמות מדויקת קודם, אחר כך חלקית, ואז הקרובה
 // בתאריך. לא מנחשים: בלי חוסר פתוח באותו מוצר אין מועמד.
@@ -15695,7 +15723,7 @@ async function confirmShortCredit() {
   buzz(18);
   const after = receiptDiscrepancyInfo(rc);
   const n = picked.reduce((a, x) => a + x.qty, 0);
-  showToast(!(after.shortItems || []).length ? 'החוסר נסגר בזיכוי ✓' : 'נרשם זיכוי על ' + n + ' יח׳ — נותרו ' + after.shortUnits + ' יח׳ חסרות', null, null, 3200);
+  showToast(!after.open || !receiptOpenShortTotal(rc, after) ? 'החוסר נסגר בזיכוי ✓' : 'נרשם זיכוי על ' + n + ' יח׳ — נותרו ' + receiptOpenShortTotal(rc, after) + ' יח׳ חסרות', null, null, 3200);
   if (currentView === 'receiptsHistory') renderReceiptsHistory();
 }
 // ביטול זיכוי חוסר שסומן ביחידות מכרטיס הקליטה (קישור לתעודת חזרות מבוטל מהצד שלה)
@@ -15972,15 +16000,25 @@ async function executeReturnApproveTask(task) {
   const out = await runTransaction(db, async tx => {
     const snap = await tx.get(ref);
     const fresh = snap.exists() ? { ...snap.data(), id: task.returnsId } : null;
-    if (!fresh || fresh.credited || returnItemsSignature(fresh) !== task.signature) throw staleReturnApprove();
+    if (!fresh || returnItemsSignature(fresh) !== task.signature) throw staleReturnApprove();
+    // כבר מאושרת בדיוק כך (תשובת שרת שאבדה וניסיון חוזר, או הקשה כפולה בלי רשת) — הצלחה בלי כתיבה
+    if (fresh.credited) {
+      const same = fresh.creditStatus === 'ok' && !(fresh.items || []).some(l => l && l.noteQty != null);
+      if (!same) throw staleReturnApprove();
+      if (returnCarriedNotes(fresh).length) tx.update(ref, { carriedNotes: [] });
+      return { credited: true, creditedAt: fresh.creditedAt || task.at, creditStatus: 'ok', carriedNotes: [] };
+    }
     const data = { credited: true, creditedAt: task.at, creditStatus: 'ok' };
     if (task.noteTotal != null) data.creditNoteTotal = task.noteTotal;
     if ((fresh.items || []).some(l => l && l.noteQty != null)) data.items = (fresh.items || []).map(l => { const c = { ...l }; delete c.noteQty; return c; });
+    // הספק זיכה הכל — רישום העברה קודם (v78) כבר לא תביעה פתוחה
+    if (returnCarriedNotes(fresh).length) data.carriedNotes = [];
     tx.update(ref, data);
     return data;
   });
   const local = returns.find(x => x.id === task.returnsId);
   if (local) Object.assign(local, out);
+  if (dropCarriedRowsFrom(task.returnsId) && typeof updateCart === 'function') updateCart();
 }
 function staleReturnCreditLink() {
   const error = new Error('התעודות השתנו מאז ההצעה. בדוק את התעודות ובחר את השיוך מחדש.');
@@ -16172,9 +16210,9 @@ async function shortCreditFromReturns(receiptId, returnsId) {
   buzz(24);
   const after = receiptDiscrepancyInfo(rc);
   const n = picked.reduce((a, x) => a + x.qty, 0);
-  showToast(!(after.shortItems || []).length
+  showToast(!after.open || !receiptOpenShortTotal(rc, after)
     ? 'החוסר נסגר מתוך תעודת החזרות של ' + dDisp(rt.docDate || rt.date || '') + ' ✓'
-    : 'נרשם זיכוי על ' + n + ' יח׳ מתעודת החזרות — נותרו ' + after.shortUnits + ' יח׳ חסרות', null, null, 3600);
+    : 'נרשם זיכוי על ' + n + ' יח׳ מתעודת החזרות — נותרו ' + receiptOpenShortTotal(rc, after) + ' יח׳ חסרות', null, null, 3600);
   if (currentView === 'receiptsHistory') renderReceiptsHistory();
 }
 function renderReceiptsHistory() {
@@ -16323,7 +16361,7 @@ function renderReceiptsHistory() {
           const balanceLine = (di.overUnits || 0) > 0
             ? '<div class="mt-2 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-black text-slate-700"><i class="fa-solid fa-scale-balanced"></i> חוסר ' + di.shortUnits + ' יח׳ · עודף ' + di.overUnits + ' יח׳ — עודף אינו מקזז חוסר בלי אישור</div>'
             : '';
-          const creditLabel = 'התקבל בזיכוי (' + di.shortUnits + ' יח׳)';
+          const creditLabel = 'התקבל בזיכוי (' + receiptOpenShortTotal(rc, di) + ' יח׳)';
           // v59: שתי דרכים לסגור חוסר, ותוצאה כספית הפוכה לכל אחת. הכפתורים
           // זה לצד זה עם הסבר קצר, כדי שלא ילחצו על הלא נכון.
           const creditBtn = '<button data-role="rc-short-credit" data-id="' + rc.id + '" class="btn-tap w-full bg-white border-2 border-emerald-300 text-emerald-700 rounded-xl py-2.5 font-black text-sm"><i class="fa-solid fa-file-invoice-dollar"></i> ' + creditLabel + '</button>';
@@ -18702,6 +18740,7 @@ function anBuildWeeks(rcs, rets, catalog) {
     const status = rt.credited ? (returnsDiscrepancyInfo(rt).open ? 'partial' : 'full') : 'pending';
     (rt.items || []).forEach(l => {
       if (anIsDepositLine(l) || anIsCarriedLine(l)) return;
+      if (!((Number(l.qty) || 0) > 0)) return; // v123: שורה שנשארה בכמות 0 עם זיכוי — לא החזרה
       const r = rowFor(w, l); if (!r) return;
       const qty = Number(l.qty) || 0, unit = Number(l.unitPrice) || 0;
       const val = (l.lineTotal != null) ? (Number(l.lineTotal) || 0) : r2(unit * qty);

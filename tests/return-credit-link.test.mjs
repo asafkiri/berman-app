@@ -354,3 +354,50 @@ test('approve is a transaction: it closes the fresh document, and refuses one th
   assert.equal(rt3.db.get('returns/p3').credited, false);
   assert.equal(rt3.run('cloudFailedWrites.length'), 0);
 });
+
+test('re-verify text matches the rule: enter everything credited without return; what is already linked is deducted', async () => {
+  const short = (id, day) => ({ id, date: day, docDate: day, status: 'open', items: [{ name: 'לחם מקמח כוסמין E-FREE', productId: 'p_spelt', qty: 0, noteQty: 1 }] });
+  const rt = setup([newReturn()], [short('r1', '2026-09-13'), short('r2', '2026-09-12')]);
+  const ctx = await rt.prompt(1);
+  await rt.run(`confirmCreditSplitPick('${ctx.candidates.findIndex(c => c.receiptId === 'r1')}')`);
+  await rt.click('rv-open', 'new');
+  const box = rt.run('rvExtraHtml()');
+  assert.match(box, /הזן למטה את <b>כל<\/b> מה שזוכה/);
+  assert.doesNotMatch(box, /רק מה שזוכה מעבר לזה/);
+  rt.run(`rvExtraAdd('p_spelt'); returnVerify.items.forEach(l => l.checked = true);`);
+  await rt.run('saveReturnVerify()');
+  assert.match(rt.toasts.at(-1), /כבר משויך מהתעודה הזאת — לא נותר מה לקשר/);
+  assert.doesNotMatch(rt.toasts.at(-1), /✓/, 'no success tick that hides a dropped unit');
+});
+
+test('an approve whose reply was lost, or a double tap while offline, is a success on retry — not "not saved"', async () => {
+  const flush2 = async () => { for (let i = 0; i < 30; i++) await new Promise(r => setImmediate(r)); };
+  const pending = { id: 'p1', date: '2026-09-20', docDate: '2026-09-20', timestamp: 3, credited: false, schemaVersion: 2,
+    carriedNotes: [{ productId: 'p_a', name: 'א', qty: 1, at: 1 }], items: [{ name: 'א', productId: 'p_a', qty: 3 }] };
+  // (א) השרת שמר, התשובה אבדה: הטרנזקציה נכתבה ואז נזרקה שגיאת רשת
+  const rt = setup([pending]);
+  rt.run(`returnsList.push({ productId: 'carry_1', name: 'א', qty: 1, carried: true, carriedFrom: 'p1' }); returnsSlots.weekly = returnsList;`);
+  const orig = rt.context.runTransaction;
+  let lose = true;
+  rt.context.runTransaction = async (db, fn) => { const out = await orig(db, fn); if (lose) { lose = false; throw new Error('deadline-exceeded'); } return out; };
+  await rt.click('rv-approve', 'p1');
+  await rt.events.get('confirmOk:click')(); await flush2();
+  assert.equal(rt.db.get('returns/p1').credited, true, 'the server has it');
+  assert.equal(rt.run('cloudFailedWrites.length'), 1, 'the device does not know yet');
+  await rt.run('retryCloudFailedWrites()'); await flush2();
+  assert.equal(rt.run('cloudFailedWrites.length'), 0);
+  assert.doesNotMatch(rt.toasts.at(-1), /לא נשמר/);
+  assert.equal(rt.run("returns.find(x => x.id === 'p1').credited"), true);
+  assert.deepEqual(rt.db.get('returns/p1').carriedNotes, [], 'the carry note is cleared in the same write');
+  assert.equal(rt.run('returnsList.length'), 0, 'and the carried row leaves the open returns list');
+  // (ב) שתי הקשות על "אישור" בלי רשת — שתיהן בתור; בחזרת הרשת הכל נשמר
+  const rt2 = setup([{ ...pending, id: 'p2', carriedNotes: [] }]);
+  rt2.run('navigator.onLine = false');
+  for (let i = 0; i < 2; i++) { await rt2.click('rv-approve', 'p2'); await rt2.events.get('confirmOk:click')(); await flush2(); }
+  assert.equal(rt2.run('cloudFailedWrites.length'), 2);
+  rt2.run('navigator.onLine = true');
+  await rt2.run('retryCloudFailedWrites()'); await flush2();
+  assert.equal(rt2.run('cloudFailedWrites.length'), 0);
+  assert.equal(rt2.commits.length, 1, 'one real write');
+  assert.match(rt2.toasts.at(-1), /כל הפעולות נשמרו/);
+});
