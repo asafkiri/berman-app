@@ -105,11 +105,12 @@ test('כלל הירושה: חוסר שזוכה בכסף (שש תעודות) סג
   for (const day of Object.keys(expected)) assert.equal(byDay(bare, day)[0].open, true, day + ' בלי זיכוי');
 });
 
-test('שדות הכסף של v119 הם תמיד "לא פתוח" — קוראים ישנים לא נופלים', () => {
+test('v124: שדות התאימות הכספיים של v119 ירדו מ-receiptDiscrepancyInfo', () => {
   const r = create();
-  const flags = JSON.parse(r.run(`JSON.stringify(receipts.map(rc => { const di = receiptDiscrepancyInfo(rc);
-    return [di.discountPending, di.discountPriceCheck, di.monthEndWaiting, di.amountGapOpen, di.unresolvedAmountGap, di.aiAuditOpen]; }))`));
-  for (const f of flags) assert.deepEqual(f, [false, false, false, false, 0, false]);
+  const keys = JSON.parse(r.run(`JSON.stringify(receipts.map(rc => Object.keys(receiptDiscrepancyInfo(rc))))`));
+  for (const k of keys) for (const gone of ['discountPending', 'discountPriceCheck', 'monthEndWaiting', 'monthEndPending', 'amountGapOpen', 'unresolvedAmountGap', 'amountToleranceCents', 'aiAuditOpen']) {
+    assert.ok(!k.includes(gone), gone);
+  }
 });
 
 test('ההיסטוריה מציירת את כל התעודות ביחידות, בלי שורות כסף', () => {
@@ -134,12 +135,12 @@ test('מסך התיקון: יחידות בלבד, והשמירה כותבת רק
   r.context.openId = openId;
   r.run('openReceiptFix(openId)');
   const t = JSON.parse(r.run('JSON.stringify(receiptFixTotals())'));
-  assert.deepEqual(Object.keys(t).sort(), ['billed', 'ex', 'lines', 'units']);
+  assert.deepEqual(Object.keys(t).sort(), ['billed', 'lines', 'units']);
   assert.equal(t.billed - t.units, -1, 'נספר יחידה אחת יותר ממה שחויב (עודף 2 − חוסר 1)');
   const html = r.node('app').innerHTML;
   assert.ok(html.includes('נספר בפועל') && html.includes('חויב בתעודה'), 'כותרת ביחידות');
   assert.ok(!html.includes('rc-fix-price') && !html.includes('rc-fix-promo') && !html.includes('rc-fix-note-total'), 'אין שדות מחיר/סכום');
-  assert.ok(html.includes('מחיר התעודה, לתצוגה'));
+  assert.ok(!html.includes('מחיר התעודה') && !/₪[\d.]+ ליח׳/.test(html), 'v124: בלי מחיר לשורה');
   // ספירה חוזרת: 8 לחמניות כמו בנייר, ו-10 זוגות — עוגן היחידות של הנייר לא זז
   r.run("receiptFix.items.find(l => l.name === 'לחמניות 10 בשקית').qty = 8; receiptFix.items.find(l => l.name.indexOf('זוג לחמניות') === 0).qty = 10;");
   assert.equal(r.run('receiptFixEffectiveInfo().open'), false);
@@ -148,8 +149,11 @@ test('מסך התיקון: יחידות בלבד, והשמירה כותבת רק
   assert.ok(w, 'נכתב עדכון לתעודה');
   assert.deepEqual(Object.keys(w.data).sort(), ['aiAudit', 'count', 'items', 'status', 'unresolvedUnitsGap']);
   assert.equal(w.data.status, 'ok');
+  // v124: השורה המקורית נשמרת על שדותיה (התעודה הישנה נושאת unitPrice) — שום שדה לא נוסף
+  const before = JSON.parse(r.run('JSON.stringify(receipts.find(x => x.id === openId).items)'));
   for (const l of w.data.items) {
-    assert.deepEqual(Object.keys(l).filter(k => !['productId', 'name', 'barcode', 'qty', 'noteQty', 'unitPrice', 'isDeposit'].includes(k)), [], 'שורה בלי שדות כסף: ' + Object.keys(l));
+    const o = before.find(x => x.productId === l.productId) || {};
+    assert.deepEqual(Object.keys(l).filter(k => k !== 'noteQty' && !(k in o)), [], 'שורה בלי שדות חדשים: ' + Object.keys(l));
     assert.ok(!('lineTotal' in l));
   }
 });

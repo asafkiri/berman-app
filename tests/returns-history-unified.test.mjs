@@ -46,7 +46,7 @@ function openGapReturn() {
     items: [{ name: 'חלה מתוקה', barcode: '7290001003', productId: 'code_238', qty: 3, unitPrice: 10, lineTotal: 30, noteQty: 3 },
       { name: 'לחם מקמח כוסמין E-FREE', barcode: '7290001004', productId: 'code_2381', qty: 2, unitPrice: 12.5, lineTotal: 25, noteQty: 0 }] };
 }
-// תעודת קליטה פתוחה (יחידה אחת חסרה, ₪12.31) — כדי לראות את שתי הקולקציות באותה רשימה ואת שני המאזנים.
+// תעודת קליטה פתוחה (יחידה אחת חסרה) — כדי לראות את שתי הקולקציות באותה רשימה ואת שני המאזנים.
 function openReceipt() {
   return { id: 'rc_intake', timestamp: Date.UTC(2026, 8, 10, 6, 0), date: '2026-09-10', docDate: '2026-09-10', status: 'open',
     items: [{ name: 'אחיד פרוס ברמן', productId: 'code_101', barcode: '7290001002', qty: 0, noteQty: 1, unitPrice: 12.31 }] };
@@ -331,7 +331,8 @@ test('receipts and returns share one list, one order, both balance banners and o
   assert.ok(rcAt > -1 && retAt > rcAt, 'receipt card first, return card after it');
 
   // שני המאזנים: סחורה (קליטות) ואז זיכויים (חזרות) — שניהם לפני המרכזת החודשית ולפני הרשימה
-  const goods = page.indexOf('<i class="fa-solid fa-scale-unbalanced"></i> הספק חייב לך ₪' + money(rt, 12.31) + ' בסחורה');
+  const goods = page.indexOf('<i class="fa-solid fa-scale-unbalanced"></i> חסרות 1 יח׳ בתעודה אחת');
+  assert.ok(!page.includes('הספק חייב לך'), 'v124: מאזן הסחורה ביחידות, בלי ₪');
   const credits = page.indexOf(rt.run('returnsBalanceBannerHtml()'));
   assert.ok(goods > -1, 'goods balance banner');
   assert.ok(credits > goods, 'credits balance banner right after the goods balance');
