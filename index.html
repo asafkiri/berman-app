@@ -807,7 +807,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '123'; // v123: החזרות ואימות זיכוי לפי כמויות בלבד; סכום תעודת הזיכוי לזיהוי בלבד
+const APP_VERSION = '124'; // v124: ניקוי — product.price הוא מחיר החשבונית (priceHistory), קוד הכסף המת ירד, הניתוח מתומחר כמו המרכזת
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -13734,7 +13734,9 @@ function renderReceiptsHistory() {
     const unitsBilled = (rc.items || []).reduce((a, l) => a + (l && !l.isDeposit && String(l.productId || '').indexOf('deposit-') !== 0 ? (l.noteQty != null ? (Number(l.noteQty) || 0) : (Number(l.qty) || 0)) : 0), 0);
     const linesCount = (rc.items || []).filter(l => l && !l.isDeposit && String(l.productId || '').indexOf('deposit-') !== 0).length;
     // v121: תעודה חדשה נשמרת בלי מחיר על השורה — השווי לתצוגה נקרא מהקטלוג לפי יום התעודה
-    const valueEx = r2((rc.items || []).reduce((a, l) => a + (l && !l.isDeposit ? (Number(l.qty) || 0) * (Number(l.unitPrice) || priceAt(products.find(x => x.id === l.productId), storedReceiptDate(rc)) || 0) : 0), 0));
+    // v124: אותו כלל כמו במרכזת — מחיר החשבונית של יום התעודה לכל מוצר מהקטלוג
+    const valueDay = storedReceiptDate(rc);
+    const valueEx = r2((rc.items || []).reduce((a, l) => { if (!l || anIsDepositLine(l)) return a; const p = l.productId && products.find(x => x.id === l.productId); return a + (Number(l.qty) || 0) * (p ? invoiceUnitAt(p, valueDay).unit : (Number(l.unitPrice) || 0)); }, 0));
     const paperNumbers = (Array.isArray(rc.noteParts) ? rc.noteParts : []).map(n => n && n.number).filter(Boolean);
     // v63: תעודה שממתינה לנייר פתוחה — אבל לא בגלל הפרש. אין לה הפרשים
     // לתקן, יש לה נייר לצרף.
@@ -16060,16 +16062,20 @@ function anMemoryCovers(fromTs) {
 
 // --- התאמת שורות למוצרים ---
 function anCatalogIndex(catalog) {
-  const byId = new Map(), byBc = new Map(), byName = new Map();
+  const byId = new Map(), byBc = new Map(), byName = new Map(), byCode = new Map();
   (catalog || products).forEach(p => {
     byId.set(p.id, p);
+    // v124: קוד פריט (וקודים חלופיים) לפני ברקוד — כמו rowFor במרכזת
+    [productCode(p)].concat(Array.isArray(p.altCodes) ? p.altCodes : []).forEach(c => { c = String(c || ''); if (c && !byCode.has(c)) byCode.set(c, p); });
     const b = normalizeBarcode(p.barcode || ''); if (b && !byBc.has(b)) byBc.set(b, p);
     const n = String(p.name || '').trim(); if (n && !byName.has(n)) byName.set(n, p);
   });
-  return { byId, byBc, byName };
+  return { byId, byBc, byName, byCode };
 }
 function anMatchProduct(idx, l) {
   if (l.productId && idx.byId.has(l.productId)) return idx.byId.get(l.productId);
+  const code = String(l.code || '');
+  if (code && idx.byCode && idx.byCode.has(code)) return idx.byCode.get(code);
   const bc = normalizeBarcode(l.barcode || '');
   if (bc && idx.byBc.has(bc)) return idx.byBc.get(bc);
   const nm = String(l.name || '').trim();
@@ -16090,7 +16096,28 @@ function anNewRow(info) {
 }
 
 // --- בניית השבועות: כל תעודה נכנסת לשבוע שלה, לכל מוצר שורה בכל שבוע ---
+// v124: שווי שורה בניתוח — אותו כלל כמו במרכזת: מוצר מהקטלוג במחיר החשבונית של
+// יום התעודה (invoiceUnitAt — כולל מבצע מרכזת), גם בתעודות ישנות; מוצר שכבר אינו
+// בקטלוג — המחיר שנשמר על השורה. תעודות חדשות (קליטה מ-v121, חזרות מ-v123) אינן
+// נושאות כסף, ולכן עד v123 נספרו כאן ₪0. memo: חישוב אחד לכל מוצר ויום.
+function anLineUnit(p, l, day, memo) {
+  if (p) {
+    const k = p.id + '|' + day;
+    let v = memo ? memo.get(k) : null;
+    if (!v) {
+      const pu = invoiceUnitAt(p, day);
+      v = { unit: pu.unit, base: Math.round(priceAt(p, day) * 1000) / 1000, promo: !!pu.promo, total: null };
+      if (memo) memo.set(k, v);
+    }
+    return v;
+  }
+  const unit = Number(l && l.unitPrice) || 0, base0 = Number(l && l.basePrice) || 0;
+  const promo = !!(l && (l.promoOn || (Number(l.promoPct) || 0) > 0 || (base0 > 0 && unit < base0 - 0.005)));
+  return { unit, base: base0 > 0 ? r2(base0) : (promo ? 0 : unit), promo, total: (l && l.lineTotal != null) ? (Number(l.lineTotal) || 0) : null };
+}
+function anLineValue(pu, qty) { return pu.total != null ? pu.total : r2(pu.unit * qty); }
 function anBuildWeeks(rcs, rets, catalog) {
+  const memo = new Map();
   const idx = anCatalogIndex(catalog);
   const weeks = new Map();
   const wk = (k) => {
@@ -16107,11 +16134,9 @@ function anBuildWeeks(rcs, rets, catalog) {
     (rc.items || []).forEach(l => {
       if (anIsDepositLine(l)) return;
       const r = rowFor(w, l); if (!r) return;
-      const qty = Number(l.qty) || 0, unit = Number(l.unitPrice) || 0;
-      const val = (l.lineTotal != null) ? (Number(l.lineTotal) || 0) : r2(unit * qty);
-      const base0 = Number(l.basePrice) || 0;
-      const promo = !!(l.promoOn || (Number(l.promoPct) || 0) > 0 || (base0 > 0 && unit < base0 - 0.005));
-      const base = base0 > 0 ? r2(base0) : (promo ? 0 : unit);
+      const qty = Number(l.qty) || 0;
+      const pu = anLineUnit(r.product, l, dd, memo);
+      const unit = pu.unit, base = pu.base, promo = pu.promo, val = anLineValue(pu, qty);
       r.recvUnits += qty; r.recvValue = r2(r.recvValue + val); r.dayRecv[g] += qty; r.dayRecvVal[g] = r2(r.dayRecvVal[g] + val);
       w.recvUnits += qty; w.recvValue = r2(w.recvValue + val); w.dayRecv[g] += qty; w.dayRecvVal[g] = r2(w.dayRecvVal[g] + val);
       if (r.lastRecv && dd === r.lastRecv.d && ts === r.lastRecv.ts) r.lastRecv.qty += qty;
@@ -16130,8 +16155,10 @@ function anBuildWeeks(rcs, rets, catalog) {
       if (anIsDepositLine(l) || anIsCarriedLine(l)) return;
       if (!((Number(l.qty) || 0) > 0)) return; // v123: שורה שנשארה בכמות 0 עם זיכוי — לא החזרה
       const r = rowFor(w, l); if (!r) return;
-      const qty = Number(l.qty) || 0, unit = Number(l.unitPrice) || 0;
-      const val = (l.lineTotal != null) ? (Number(l.lineTotal) || 0) : r2(unit * qty);
+      const qty = Number(l.qty) || 0;
+      // מחיר של יום תעודת החזרות עצמה (dd), לא של השבוע שאליו היא משויכת
+      const pu = anLineUnit(r.product, l, dd, memo);
+      const unit = pu.unit, val = anLineValue(pu, qty);
       r.retUnits += qty; r.retValue = r2(r.retValue + val); if (closing) r.retEnd += qty; else r.retMid += qty; r.dayRet[g] += qty; r.dayRetVal[g] = r2(r.dayRetVal[g] + val);
       w.retUnits += qty; w.retValue = r2(w.retValue + val); if (closing) w.retEnd += qty; else w.retMid += qty; w.dayRet[g] += qty; w.dayRetVal[g] = r2(w.dayRetVal[g] + val);
       if (r.lastRet && dd === r.lastRet.d && ts === r.lastRet.ts) r.lastRet.qty += qty;
@@ -16191,7 +16218,7 @@ function anFinishRow(r) {
   r.promoLines = r.prices.filter(p => p.promo).length;
   const p = r.product;
   const pos = (p && p.posPrice != null && isFinite(Number(p.posPrice)) && Number(p.posPrice) > 0) ? Number(p.posPrice) : null;
-  const cost = r.lastRecv && (r.lastRecv.base > 0 || r.lastRecv.unit > 0) ? (r.lastRecv.base > 0 ? r.lastRecv.base : r.lastRecv.unit) : (r.avgCost > 0 ? r.avgCost : (p ? (Number(p.price) || 0) : 0));
+  const cost = r.lastRecv && (r.lastRecv.base > 0 || r.lastRecv.unit > 0) ? (r.lastRecv.base > 0 ? r.lastRecv.base : r.lastRecv.unit) : (r.avgCost > 0 ? r.avgCost : (p ? productPriceNow(p) : 0));
   r.cost = cost > 0 ? r2(cost) : null;
   r.posPrice = pos;
   r.posNet = pos != null ? r2(pos / (1 + VAT)) : null;
@@ -16428,12 +16455,13 @@ function anBuild(rcs, rets, keys, yearDocs, lastYearKey, source, truncated) {
   // כי לחם של השבוע הפתוח עדיין על המדף.
   const today = todayStr(), monthStart = today.slice(0, 8) + '01', closedEnd = anWeekEnd(lc);
   const month = { fromD: monthStart, toD: today, closedEnd, recvUnits: 0, recvValue: 0, retUnits: 0, retValue: 0, cRecvUnits: 0, cRecvValue: 0, cRetUnits: 0, cRetValue: 0, rcCount: 0, retCount: 0 };
+  const mIdx = anCatalogIndex(products), mMemo = new Map();
   (rcs || []).forEach(rc => {
     const dd = anDocDate(rc); if (!dd || dd < monthStart || dd > today) return;
     month.rcCount++;
     (rc.items || []).forEach(l => {
       if (anIsDepositLine(l)) return;
-      const qty = Number(l.qty) || 0, unit = Number(l.unitPrice) || 0, val = (l.lineTotal != null) ? (Number(l.lineTotal) || 0) : r2(unit * qty);
+      const qty = Number(l.qty) || 0, val = anLineValue(anLineUnit(anMatchProduct(mIdx, l), l, dd, mMemo), qty);
       month.recvUnits += qty; month.recvValue = r2(month.recvValue + val);
       if (dd <= closedEnd) { month.cRecvUnits += qty; month.cRecvValue = r2(month.cRecvValue + val); }
     });
@@ -16445,7 +16473,7 @@ function anBuild(rcs, rets, keys, yearDocs, lastYearKey, source, truncated) {
     month.retCount++;
     (rt.items || []).forEach(l => {
       if (anIsDepositLine(l) || anIsCarriedLine(l)) return;
-      const qty = Number(l.qty) || 0, unit = Number(l.unitPrice) || 0, val = (l.lineTotal != null) ? (Number(l.lineTotal) || 0) : r2(unit * qty);
+      const qty = Number(l.qty) || 0, val = anLineValue(anLineUnit(anMatchProduct(mIdx, l), l, raw, mMemo), qty);
       month.retUnits += qty; month.retValue = r2(month.retValue + val);
       if (dd <= closedEnd) { month.cRetUnits += qty; month.cRetValue = r2(month.cRetValue + val); }
     });

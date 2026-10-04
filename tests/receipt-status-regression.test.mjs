@@ -154,6 +154,7 @@ test('מסך התיקון: יחידות בלבד, והשמירה כותבת רק
   for (const l of w.data.items) {
     const o = before.find(x => x.productId === l.productId) || {};
     assert.deepEqual(Object.keys(l).filter(k => k !== 'noteQty' && !(k in o)), [], 'שורה בלי שדות חדשים: ' + Object.keys(l));
-    assert.ok(!('lineTotal' in l));
+    // סכום שורה ישן נשאר רק בשורה שהכמות שלה לא השתנתה (בגיבוי האמיתי — כן יש כאלה)
+    if ('lineTotal' in l) assert.equal(Number(o.qty), l.qty, 'lineTotal ישן על שורה שהכמות שלה השתנתה: ' + l.productId);
   }
 });
