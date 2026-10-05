@@ -5,7 +5,8 @@
 // v123: הקישור ביחידות. באימות הזיכוי מסמנים "זוכה גם על מוצר שלא הוחזר"
 // (מוצר + כמות), והבלש מחפש חוסר פתוח באותו מוצר בחלון של 14 יום. שתי
 // הרשומות התאומות נושאות מוצר וכמות בלי סכום. הכלל הכספי הישן (סיבולת עיגול
-// מול shortCreditNotes) נשאר לתעודות שנרשמו לפני v123 — [1]–[3].
+// מול shortCreditNotes) נשאר לתעודות שנרשמו לפני v123 — [3]. (v124: [1]–[2] בדקו את
+// shortCreditToleranceCents/shortCreditFullyCovers, שאינן בשימוש מאז v123 והוסרו.)
 //
 // הבדיקות רצות על הפונקציות האמיתיות מ-index.html (ראה extract.mjs).
 //
@@ -34,26 +35,22 @@ const byCode = c => productList.find(p => String(p.code) === String(c));
 // ===== המצב הגלובלי שהפונקציות הנשלפות נשענות עליו =====
 let products = productList, promos = promoList, receipts = [], returns = [], VAT = 0.18;
 
-const FNS = ['r2', 'moneyDiffCents', 'lineTotalFromUnit', 'todayStr', 'storedReceiptDate', 'dDisp',
+const FNS = ['r2', 'lineTotalFromUnit', 'todayStr', 'storedReceiptDate', 'dDisp',
   'normNote', 'noteSign', 'notesAnchor', 'receiptAwaitingDoc', 'cloneReceiptDiffItem',
-  'consumeReceiptDiffQty', 'consumeStoredReceiptOffsets', 'supplierCreditClaimOpen',
-  'supplierCreditClaimDeferred', 'aiPriceFindingPromoMatch', 'promoForProduct', 'promoActive',
-  'promoTriggered', 'promoFixedPrice', 'promoPctOf', 'basketQty', 'promoMinUnitsP',
-  'discountedUnitPrice', 'receiptDiscrepancyInfo', 'productListPrice', 'priceAt', 'receiptPaperLineCount',
+  'consumeReceiptDiffQty', 'consumeStoredReceiptOffsets', 'receiptDiscrepancyInfo', 'productListPrice', 'priceAt', 'receiptPaperLineCount',
   // v66 / v123
-  'shortCreditToleranceCents', 'shortCreditFullyCovers', 'ymdDayDiff', 'receiptOpenShortUnits', 'creditLineSameProduct',
+  'ymdDayDiff', 'receiptOpenShortUnits', 'creditLineSameProduct',
   'shortageCreditCandidates', 'returnsCreditSourcesForShortage', 'creditAllocationList', 'returnsBalance',
-  'buildCreditSplitRecords', 'creditSplitPairId', 'vatRateForDoc', 'amountIncForDoc', 'returnTotals',
-  'receiptCreditedShortUnits',
+  'buildCreditSplitRecords', 'creditSplitPairId', 'vatRateForDoc', 'receiptCreditedShortUnits',
   // v78 — החזרת פריטים מתעודת חזרות לרשימת החזרות הפתוחה
   'returnCarriedNotes', 'retCarryKey', 'consumeReturnCarriedNotes', 'returnsDiscrepancyInfo',
   'returnCreditNotes', 'consumeReturnLinkedCredit'];
-const CONSTS = ['const RECEIPT_ROUNDING_TOLERANCE_CENTS = 30;'];
+const CONSTS = [];
 // eslint-disable-next-line no-eval
 const api = eval(extractSource(FNS, CONSTS) + '\n({ ' + FNS.join(', ') + ' })');
-const { r2, receiptDiscrepancyInfo, shortCreditToleranceCents, shortCreditFullyCovers, ymdDayDiff,
+const { r2, receiptDiscrepancyInfo, ymdDayDiff,
   shortageCreditCandidates, returnsCreditSourcesForShortage, creditAllocationList, returnsBalance,
-  buildCreditSplitRecords, receiptCreditedShortUnits, returnTotals } = api;
+  buildCreditSplitRecords, receiptCreditedShortUnits } = api;
 
 let pass = 0, fail = 0;
 const ok = (name, cond) => { if (cond) { pass++; console.log('  ✓ ' + name); } else { fail++; console.log('  ✗ ' + name); } };
@@ -91,25 +88,6 @@ function makeReturn(over) {
     items: RET_LINES.map(l => ({ ...l }))
   }, over || {});
 }
-
-head('[1] סיבולת העיגול — שתי אגורות ליחידה, מינ׳ 3, מקס׳ 25');
-ok('בלי יחידות — הרצפה 3 אג׳', shortCreditToleranceCents(0) === 3);
-ok('יחידה אחת — עדיין 3 אג׳', shortCreditToleranceCents(1) === 3);
-ok('שתי יחידות — 4 אג׳', shortCreditToleranceCents(2) === 4);
-ok('13 יחידות — נעצר בתקרה 25', shortCreditToleranceCents(13) === 25);
-ok('הרבה יחידות — עדיין 25', shortCreditToleranceCents(500) === 25);
-// הגבול העליון הוא מה ששומר על הכלל: 25 אג' אינן יכולות לבלוע יחידה שלמה
-const cheapestAgorot = Math.min(...productList.map(p => Math.round((Number(p.price) || 0) * 100)).filter(x => x > 0));
-ok('התקרה רחוקה בסדר גודל מהמוצר הזול בקטלוג (' + cheapestAgorot + ' אג׳)', cheapestAgorot > 25 * 4);
-
-head('[2] מתי חוסר נחשב "זוכה במלואו"');
-ok('₪21.88 מול ₪21.92 בשתי יחידות — זיכוי מלא', shortCreditFullyCovers(SHORT_EX, CREDITED_EX, 2) === true);
-ok('אותן ארבע אגורות ביחידה אחת — עדיין חוב פתוח', shortCreditFullyCovers(SHORT_EX, CREDITED_EX, 1) === false);
-ok('זיכוי מדויק נסגר כמובן', shortCreditFullyCovers(SHORT_EX, SHORT_EX, 2) === true);
-ok('זיכוי יתר נחשב מכוסה', shortCreditFullyCovers(SHORT_EX, 22.0, 2) === true);
-ok('חסרות 12 אג׳ — לא נסגר', shortCreditFullyCovers(SHORT_EX, 21.8, 2) === false);
-ok('בלי כסף אין סגירה', shortCreditFullyCovers(SHORT_EX, 0, 2) === false);
-ok('בלי חוסר אין מה לסגור', shortCreditFullyCovers(0, 5, 2) === false);
 
 head('[3] התעודה עצמה — ארבע אגורות כבר לא משאירות אותה אדומה');
 const rcOpen = makeReceipt();
@@ -220,7 +198,6 @@ ok('החוסר בתעודת הקליטה נסגר בתאום', receiptDiscrepanc
 ok('כמות שהתקבלה נשארת אפס — לא תיספר כחזרה בניתוח', (makeReceipt().items.find(l => l.productId === PITA.id) || {}).qty === 0);
 ok('מזהה זוג נוצר עם שני הצדדים בתוכו', creditSplitPairIdHas());
 function creditSplitPairIdHas() { const s = api.creditSplitPairId('returns_0509', 'receipt_0609'); return s.indexOf('returns_0509') > -1 && s.indexOf('receipt_0609') > -1; }
-ok('תעודת חזרות חדשה (schemaVersion 2) אינה ממציאה סכום', returnTotals({ schemaVersion: 2, items: RET_LINES }).ex === 0);
 
 head('[8] החיווט — חלון שיושב מחוץ ל-#app וכפתורים מתים');
 // זה כבר קרה כאן פעמיים (ראה ההערות ליד shortCreditModal ו-retMergeModal):

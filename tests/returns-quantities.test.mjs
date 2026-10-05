@@ -54,9 +54,8 @@ test('save without sending and WhatsApp send write the same quantities-only docu
     assert.doesNotMatch(msgBefore, /₪/);
     assert.equal(rt.requests.length, 0, 'no network');
     if (via === 'send') assert.match(rt.run('window.location.href'), /^https:\/\/wa\.me\/972501234567\?text=/);
-    // returnTotals לא ממציא סכום לתעודה חדשה
-    rt.context.saved = data;
-    assert.deepEqual(JSON.parse(rt.run('JSON.stringify(returnTotals(saved))')), { ex: 0, inc: 0 });
+    // v124: returnTotals הוסר; המסמך עצמו אינו נושא סכום
+    assert.ok(!('totalExVat' in data) && !('totalIncVat' in data), JSON.stringify(Object.keys(data)));
   }
 });
 
@@ -107,9 +106,12 @@ test('scanning or typing the code of a product without a price goes straight to 
   rt.run(`handleReturnsScan('7290099999')`);
   assert.equal(rt.run('qtyProduct && qtyProduct.id'), 'code_9999', 'the scanner path too');
   assert.equal(rt.writes.filter(w => (w.path || []).includes('products')).length, 0, 'no price prompt, no product write');
-  // בקליטה שער המחיר נשאר כמו שהיה (שלב 6)
+  // v124: גם בקליטה — שער "השלמת מחיר" ירד; קולטים יחידות, והמחיר נקבע בכרטיס המוצר
   rt.run(`qtyProduct = null; proceedScannedProduct(products.find(p => p.id === 'code_9999'), 'receipt')`);
-  assert.equal(rt.run('qtyProduct'), null, 'receiving still asks for a price first');
+  assert.equal(rt.run('qtyProduct && qtyProduct.id'), 'code_9999', 'receiving goes straight to the quantity');
+  assert.equal(rt.run('qtyTarget'), 'receipt');
+  assert.equal(rt.run("typeof promptSetPrice"), 'undefined');
+  assert.equal(rt.writes.filter(w => (w.path || []).includes('products')).length, 0);
 });
 
 test('the pack offer in the returns qty modal shows units without a price', () => {

@@ -316,8 +316,7 @@ try {
     assert.equal((await live()).url, threeUrl, LAYOUT[i].label + ' with 3 signs leaves the page as is');
   }
 
-  // ידוע ואינו קשור לשלטים: promoAutoCleanup (נקרא מ־renderPromos) קורא ל־promoCleanupRan
-  // שאינו מוצהר בשום מקום, ולכן נזרק בכל כניסה למסך המבצעים. רק השגיאה הזו מסוננת.
-  assert.deepEqual(errors.filter(e => e !== 'promoCleanupRan is not defined'), []); assert.deepEqual(external, []);
+  // v124: promoAutoCleanup (שזרק promoCleanupRan is not defined בכל כניסה למסך המבצעים) הוסר.
+  assert.deepEqual(errors, []); assert.deepEqual(external, []);
   console.log('sign small layout: all checks passed — images in ' + shots);
 } finally { await browser.close(); server.close(); }

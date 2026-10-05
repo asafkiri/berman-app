@@ -1,5 +1,23 @@
 # בדיקות
 
+## v124: ניקוי — מחיר החשבונית, בלי כסף בקליטה, הניתוח כמו המרכזת
+
+```sh
+node --test tests/*.test.mjs
+node --test tests/money-free-writes.test.mjs tests/product-price-editor.test.mjs tests/analytics-money.test.mjs
+node --test tests/shared-receiving-app.test.mjs tests/listener-ids.test.mjs
+```
+
+`money-free-writes.test.mjs` — שום מסלול חי אינו כותב לתעודה חדשה סכום שחושב באפליקציה (מלבד `amountEx` שהקיזוז לפי שווי רושם על הקישור; סכומים מודפסים נשמרים לזיהוי) ואינו מוחק רישום קישור: צירוף נייר לקליטה שנשמרה בלי תעודה שומר את הקיזוז מול תעודה אחרת, את זיכוי החוסר (ביחידות ובכסף ישן) ואת השלמת הסחורה; "הגיעה השלמה" בתעודה חדשה בלי `lineTotal` ובלי `amount`, ובתעודה ישנה סכום השורה מחושב מחדש והרישום הישן מוצג בכסף; מסך התיקון שומר את השורה המקורית (קוד פריט), מוצר שנוסף בלי מחיר, והיומן ביח׳; מאזן הקליטות ביחידות, מעוגל, וכתום (לא "מאוזן") כשיש פער בנייר (בשני הכיוונים, כל אחד בשמו) או קליטה שממתינה לנייר; שארית של פחות מ-0.01 יח׳ מקיזוז ישן סוגרת את התעודה; "ממתינות לזיכוי" רק לחזרות; הקיזוז לפי שווי: צד שהסכום מכסה נסגר בכמות המלאה, והטוסט אומר מה נשאר פתוח (בסכום חלקי — שני הצדדים); מוצר בקטלוג בלי מחיר מסומן "ללא מחיר" במרכזת ואין לו "מצא קיזוז", ומוצר שנמחק אומר "המוצר אינו במאגר".
+
+`product-price-editor.test.mjs` — כרטיס המוצר: מחיר חדש מ"בתוקף מ" יוצא כרשומה מתוארכת (`priceEntry`), ו-`price`/`discountPct`/`discountSet` אינם נכתבים — אוגוסט נשאר במחיר שלו; ניסיון חוזר אחרי ניתוק ממוזג בטרנזקציה מול Firestore מדומה, כך שאימוץ שנרשם בינתיים ממכשיר אחר נשמר, ושמירה חדשה של המוצר משאירה בתור מחיר לתאריך אחר ומורידה מחיר ישן לאותו תאריך; רשומה חדשה יותר לאותו תאריך ממכשיר אחר גוברת על ניסיון חוזר; שמירה מקוונת של שם ומחיר יחד כותבת בטרנזקציה את כל השדות; יומן הפעולות מציג מחיר ותאריך; אותו מחיר או שדה ריק — אין כתיבה; שדה מחירון ריק אינו מוחק את המחירון; מוצר חדש מקבל את מחיר החשבונית (ובלעדיו המחירון, "לא אומת") עם אחוז תאימות ש-v123 מחשב ממנו את הבסיס בקירוב, מחיר מעל המחירון — בלי אחוז שלילי, ושינוי מחירון כותב את האחוז מחדש; מוצר בלי מחיר: תאריך של היום או לפניו — בסיס לכל התאריכים, תאריך עתידי — רשומה; שורת המחירון עם הנחה נגזרת (שונה מהאחוז השמור), מחיר עתידי, המבצע הפעיל לפני מבצע שפג, ו"מחיר חשבונית לא אומת", ושמירה מאשרת אותו; המלצת המחיר ועלות השלטים (גם בלי קבוצה: `internalSignShelfPrice`, `signMaxCost`, `signInternalBasis`) לפי מחיר החשבונית שבתוקף היום; ההכרעה "אותו מחיר" בסריקה לפי מחיר החשבונית ביום התעודה (לא ביום הסריקה).
+
+`analytics-money.test.mjs` — הניתוח השבועי מתמחר כמו המרכזת: קליטה חדשה (בלי כסף) במחיר החשבונית של יום התעודה כולל מבצע מרכזת, תעודה ישנה לפי הקטלוג ומוצר שנמחק לפי השורה (גם כשהברקוד שלו משותף למוצר חי, עם code ועם productId בלבד — בניתוח ובמרכזת), "ללא מחיר" בצד החזרות, "חזר ₪" לפי יום תעודת החזרות בלי שורות מועברות ופיקדון, קוד פריט לפני ברקוד משותף וקוד חלופי שאינו מסתיר קוד ראשי, אריחי החודש (הגיע/חזר ₪, % מהכסף), עלות ברירת המחדל, ושווי כרטיס התעודה באותו כלל.
+
+`shared-receiving-app.test.mjs` קיבל בדיקת תאימות: טיוטה משותפת של v123 שעדיין נושאת את 22 המפתחות שירדו מוחלת בלי שגיאה, v124 אינו שולח אותם חזרה, גרסת המטען נשארת 1, והמצב הריק והקישורים מונים אותם מפתחות. SCHEMA של `shared-receiving.js` נשאר 2 (בדיקות המנוע ללא שינוי). `listener-ids.test.mjs` מוודא שחלון "השלמת מחיר" ושדה האחוז ירדו יחד עם המאזינים שלהם.
+
+רשימות `FNS` קוצרו (`credit-split`, `no-doc-receipt`, `monthly-invoice`, `product-matrix`, `returns-carry`) — `extract.mjs` מפיל קובץ שלם כששם אחד חסר. `credit-split` איבד את [1]–[2] (`shortCreditToleranceCents`/`shortCreditFullyCovers`, שאינן בשימוש מאז v123); הכלל הכספי הישן נבדק ב-[3] וב-`credit-edge-cases`. הוסר `price-finance-regression.mjs` (השווה את כסף הקליטה מול גרסה ישנה, ונכשל כבר מאז v121).
+
 ## v123: החזרות ואימות זיכוי לפי כמויות בלבד
 
 ```sh
@@ -12,11 +30,11 @@ node tests/credit-split.test.mjs && node tests/returns-carry.test.mjs && node te
 
 `returns-regression.test.mjs` רץ על צמצום מנוקה של 19 תעודות החזרה האמיתיות (`returns-2026-08-10.json`: השורות, הכמויות, סטטוס הזיכוי והקישור היחיד 5.9 → קליטת 6.9; `sentTo` קבוע; שדות הכסף הישנים נשארו כדי לוודא שמתעלמים מהם) עם הקטלוג של `receipts-2026-08-10.json`. מצמיד: רק 4.10 פתוחה (238 ×1, 344 ×2 — 3 יח׳; 1231 זוכתה), כל השאר סגורות, המאזן "חסר זיכוי על 3 יח׳ בתעודה אחת" בלי ₪, החודשים לפי תאריך התעודה (אוגוסט 56/56, ספטמבר 152/152, אוקטובר 97/94), תוכנית ההעברה של 4.10 בלי מחיר, והקישור הישן שחוסם מחיקה ומזכה את 401 פעמיים בדיוק. **כל הפסיקות זהות כשמוחקים מכל התעודות את שדות הכסף**.
 
-`returns-quantities.test.mjs` — שמירה בלי שליחה ושליחה בוואטסאפ כותבות אותו מסמך: `schemaVersion: 2`, `vatPct`, שורות {מוצר, קוד, ברקוד, כמות} — ושום שדה כסף; פיקדון כשורת כמות; מוצר ידני בלי מחיר; קוד/סריקה של מוצר בלי מחיר הולכים ישר לכמות בלי כתיבה למוצרים (בקליטה השער נשאר); הצעת המארז בלי ₪; שורה מועברת עם מקור וקוד; שליחה חוזרת עם קוד ובלי פיקדון בסיכום; יומן הפעולות ביחידות; קישור בלי סכום חוסם מחיקה בשני הצדדים. `returns-edit-merge.test.mjs` — עריכה שאינה משנה דבר מחזירה את כל השדות כמו שהם; שינוי כמות מוריד מחיר ישן מהשורה; בתעודה מאומתת הכמות שזוכתה נשמרת (העלאה פותחת חוסר, שורה חדשה = 0, החלפת מוצר נושאת את מה שזוכה, פיצול מארז נשאר זוכה); מיזוג לפי מוצר בלי מחיר ובלי סכומים, ותעודה עם קישור זיכוי אינה נבלעת. `listener-ids.test.mjs` — סטטי: כל `$('X').addEventListener` ברמת המודול נשען על `id="X"` קיים.
+`returns-quantities.test.mjs` — שמירה בלי שליחה ושליחה בוואטסאפ כותבות אותו מסמך: `schemaVersion: 2`, `vatPct`, שורות {מוצר, קוד, ברקוד, כמות} — ושום שדה כסף; פיקדון כשורת כמות; מוצר ידני בלי מחיר; קוד/סריקה של מוצר בלי מחיר הולכים ישר לכמות בלי כתיבה למוצרים (v124: גם בקליטה); הצעת המארז בלי ₪; שורה מועברת עם מקור וקוד; שליחה חוזרת עם קוד ובלי פיקדון בסיכום; יומן הפעולות ביחידות; קישור בלי סכום חוסם מחיקה בשני הצדדים. `returns-edit-merge.test.mjs` — עריכה שאינה משנה דבר מחזירה את כל השדות כמו שהם; שינוי כמות מוריד מחיר ישן מהשורה; בתעודה מאומתת הכמות שזוכתה נשמרת (העלאה פותחת חוסר, שורה חדשה = 0, החלפת מוצר נושאת את מה שזוכה, פיצול מארז נשאר זוכה); מיזוג לפי מוצר בלי מחיר ובלי סכומים, ותעודה עם קישור זיכוי אינה נבלעת. `listener-ids.test.mjs` — סטטי: כל `$('X').addEventListener` ברמת המודול נשען על `id="X"` קיים.
 
 `credit-edge-cases.test.mjs` — מקרי הקצה מהסקירה השנייה: זיכוי כספי ישן קצר עד 5 אג׳ ביחידה סוגר אותה (גם במרכזת), וקצר ב-10 אג׳ משאיר אותה פתוחה (הכפתור מציע אותה, הזיכוי סוגר, והמרכזת מסכימה), כסף ישן שכיסה 1 מ-5 (מציעים 4, אחרי הזיכוי סגור, והמרכזת סופרת 5), טוסט שסופר רק את הפתוח; קישור חזרות→חזרות ישן (עם סכום) אינו נספר במרכזת וחדש נספר פעם אחת, וקישור לשורה ידנית מסומן "ללא מחיר"; קוד מהקטלוג לשורה מועברת וברקוד משותף; שורות מפיצול מארז שומרות את הזיכוי; ביטול העברה כשנשאר רק זיכוי ביתר; שורה בכמות 0 מחוץ לניתוח ולשליחה חוזרת. `return-credit-link` קיבל גם: הטקסט של "כבר שויך", ואישור שנשמר אבל התשובה אבדה / הקשה כפולה בלי רשת — הצלחה ולא "לא נשמר".
 
-נכתבו מחדש ליחידות: `return-credit-review` (כולל המקרים שעברו מ-credit-price-forms: "לא זוכה" ומינוס ל-0, דגלי פיקדון/העברה/ידני שורדים, מסמך ישן נשמר בלי לגעת בכסף שלו, "זוכה גם על מוצר שלא הוחזר"), `return-credit-link` (הקישור מתחיל בשורה "זוכה גם על מוצר שלא הוחזר"; זהות לפי שורה וכמות), `credit-split` ([1]–[3] כלל הירושה הכספי; [3] גם זיכוי ביחידות; [4]–[7] הבלש, המקורות, המאזן והרשומות ביחידות; [8] חיווט החלונות), `returns-carry`, `return-unsend`, `returns-history-unified`. `product-matrix` קיבל [6ד]. הוסר `credit-price-forms.test.mjs`.
+נכתבו מחדש ליחידות: `return-credit-review` (כולל המקרים שעברו מ-credit-price-forms: "לא זוכה" ומינוס ל-0, דגלי פיקדון/העברה/ידני שורדים, מסמך ישן נשמר בלי לגעת בכסף שלו, "זוכה גם על מוצר שלא הוחזר"), `return-credit-link` (הקישור מתחיל בשורה "זוכה גם על מוצר שלא הוחזר"; זהות לפי שורה וכמות), `credit-split` ([3] כלל הירושה הכספי וזיכוי ביחידות — [1]–[2] הוסרו ב-v124; [4]–[7] הבלש, המקורות, המאזן והרשומות ביחידות; [8] חיווט החלונות), `returns-carry`, `return-unsend`, `returns-history-unified`. `product-matrix` קיבל [6ד]. הוסר `credit-price-forms.test.mjs`.
 
 ## v122: סריקת AI בשערים של יחידות ושורות
 
@@ -49,115 +67,20 @@ node --test tests/receipt-status-regression.test.mjs
 node tests/receipt-status-regression.test.mjs --backup ~/backup.json
 ```
 
-`receipt-status-regression.test.mjs` רץ על מודול האפליקציה המלא מול `receipts-2026-08-10.json` — צמצום מנוקה של 38 תעודות הקליטה האמיתיות (אוגוסט–אוקטובר 2026) והקטלוג, רק השדות שהסטטוס נגזר מהם. הבדיקה מצמידה: תעודה אחת בלבד פתוחה (4.10: עודף 2, חוסר 1); תעודות שהיו פתוחות רק בגלל כסף (17.9, 28.9, 1.9) סגורות; שש תעודות עם חוסר שזוכה בכסף סגורות בכלל הירושה, ופתוחות בלעדיו; שדות הכסף של v119 תמיד "לא פתוח"; ההיסטוריה מצוירת ביחידות בלי שורות כסף; מסך התיקון כותב רק כמויות וסטטוס.
+`receipt-status-regression.test.mjs` רץ על מודול האפליקציה המלא מול `receipts-2026-08-10.json` — צמצום מנוקה של 38 תעודות הקליטה האמיתיות (אוגוסט–אוקטובר 2026) והקטלוג, רק השדות שהסטטוס נגזר מהם. הבדיקה מצמידה: תעודה אחת בלבד פתוחה (4.10: עודף 2, חוסר 1); תעודות שהיו פתוחות רק בגלל כסף (17.9, 28.9, 1.9) סגורות; שש תעודות עם חוסר שזוכה בכסף סגורות בכלל הירושה, ופתוחות בלעדיו; שדות הכסף של v119 (מ-v124: ירדו מהתוצאה); ההיסטוריה מצוירת ביחידות בלי שורות כסף; מסך התיקון כותב רק כמויות וסטטוס.
 
 הוסרו ב-v120: `missing-discount.test.mjs` ו-`discount-price-check-browser.mjs` (v108: סטטוס "ממתינה להנחה"/"לבדיקת מחיר" של תעודה שמורה, שאינו קיים יותר). בלוק סקירת ההנחה בקליטה עצמה יורד בשלב 4.
 
-## v91: תחזית המרכזת בשלוש צורות החיוב
+## איך הבדיקות רצות
 
-```sh
-node --test tests/month-end-forecast.test.mjs
-```
+אין תלויות ואין שלב בנייה — רק Node. חלק מהבדיקות שולפות את הפונקציות **בשמן
+מתוך `index.html`** ומריצות אותן כמו שהן (`extract.mjs`), כדי שלא ייווצר עותק של
+הלוגיקה שמתיישן בשקט. פונקציה שנמחקה או שונתה מפילה את הקובץ כולו עם `חסר ב-index.html`.
+השאר רצות על מודול האפליקציה המלא (`receipt-scan-harness.mjs`), כשרק גבולות ה-DOM,
+Firebase ו-HTTP מוחלפים.
 
-שתי השאלות שהבדיקה עונה עליהן, בשני הכיוונים:
-
-- **מבצע שירד בתעודה** — שילמת כבר את מחיר המבצע, ולכן הקיזוז הצפוי הוא
-  **₪0**. אין קיזוז כפול. (עבד גם קודם, ומאומת כאן.)
-- **מבצע שלא ירד כלל, מחירון מלא** — הקיזוז הצפוי הוא **כל הדרך** ממחיר
-  המחירון למחיר המבצע.
-
-הקיזוז נגזר תמיד מ־`monthEndUnitRebate` = המחיר שחויב פחות מחיר המבצע, ולכן
-הוא נכון מאליו בשלוש הצורות — **אבל רק אם `unitPrice` הוא המחיר שחויב
-בפועל**. עד v90 שורה שחויבה במחירון מלא נשמרה דווקא במחיר הרגיל, ולכן:
-
-| | v90 | v91 |
-|---|---|---|
-| מחיר השורה | ₪12.05 | ₪17.21 |
-| סכום התעודה מול הנייר | פער פתוח ₪41.30 | נסגר |
-| קיזוז צפוי במרכזת | ₪16.38 | ₪57.68 |
-
-(תעודת 1.9.2026 האמיתית.) שים לב ל־`aiPaperPriceOnly`: בלעדיו המחירון המלא
-היה נכתב בחזרה אל מחיר המוצר במאגר ומרעיל כל תעודה הבאה — יש בדיקה ייעודית.
-
-`monthEndPendingCorrections` משלים את ההפרש בתעודות שנשמרו לפני התיקון,
-מתוך הרשומה ששמורה בתעודה עצמה. ההשלמה נמדדת מול המחיר שרשום בשורה, ולכן
-בתעודה שנשמרה אחרי התיקון היא יוצאת אפס מעצמה — אין ספירה כפולה.
-
-## v89: שלוש צורות המחיר מוכרעות לפי שורה, וזיכוי במקבץ
-
-```sh
-node tests/promo-credit-form.test.mjs
-node --test tests/promo-credit-receiving.test.mjs
-```
-
-שתי הבדיקות סוגרות את התקלה מ־16.9.2026: תעודת משלוח שבה מוצר הגיע כבר
-במחיר המבצע, ולצידה תעודת זיכוי שמבטלת מוצר אחר במלואו. המסך הראה "עודף
-₪34.21" ונעל את הסגירה, בזמן שכל שורה בתעודה חויבה נכון.
-
-שני שורשים, ושניהם מכוסים:
-
-1. **הצורה לא הגיעה לכסף.** "מבצע שירד בתעודה" חי רק בשדה צדדי
-   (`__bermanPaperLineTotalExVat`), בזמן שבדיקת סכום המסמך קוראת את
-   `lineTotalExVat`. מעכשיו `bermanPriceForm` מכריע פעם אחת, לפי שורה, וכל
-   צרכני הכסף קוראים ממנו. "מחירון מלא" נשאר מוכרע מהחשבון ברמת המסמך —
-   אצל ברמן עמודת "מחיר" מדפיסה את המחירון בכל שורה, ולכן היא אינה ראיה.
-2. **זיכוי נספר בסימן הפוך.** `aiPriceGapContext` חיבר שורות זיכוי בזמן
-   ש"נטו הנייר" הפחית אותן, ולכן זיכוי הזיז את הפער בכפל ערכו.
-
-`promo-credit-form` רץ על הפונקציות עצמן (מתאם → שער הצילום → הסבר הפער);
-`promo-credit-receiving` רץ על המודול המלא, כולל ההחלה ותיעוד המבצע על
-השורה. שתיהן בודקות גם את הכיוון ההפוך: חוסר כסף אמיתי, זיכוי בסכום שאינו
-נתמך בנייר, ומחירון מלא שעדיין שומר על קיזוז המרכזת.
-
-**v90** סוגר את השארית שנראתה על המסך: `openReconcile` תמחר את השורות לפי
-המאגר גם אחרי שהסריקה הכריעה אחרת, ולכן הפאנל העליון הכריז "עודף ₪34.21"
-בדיוק מעל "הכול תקין". הכלל שנכתב ב-v61 עבור ההכרעה הידנית — "מסך ההשוואה
-חייב לעבוד על אותו מחיר, אחרת הוא ימציא מחדש את אותו פער שנסגר רגע קודם" —
-חל מעכשיו גם על הכרעת הסריקה. `bermanRepriceReconcileFromScan` נוגע במחיר
-בלבד: לא בכמויות, לא בסימוני הבדיקה, ולא בשורות שהסריקה לא הכריעה.
-
-## v84: מחירי מבצע מהנייר בלי שאלת חיוב נוספת
-
-`node --test tests/verified-promotion-finish.test.mjs` בודק את מסלול הסיום
-במודול המלא: כל תשעת הצירופים של מחיר מלא, הנחה קבועה ומחיר מבצע עבור
-שני מוצרים; אישור כמויות ידני, סריקת מוצרים ושחזור טיוטה. המחיר המודפס,
-המחירים במאגר והסכומים בכל תעודה חייבים לתמוך בחיוב. סכום תואם לבדו אינו
-עוקף מחיר שונה, הנחה חסרה, מבצע שפג או הפרש בכמויות. קיזוז המרכזת נשמר
-לפי החיוב בפועל, בלי קיזוז נוסף על מבצע שכבר ירד בתעודה.
-
-הבדיקה הפרטית האופציונלית משתמשת ב־`BERMAN_DISCOUNT_BACKUP` ומדמה הנחה
-של 8% שנמסרה מהספק. היא אינה מסיקה הנחה ואינה משנה נתוני משתמש אמיתיים.
-
-## v83: תעודה פתוחה עד להשלמת הנחה מהספק
-
-`node --test tests/missing-discount.test.mjs tests/manual-quantities.test.mjs`
-בודק את מודול האפליקציה המלא: הזנת אחוז שאושר מול הספק או דחיית הבירור,
-בדיקת כמויות עצמאית, שמירה פתוחה בסימון סגול, שחזור טיוטה והשלמה בהיסטוריה.
-המחירים והמבצעים שנשמרו עם התעודה משמשים לחישוב המאוחר; הכמויות שנבדקו
-נשמרות. חוסר, עודף או פער כספי אמיתי ממשיכים להשאיר את התעודה פתוחה.
-שמירת ההנחה בכרטיס המוצר ועדכון התעודה הם פעולת ענן אטומית אחת.
-
-הבדיקות החליפו את מסלול ההסקה והשאלות על חיוב המבצעים של v81–v82,
-שהוסר בעקבות שינוי הדרישה: המשתמש מזין מידע מהספק ואינו מתבקש לנחש
-איזה חישוב של המבצע בוצע. אחוז חסר אינו אפס ואינו מחיר מאומת.
-
-לשחזור המקרה מגיבוי פרטי, בלי להעלות את תוכנו לריפו:
-
-```sh
-BERMAN_DISCOUNT_BACKUP=/path/to/backup.json node --test tests/missing-discount.test.mjs
-```
-
-בדיקת דפדפן חזותית לא הושלמה בסביבת הפיתוח: פתיחת התצוגה המקומית נחסמה
-ב־`ERR_BLOCKED_BY_CLIENT`. בדיקות המסכים, הבחירה, הכפתורים והשמירה רצות
-ב־harness הקיים; הן אינן בדיקה במכשיר iPhone או Android אמיתי.
-
-```
-node tests/promo-on-paper.test.mjs
-```
-
-אין תלויות ואין שלב בנייה — רק Node. הבדיקות שולפות את הפונקציות **בשמן מתוך
-`index.html`** ומריצות אותן כמו שהן (`extract.mjs`), כדי שלא ייווצר עותק של
-הלוגיקה שמתיישן בשקט. פונקציה שנמחקה או שונתה מפילה את הריצה עם `חסר ב-index.html`.
+(בדיקות התקופה של הכסף בקליטה — v83, v84, v89, v91: `missing-discount`, `verified-promotion-finish`,
+`promo-credit-form`, `promo-credit-receiving`, `month-end-forecast` — הוסרו ב-v120–v122.)
 
 ## למה אין כאן גיבוי אמיתי
 
@@ -169,17 +92,18 @@ node tests/promo-on-paper.test.mjs
 מקומי:
 
 ```
-node tests/promo-on-paper.test.mjs --backup ~/Downloads/bermanbackup.json
+node tests/returns-regression.test.mjs --backup ~/Downloads/bermanbackup.json
+node tests/receipt-status-regression.test.mjs --backup ~/Downloads/bermanbackup.json
 ```
 
-במצב הזה שורות התעודה נלקחות מהתעודה האמיתית של אותו תאריך. שווה להריץ כך אחרי
-כל שינוי בחישוב הכסף, ובמיוחד אחרי חודש שבו ברמן שינו משהו במבצעים.
+(ישירות, לא דרך `node --test` — הוא אינו מעביר `--backup` לקובץ.) תומכים בזה גם
+`credit-split`, `returns-carry`, `return-unsend` ו-`product-matrix`. שווה להריץ כך
+אחרי כל שינוי בפסיקה של תעודה או בחישוב המרכזת.
 
 ## מה מכוסה
 
 `credit-split.test.mjs` — תעודת זיכוי אחת שסוגרת גם חזרות וגם חוסר של תעודת
-קליטה אחרת (v66, ביחידות מ-v123): סיבולת העיגול של זיכוי חוסר ישן בכסף על
-גבולותיה, זיכוי חוסר ביחידות, הבלש שמחפש חוסר פתוח באותו מוצר (ומתי הוא מסרב
+קליטה אחרת (v66, ביחידות מ-v123): זיכוי חוסר ישן בכסף (הכלל של v123), זיכוי חוסר ביחידות, הבלש שמחפש חוסר פתוח באותו מוצר (ומתי הוא מסרב
 לנחש), הכיוון ההפוך מכרטיס החוסר, המאזן ביחידות, ושתי הרשומות התאומות. בסופו גם בדיקת חיווט סטטית: כל
 `data-role` שנפלט חייב מטפל, וחלון שיושב מחוץ ל-`#app` חייב מאזין משלו.
 המסמכים בתרחיש נבנים בקובץ עצמו; `--backup` מזרים לתוכם את מחירי הקטלוג
@@ -196,11 +120,7 @@ v70): הלחיצה על הכפתור, האישור, הכתיבה לענן, הש�
 `paper-anchors.test.mjs` — שער האמון של זרימת הצילום-תחילה (v62): מתי מותר
 לקבל את שלושת העוגנים מהנייר עצמו, ומה נאמר כשלא. רץ על תשובות סריקה
 סינתטיות (בגרסאות שלפני v70 גיבוי לא שמר את גוף התשובה של הפענוח).
-**v79** הוסיף כאן את סיבולת העיגול על כל גבולותיה: 30 אג' עוברות ו-31 נדחות
-כששני העוגנים המדויקים סגורים, עוגן פתוח (יחידות, שורות, או שדה שלא נקרא)
-מחזיר את סיבולת הבסיס של 2 אג' לשורה, הפער של 21 אג' על 10 שורות שהוליד
-את הגרסה עובר ונשמר לתצוגה, וההודעה על חריגה נוקבת בפער, בסף שנחרג
-ובאחוז ההנחה כסיבה.
+מ-v122 השער הוא יחידות ושורות בלבד; סיבולת העיגול הכספית של v79 ירדה.
 
 
 `return-unsend.test.mjs` — שני המסלולים החדשים בכרטיס תעודת חזרות שטרם
@@ -219,25 +139,6 @@ v70): הלחיצה על הכפתור, האישור, הכתיבה לענן, הש�
 שיושבת בתא של אותו יום, הכסף היומי לכל פריט שנפתח מתחת למוצר, מה לא נכנס
 לטבלה (פיקדון, שורה כפולה למוצר בלי מזהה), סגירת הסכומים בשורות
 ובעמודות, סימוני המבצע ושינוי המחיר, ותקופה ריקה.
-
-`promo-on-paper.test.mjs` — המחיר הדו-ערכי של מוצר במבצע מחיר-קבוע (v61):
-זיהוי המוצר הנכון, אי-הצעת הסבר לתעודה שנסגרת לבד, שני מוצרים בתעודה אחת,
-פער בכיוון ההפוך שאינו מתחפש למבצע, מבצע שאינו פעיל בתאריך התעודה, סיבולת
-העיגול משני צדדיה, וצירוף דו-משמעי שמוחזר כ-null במקום ניחוש.
-
-
-`node tests/paper-prices.test.mjs` — 19 בדיקות (v67, הורחב ב-v79) של המתאם ושער האימות יחד, החל משורות בפורמט שהשרת באמת מחזיר. מחיר מבצע שכבר מודפס מחליף את המחיר הרגיל לצורך אימות הנייר בלבד; הבדיקה מכסה גם תעודות מעורבות, תוקף לפי תאריך הנייר, המשך מניעת קיזוז כפול, ואת סיבולת העיגול של v79 על תעודה של עשר שורות — כולל האישור שהמוצר הזול בקטלוג רחוק בסדר גודל מהסיבולת. הנתונים סינתטיים ומשתמשים במחירון הקיים ב-fixture.
-
-## v68: Three monthly-promotion billing modes
-
-`node tests/monthly-billing.test.mjs` runs 19 integration cases through the real
-adapter, paper anchor gate, price-gap explanation and pending monthly rebate.
-It covers the reported 759.32 / 91 / 15 invoice, all nine combinations of regular,
-full and promotional billing for two products, multiple pending rows, ambiguity,
-expired promotions and real mismatches. No live OCR request is made.
-
-To repeat against a private backup without committing it:
-`node tests/monthly-billing.test.mjs --backup /path/to/backup.json`.
 
 ## v70: Receipt scan persistence
 
@@ -273,13 +174,13 @@ The same two private-fixture environment variables can be used locally.
 Browser verification remains pending in the authoring environment: its remote
 browser rejected the localhost preview with `ERR_BLOCKED_BY_CLIENT`. Rendered
 HTML/event-handler assertions passed, but they are not an iPhone/Safari test.
-# v85: Dual scan and bounded price verification
+## v85: Dual scan and bounded verification (v122: units and lines only)
 
 `node --test tests/dual-scan.test.mjs` exercises the full app with mocked network
-boundaries: 14.84/14.94, agreement with a catalog mismatch, all nine combinations
-of two promotion products, missing discounts, unexplained totals, failed
-verification, manual correction preserving raw OCR, and persistence without
-repeating paid requests. Backend comparison and parallelism tests live in
+boundaries. Since v122 the verification budget covers only unidentified item codes,
+unread quantities and the units anchor; price mismatches never trigger a paid read.
+It also covers failed verification, manual correction preserving raw OCR, and
+persistence without repeating paid requests. Backend comparison and parallelism tests live in
 `asafkiri/berman-ai-scan`. These are regression tests, not live OCR accuracy or
 cost measurements.
 
@@ -287,10 +188,10 @@ cost measurements.
 
 `node --test tests/return-credit-link.test.mjs` exercises the complete app,
 including the real cloud task runner with an atomic Firestore boundary fake.
-It covers amount entry and confirmation, both history views, original quantities
-and paper totals, balance conservation, reload, partial and multi-product credits,
-ambiguous equal-value claims, old debts beyond 14 days, carried/closed/future
-exclusions, cancellation, stale multi-device choices, retries and failure recovery.
+Since v123 the link is in units (product and quantity, no amount): it covers the
+credited-only lines on verification, both history views, reload, partial and
+multi-product credits, old debts beyond 14 days, carried/closed/future exclusions,
+cancellation, stale multi-device choices, retries and failure recovery.
 It also checks that the existing intake-shortage allocation remains available.
 Incoming `returnCreditNotes` pair with source `creditAllocations` entries whose
 `targetType` is `return`. Linked quantities resolve the old claim without changing
@@ -300,10 +201,8 @@ records requires undoing the link; open or linked returns are retained by prunin
 ## v86: Explicit missing return credits
 
 `node --test tests/return-credit-review.test.mjs` runs the complete app module
-with browser and persistence boundaries mocked. It replays the reported
-217.96 / 205.69 totals with synthetic return rows: an explicit **לא זוכה**
-action preserves the returned quantity, records zero credited units, marks the
-row reviewed, and leaves an identified product shortage plus a separate 0.04
-residual. It checks saving/reopening, both history views, partial and surplus
-credits, correcting a mistaken selection, genuine remaining money gaps,
-allocated credit, row metadata and failed saves. No production data is changed.
+with browser and persistence boundaries mocked. Since v123 it is quantities only:
+an explicit **לא זוכה** action preserves the returned quantity, records zero
+credited units and leaves an identified product shortage. It checks saving and
+reopening, both history views, partial and surplus credits, correcting a mistaken
+selection, allocated credit, row metadata and failed saves. No production data is changed.

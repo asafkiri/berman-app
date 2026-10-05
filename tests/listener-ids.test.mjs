@@ -22,3 +22,11 @@ test('the money inputs removed in v123 are gone together with their listeners', 
     assert.ok(!html.includes("$('" + id + "')"), 'reference ' + id);
   }
 });
+
+test('v124: the price prompt and the discount field are gone together with their listeners', () => {
+  for (const id of ['newProductModal', 'npr_price', 'npr_ok', 'npr_cancel', 'npr_name', 'npr_discNote', 'npr_recHint', 'prod_discount']) {
+    assert.ok(!html.includes('id="' + id + '"'), 'element ' + id);
+    assert.ok(!html.includes("$('" + id + "')"), 'reference ' + id);
+  }
+  for (const id of ['prod_invoicePrice', 'prod_priceFrom']) assert.ok(html.includes('id="' + id + '"'), 'new field ' + id);
+});
