@@ -13279,7 +13279,7 @@ async function paperFlushPending() {
           else { console.error('paper flush failed', e); continue; }
         }
         const wrote = outcome === 'created' || outcome === 'same' || outcome === 'replaced';
-        let dropCloud = false;
+        let dropCloud = false, acked = false;
         paperPatchLocal(cap, cur => {
           if (!cur) return null;
           if (JSON.stringify(cur.paper) !== sent) {
@@ -13291,10 +13291,12 @@ async function paperFlushPending() {
           }
           if (conflict) return { ...cur, conflict };
           if (cur.discarded) dropCloud = wrote;
-          const next = { ...cur, outcome, ackedAt: Date.now() };
+          const next = { ...cur, outcome, ackedAt: Date.now() }; acked = true;
           if (outcome === 'deleted' || (outcome === 'duplicate' && cur.paper.kind === 'delivery')) { next.discarded = true; next.discardedAt = Date.now(); }
           delete next.scan; return next;
         });
+        // עד שהמאזין מביא את הנייר מהענן — הוא כבר ברשימה (אחרת המאזן לרגע לא רואה אותו בכלל)
+        if (wrote && acked && !dropCloud && !papers.some(x => x.id === rec.paper.id && !x.deleted)) { papers = papers.filter(x => x.id !== rec.paper.id).concat([rec.paper]); ledgerInvalidate(); }
         if (dropCloud) await paperTrashQuiet(rec.paper);
         else if (outcome && !conflict && outcome !== 'deleted') logAction('paper', outcome === 'duplicate' ? 'נייר שכבר צולם' : 'צילום נייר מהנהג', paperLabel(rec.paper) + ' · ' + ledgerRowsText((rec.paper.rows || []).length) + ' · ' + paperUnits(rec.paper) + ' יח׳', { paperId: rec.paper.id, outcome });
       }
