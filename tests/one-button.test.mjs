@@ -8,13 +8,14 @@ import assert from 'node:assert/strict';
 
 import { TODAY, app, confirmLast, countAsPaper, credit, days, delivery, items, join, now, pad, page, plain, printed, readPapers, receive, startRound, state, tick, until } from './one-button-helpers.mjs';
 
-test('מסך הקליטה: כפתור אחד → "קרא והתחל לספור" → בקשה אחת, הספירה נפתחת מיד, התעודה נכנסת כאילו הקליטה קראה אותה', async () => {
+test('מקום אחד: "צלם נייר מהנהג" בפס העליון → "קרא" → "התחל לספור עכשיו" — בקשה אחת, הספירה נפתחת מיד, התעודה נכנסת כאילו הקליטה קראה אותה', async () => {
   const storage = new Map();
   const r = app(delivery(), { storage });
-  r.run(`currentView = 'receiving'; mainMode = 'receiving'; renderReceiving();`);
+  r.run(`currentView = 'receiving'; mainMode = 'receiving'; renderReceiving(); refreshLedgerBar();`);
   let html = r.node('app').innerHTML;
-  assert.match(html, /data-role="rc-paper-cam"/); assert.match(html, /צלם נייר מהנהג/);
-  assert.doesNotMatch(html, /data-role="rc-open-photo"/, 'אין כפתור צילום נפרד לתעודת המשלוח');
+  assert.match(html, /אין קליטה פתוחה/); assert.match(html, /צלם נייר מהנהג" למעלה/);
+  assert.doesNotMatch(html, /type="file"|data-role="rc-open-photo"|data-role="paper-photo"/, 'במסך הקליטה אין מצלמה — רק בפס העליון');
+  assert.match(r.node('ledgerBar').innerHTML, /data-role="paper-photo"/); assert.match(r.node('ledgerBar').innerHTML, /צלם נייר מהנהג/);
   assert.match(html, /קבלת סחורה בלי נייר/);
   assert.match(html, /רק "סה״כ כללי" ו"סה״כ שורות"/);
   await receive(r);
@@ -40,8 +41,9 @@ test('מסך הקליטה: כפתור אחד → "קרא והתחל לספור" 
   html = r.node('app').innerHTML;
   r.run('aiScanResponse.scan.documents[0].rows').forEach(row => assert.ok(!html.includes(row.description), row.description));
   assert.match(html, /העוגנים נקראו מהתעודה/);
-  assert.match(html, /צלם עוד נייר מהנהג/);
-  assert.doesNotMatch(r.node('ledgerBar').innerHTML, /צלם נייר/, 'בקליטה — בלי מצלמה שנייה בפס');
+  assert.doesNotMatch(html, /type="file"/, 'גם במסך הספירה — המצלמה רק בפס');
+  r.run('refreshLedgerBar()');
+  assert.match(r.node('ledgerBar').innerHTML, /צלם נייר מהנהג/);
   // סיום: הקליטה נשמרת עם מספר הנייר ועם מקור הקריאה; המאזן רואה שהתעודה נקלטה
   countAsPaper(r);
   r.run('finishReceipt()');
@@ -74,15 +76,6 @@ test('סופרים בזמן שהניירות נקראים: ספינר, "בדוק
   await round; await r.run('paperJoinChain');
   assert.equal(r.run('receiptPaperScanState'), 'ok'); assert.equal(r.run('aiScanBusy'), false);
   assert.deepEqual(plain(r.run('receiptList')), counted, 'הספירה לא השתנתה');
-  // ספירה ידנית: מצב הקריאה מוצג במסך הידני
-  const m = app(delivery());
-  const rel2 = m.hold();
-  const round2 = startRound(m, 1, 0, 'manual');
-  await until(() => m.requests.length === 1);
-  assert.equal(m.run('receiptCountingMode'), 'manual'); assert.equal(m.run('globalThis.__scanner'), 0);
-  m.run('renderReceiving()');
-  assert.match(m.node('app').innerHTML, /קורא את הניירות מהנהג/);
-  rel2(); await round2;
 });
 
 test('תעודת משלוח וזיכוי באותו סבב (בשני הסדרים): שתי בקשות, הזיכוי למאזן, בקליטה תעודה אחת', async () => {
@@ -108,7 +101,8 @@ test('סבב בלי תעודת משלוח: "עוד אין תעודת משלוח 
   r.run('renderReceiving()');
   const html = r.node('app').innerHTML;
   assert.match(html, /עוד אין תעודת משלוח בקליטה/);
-  assert.match(html, /data-role="rc-paper-cam"/); assert.match(html, /data-role="rc-notes-edit"/); assert.match(html, /data-role="rc-nodoc-switch"/);
+  assert.match(html, /צלם את תעודת המשלוח בכפתור "צלם נייר מהנהג" למעלה/); assert.match(html, /data-role="rc-notes-edit"/); assert.match(html, /data-role="rc-nodoc-switch"/);
+  assert.doesNotMatch(html, /type="file"/);
   r.click('rc-nodoc-switch');
   assert.equal(r.run('receiptNoDoc'), true); assert.equal(r.run('receiptEntryMode'), 'manual'); assert.equal(r.run('receiptOpened'), true);
 });
@@ -284,7 +278,6 @@ test('אי אפשר לכתוב עכשיו (הקליטה המשותפת לקרי�
   r.run('canEditSharedReceipt = () => false');
   await receive(r);
   assert.equal(r.requests.length, 1);
-  assert.ok(r.toasts.some(t => /לא זמינה כרגע — הניירות נקראים/.test(t)));
   assert.equal(r.run('receiptOpened'), false);
   assert.equal(r.run(`paperJoinPending.has('paper_77001234')`), true);
   assert.match(r.run('paperIntakeItemHtml(paperIntake.items[0])'), /כשיחזור החיבור/);
@@ -293,24 +286,26 @@ test('אי אפשר לכתוב עכשיו (הקליטה המשותפת לקרי�
   assert.equal(state(r).st, 'ok'); assert.equal(r.run('paperJoinPending.size'), 0); assert.equal(r.requests.length, 1);
 });
 
-test('תור: צילום שנוסף בזמן שהסבב קורא נקרא באותו סבב — כל נייר נקרא פעם אחת', async () => {
+test('תור: צילום שנוסף בזמן שהסבב קורא נקרא באותו סבב — כל נייר נקרא פעם אחת; "בדוק וסיים" מחכה לו', async () => {
   const r = app(delivery());
   r.serve(delivery(), credit());
   const release = r.hold();
   const round = startRound(r);
   await until(() => r.requests.length === 1);
-  r.run(`openPaperIntake({ target: 'receiving' }); paperIntake.items = paperIntake.items.concat(${items(1, 1, 'receiving')});`);
+  r.run(`openPaperIntake({}); paperIntake.items = paperIntake.items.concat(${items(1, 1, '')});`);
   assert.equal(r.run('paperIntake.items.length'), 2, 'אותו סבב');
-  await r.run(`receivingBeginPaperRound('scan')`);
+  await r.run('paperIntakeRun()');
   assert.equal(r.run('paperIntake.items[1].status'), 'queued');
+  r.run(`currentView = 'receiving'; receiptList = [{ productId: 'code_101', name: 'x', barcode: '', qty: 1 }]; finishReceipt();`);
+  assert.ok(r.toasts.some(t => /עוד נייר מהנהג נקרא עכשיו/.test(t)));
   release();
   await round; await r.run('paperJoinChain');
   assert.equal(r.requests.length, 2);
   assert.equal(r.run('paperIntake.items[0].status'), 'delivery');
   assert.ok(['saved', 'review'].includes(r.run('paperIntake.items[1].status')), 'הזיכוי נקרא');
-  assert.equal(r.run(`paperIntake.items[1].forDraftId === receiptDraftId`), true);
   assert.equal(state(r).st, 'ok');
 });
+
 
 test('הפענוח נקטע בטלפון השני (אין תמונות): "המשך בלעדיה" — אפס בקשות; גם הכפתור של v125 לא שולח כלום', async () => {
   const r = app(delivery());
@@ -459,7 +454,120 @@ test('ספירה עיוורת: מספר שהקריאה סימנה לא מוצג 
   assert.match(r.node('app').innerHTML, /data-ocr-key/);
   // ספירה ידנית מול הנייר — הבדיקה מוצגת כמו תמיד
   const m = app(flagged());
-  await receive(m, 1, 0, 'manual');
-  m.run('renderReceiving()');
+  await receive(m);
+  m.run(`receiptCountingMode = 'manual'; renderReceiving();`);
   assert.match(m.node('app').innerHTML, /data-ocr-key/);
+});
+
+// ===== מקום אחד לכל נייר =====
+test('מקום אחד: המצלמה רק בפס העליון — בקליטה, בהחזרות, בניהול, בהיסטוריה, במאזן ובמסך הניירות; בשום כרטיס אין מצלמה', async () => {
+  const r = app(delivery());
+  r.run(`returns = [{ id: 'ret_a', timestamp: Date.now() - 86400000, date: '${days(-1).toLocaleDateString('en-CA')}', items: [{ productId: 'code_101', name: 'x', qty: 3 }] }]; ledgerInvalidate();`);
+  const noCamera = (html, where) => assert.doesNotMatch(html, /type="file"|data-role="(paper-photo|ledger-photo|rc-paper-cam|paper-gallery)"/, where);
+  for (const view of ['receiving', 'returns', 'manage', 'receiptsHistory', 'ledger']) {
+    r.run(`setView(${JSON.stringify(view)})`);
+    noCamera(r.node('app').innerHTML, view);
+    const bar = r.node('ledgerBar').innerHTML;
+    assert.match(bar, /data-role="paper-photo"[\s\S]*צלם נייר מהנהג/, view); assert.match(bar, /data-role="paper-gallery"/, view);
+    assert.equal(/data-role="ledger-open"/.test(bar), view !== 'ledger', view + ': כפתור המאזן — חוץ ממסך המאזן עצמו');
+  }
+  r.run(`setView('order')`);
+  assert.equal(r.node('ledgerBar').innerHTML, '', 'במסך ההזמנה — בלי');
+  noCamera(r.run(`retVerifyRowHtml(returns[0])`), 'כרטיס החזרה');
+  assert.match(r.run(`retVerifyRowHtml(returns[0])`), /תעודת הזיכוי — צלם אותה בכפתור "צלם נייר מהנהג" למעלה/);
+  noCamera(r.run('pendingReturnsBannerHtml()'), 'באנר ההחזרות');
+  // קליטה פתוחה, קליטה בלי נייר, תיבת "עוד אין תעודת משלוח"
+  await receive(r);
+  r.run(`setView('receiving')`); noCamera(r.node('app').innerHTML, 'ספירה');
+  r.run(`receiptNoDoc = true; receiptNotes = []; recomputeNoteTotal(); receiptList = [{ productId: 'code_101', name: 'x', barcode: '', qty: 1 }]; renderReceiving();`);
+  noCamera(r.node('app').innerHTML, 'קליטה בלי נייר'); assert.match(r.node('app').innerHTML, /מצאתי את התעודה\? צלם אותה בכפתור "צלם נייר מהנהג" למעלה/);
+  // מסך הניירות: "קרא" אחד, בלי מצלמה משלו
+  r.run(`openPaperIntake({}); paperIntake.items = paperIntake.items.concat(${items(1, 5, '')}); renderPaperIntake();`);
+  const tray = r.node('app').innerHTML;
+  noCamera(tray, 'מסך הניירות'); assert.match(tray, /data-role="paper-run"/); assert.doesNotMatch(tray, /paper-run-receive/);
+  assert.match(r.node('ledgerBar').innerHTML, /צלם נייר מהנהג/);
+});
+
+test('הכפתור בפס פותח את המצלמה של כל האפליקציה (קלט קבוע מחוץ למסך), והצילום נכנס למסך הניירות', async () => {
+  const r = app(delivery());
+  r.run(`setView('returns')`);
+  r.context.__clicks = [];
+  r.node('paperCamGlobal').click = () => r.context.__clicks.push('cam');
+  r.node('paperGalGlobal').click = () => r.context.__clicks.push('gal');
+  r.run(`paperUiClick({ dataset: { role: 'paper-photo' } }); paperUiClick({ dataset: { role: 'paper-gallery' } });`);
+  assert.deepEqual(plain(r.context.__clicks), ['cam', 'gal']);
+  // הקלט מחזיר קובץ — מסך הניירות נפתח עם הצילום (כאן: הכנת התמונה נכשלת בלי דפדפן — וזה מוצג)
+  r.node('paperCamGlobal').files = [{ size: 3, lastModified: 3, name: 'p.jpg', type: 'image/jpeg', arrayBuffer: async () => new ArrayBuffer(3) }];
+  r.events.get('paperCamGlobal:change')();
+  await until(() => r.run('!!paperIntake && paperIntake.items.length === 1 && !paperIntake.preparing'));
+  assert.equal(r.run('currentView'), 'paperIntake');
+  assert.equal(r.node('paperCamGlobal').value, '');
+});
+
+test('תעודה מאותו יום נכנסת לבד לקליטה שמחכה לנייר: קליטה בלי נייר, וצירוף לקליטה שנשמרה בלי תעודה; מיום אחר — שאלה', async () => {
+  const r = app(delivery());
+  r.run(`receiptCountingMode = 'scan'; receiptNoDoc = true; receiptOpened = true; receiptEntryMode = 'manual'; receiptList = [{ productId: 'code_101', name: 'x', barcode: '', qty: 7 }]; saveReceiptDraft();`);
+  await readPapers(r);
+  assert.equal(r.run('testConfirms.length'), 0, 'בלי שאלה');
+  const s = state(r);
+  assert.equal(s.st, 'ok'); assert.equal(r.run('receiptNoDoc'), false); assert.equal(r.run('receiptEntryMode'), 'photo');
+  assert.deepEqual(plain(r.run('receiptList.map(l => [l.productId, l.qty])')), [['code_101', 7]], 'הספירה נשארת');
+  // צירוף: "התעודה הגיעה — צרף אותה" ואז צילום מהפס
+  const bare = { id: 'rc_bare', date: TODAY, noDoc: true, noteParts: [], items: [{ productId: 'code_101', name: 'אחיד', qty: 12 }], timestamp: 1 };
+  const a = app(delivery(), { receipts: [bare] });
+  a.run(`reopenReceiptForDoc('rc_bare')`);
+  assert.match(a.node('app').innerHTML, /צירוף התעודה/);
+  await readPapers(a);
+  assert.equal(a.run('testConfirms.length'), 0);
+  assert.equal(state(a).st, 'ok'); assert.equal(a.run('receiptDraftId'), 'rc_bare'); assert.equal(a.run('receiptAttachTarget.id'), 'rc_bare');
+  // קליטה בלי נייר מלפני שבוע — תעודה של היום שואלת
+  const o = app(delivery());
+  o.run(`receiptNoDoc = true; receiptOpened = true; receiptEntryMode = 'manual'; receiptDocDate = '${days(-7).toLocaleDateString('en-CA')}'; receiptList = [{ productId: 'code_101', name: 'x', barcode: '', qty: 7 }]; saveReceiptDraft();`);
+  await readPapers(o);
+  assert.equal(o.run('receiptNoDoc'), true, 'לא נכנסה לבד');
+  assert.match(o.run('paperIntakeItemHtml(paperIntake.items[0])'), /קליטה פתוחה בלי תעודה/);
+});
+
+test('תעודה נוספת מהפס: מאותו יום — מתווספת לבד; מיום אחר — שאלה; צילום חוזר שאישר את עצמו מחליף קריאה שלא אישרה', async () => {
+  const r = app(delivery('77001234'));
+  await receive(r);
+  r.serve(delivery('77001240', { docDate: printed(days(-3)) }));
+  await readPapers(r, 1, 1);
+  assert.equal(state(r).docs.length, 1, 'מיום אחר — לא נכנסה לבד');
+  assert.match(r.run(`paperIntakeItemHtml(paperIntake.items.find(x => x.captureId === 'cap1'))`), /כבר יש תעודה/);
+  // קריאה שלא אישרה את עצמה, ואז צילום אחר של אותה תעודה שכן
+  const f = app(delivery('77001250', { totalUnits: 99 }));
+  await receive(f);
+  assert.equal(state(f).st, 'failed');
+  f.serve(delivery('77001250'));
+  await readPapers(f, 1, 1);
+  assert.equal(f.run('testConfirms.length'), 0);
+  assert.equal(state(f).st, 'ok'); assert.equal(state(f).docs.length, 1); assert.equal(state(f).per[0].captureId, 'cap1');
+  assert.equal(f.requests.length, 2);
+});
+
+test('צילום חוזר של תעודת משלוח (אותה תמונה) — נכנס לקליטה מהקריאה הקיימת, בלי בקשה; ביטול קליטה מוריד תעודות שממתינות', async () => {
+  const r = app(delivery());
+  // הצילום הראשון — אותו hash שמחושב לקובץ בלי דפדפן
+  r.run(`openPaperIntake({}); paperIntake.items = [{ captureId: 'cap0', hash: 'f3_3_p.jpg', page: ${JSON.stringify(page(0))}, status: 'photo', target: '', forDraftId: null }];`);
+  r.run(`canEditSharedReceipt = () => false`);
+  await r.run('paperIntakeRun()'); await r.run('paperJoinChain');
+  assert.equal(r.run('receiptOpened'), false);
+  r.run(`canEditSharedReceipt = () => true; paperJoinPending.clear();`);
+  // אחרי שהענן אישר — הקריאה ב-paperScans (במכשיר נשארת רק הרשומה הקלה)
+  r.context.testCloudScans.paper_77001234 = plain(r.run('paperIntake.items[0].scan'));
+  r.node('paperCamGlobal').files = [{ size: 3, lastModified: 3, name: 'p.jpg', type: 'image/jpeg', arrayBuffer: async () => new ArrayBuffer(3) }];
+  r.events.get('paperCamGlobal:change')();
+  await until(() => r.run(`!!paperIntake.items.find(x => x.status === 'dup') && !paperIntake.preparing`));
+  await r.run('paperJoinChain');
+  assert.equal(state(r).st, 'ok', 'נכנסה מהקריאה הקיימת');
+  assert.equal(r.requests.length, 1);
+  // ביטול: תעודה שממתינה לא פותחת שוב את מה שבוטל
+  const c = app(delivery());
+  c.run('canEditSharedReceipt = () => false');
+  await readPapers(c);
+  assert.equal(c.run(`paperJoinPending.size`), 1);
+  c.run(`canEditSharedReceipt = () => true; currentView = 'receiving'; receiptOpened = true; saveReceiptDraft();`);
+  c.click('rc-cancel'); c.run('testConfirms[testConfirms.length - 1].cb()');
+  assert.equal(c.run(`paperJoinPending.size`), 0);
 });

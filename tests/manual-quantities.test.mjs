@@ -273,7 +273,7 @@ test(supplier+': manual scan failure and an interrupted reload offer photo recov
  assertManualScreen(b);assert.ok(b.node('app').innerHTML.includes('data-role="'+repair+'"'));
  b.click(repair);
  // v126: שלב הצילום הוא כפתור הניירות; "עמוד אחרי עמוד" מחזיר את כרטיס הצילום של v125
- if(supplier==='berman'){assert.ok(b.node('app').innerHTML.includes('data-role="rc-paper-cam"'));b.click('rc-entry-photo-multi');}
+ if(supplier==='berman'){assert.ok(b.node('app').innerHTML.includes('צלם נייר מהנהג'));assert.ok(!b.node('app').innerHTML.includes('type="file"'),'v126: מצלמה רק בפס העליון');b.click('rc-entry-photo-multi');}
  assert.ok(b.node('app').innerHTML.includes('data-role="'+photoRole(true)+'"'));
 });
 test(supplier+': switching back to scanning preserves the paper, entered differences and existing quantities',async()=>{

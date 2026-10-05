@@ -1,7 +1,7 @@
 // v107 — "מצאתי את התעודה" בקליטה בלי תעודה אינו מבוי סתום.
 // קליטה בלי תעודה עם שורות שכבר נספרו: "סיום" עם שדות ריקים מחזיר לקליטה בלי
-// תעודה, "חזור לקליטה בלי תעודה" עושה אותו דבר, ו"צלם את התעודה" חוזר לשלב
-// הצילום בלי לאבד את הספירה — והקריאה מהנייר רצה מולה.
+// תעודה, "חזור לקליטה בלי תעודה" עושה אותו דבר, ותעודה שצולמה בכפתור שבפס העליון
+// (v126) מצטרפת לספירה הזאת לבד — בלי לאבד אותה.
 // Run: node tests/nodoc-found-escape-browser.mjs (Playwright + Chromium; BERMAN_CHROMIUM optional)
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -11,6 +11,8 @@ import { html, moduleSource, fixture } from './receipt-scan-harness.mjs';
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const data = fixture(), documents = new Map();
+// v126: הנייר של הבדיקה הוא תעודת משלוח (מספר פנימי) מאותו יום כמו הספירה
+Object.assign(data.paper.scan.documents[0], { docNumber: '77009999', internalNumber: '4411', headerText: 'תעודת משלוח' });
 const photo = 'data:image/svg+xml;base64,' + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="450" height="650"><rect width="450" height="650" fill="white"/><text x="25" y="60" font-size="25">SHARED RECEIPT</text><path d="M25 100h400M25 150h300M25 200h350M25 250h200" stroke="black" stroke-width="6"/></svg>').toString('base64');
 let transactionQueue = Promise.resolve(), releaseTransaction;
 const rpc = async (operation, args = {}) => {
@@ -101,7 +103,7 @@ try{
   await page.goto(url);await page.waitForFunction(()=>window.t?.loaded);
   await page.evaluate(()=>t.counted());
   const items=(await state(page)).items;assert.ok(items.length>0);
-  await role('rc-nodoc-photo').waitFor({state:'visible'});
+  await role('rc-nodoc-found').waitFor({state:'visible'});
 
   // [1] "מצאתי את התעודה — הזן" ואז "סיום" בשדות ריקים: חזרה לקליטה בלי תעודה
   await role('rc-nodoc-found').click();
@@ -116,35 +118,23 @@ try{
   await role('rc-nodoc-found').waitFor({state:'visible'});
   s=await state(page);assert.equal(s.editing,false);assert.equal(s.noDoc,true);assert.deepEqual(s.items,items);
 
-  // [3] מתוך השדות: "צלם את התעודה במקום להקליד" — שלב הצילום, הספירה נשמרת
+  // [3] מתוך השדות: אפשר לצלם במקום להקליד — בכפתור שבפס העליון (במסך אין מצלמה שנייה), ו"סיום" חוזר
   await role('rc-nodoc-found').click();
-  await role('rc-nodoc-photo').click();
-  await role('rc-paper-cam').waitFor({state:'attached'}); // v126: כפתור הניירות
-  s=await state(page);assert.equal(s.noDoc,false);assert.equal(s.opened,false);assert.equal(s.mode,'photo');assert.deepEqual(s.items,items);
-  assert.match(await page.locator('#app').innerText(),new RegExp(items.length+' שורות'));
-  await page.screenshot({path:'/tmp/berman-nodoc-photo-step.png',fullPage:true});
-
-  // [3b] משלב הצילום אפשר לבחור להקליד — נפתחים השדות, ומהם שוב לצילום
-  await role('rc-entry-manual').click();
   await role('rc-notes-done').waitFor({state:'visible'});
-  s=await state(page);assert.equal(s.opened,true);assert.equal(s.editing,true);assert.deepEqual(s.items,items);
-  await role('rc-nodoc-photo').click();
-  await role('rc-paper-cam').waitFor({state:'attached'});
-
-  // [4] "אין תעודה בכלל" משלב הצילום — חוזרים לאותה ספירה
-  await role('rc-open-nodoc').click();await page.evaluate(()=>t.closeScanner());
+  assert.match(await page.locator('#app').innerText(),/אפשר לצלם את התעודה במקום להקליד/);
+  assert.equal(await page.locator('#app input[type="file"]').count(),0);
+  await role('rc-notes-done').click();
   await role('rc-nodoc-found').waitFor({state:'visible'});
   s=await state(page);assert.equal(s.noDoc,true);assert.deepEqual(s.items,items);
+  await page.screenshot({path:'/tmp/berman-nodoc-photo-step.png',fullPage:true});
 
-  // [5] מהסרגל הכתום: "מצאתי את התעודה — צלם אותה", צילום, והקריאה רצה מול הספירה
-  await role('rc-nodoc-photo').click();
-  await role('rc-paper-cam').waitFor({state:'attached'});
-  // צילום בכרטיס של v125 (תעודה ארוכה, עמוד אחרי עמוד) — הקריאה רצה מול הספירה
-  await page.evaluate(()=>t.photo());
-  await role('rc-open-photo').waitFor({state:'attached'});
-  await role('rc-open-photo').click();await page.evaluate(()=>t.closeScanner());
-  await page.waitForFunction(()=>t.paperDone());
-  s=await state(page);assert.equal(s.opened,true);assert.equal(s.noDoc,false);assert.equal(s.paperState,'ok');assert.equal(s.notes.length,1);assert.deepEqual(s.items,items);
+  // [5] מצאתי את התעודה: צילום מהפס → "קרא" → התעודה מצטרפת לספירה הזאת לבד (אותו יום), והספירה נשמרת
+  assert.match(await page.locator('#app').innerText(),/מצאתי את התעודה\? צלם אותה בכפתור/);
+  const [chooser]=await Promise.all([page.waitForEvent('filechooser'),page.locator('#ledgerBar [data-role="paper-photo"]').click()]);
+  await chooser.setFiles({name:'paper.svg',mimeType:'image/svg+xml',buffer:Buffer.from(photo.split(',')[1],'base64')});
+  await role('paper-run').click();
+  await page.waitForFunction(()=>t.state().paperState==='ok');
+  s=await state(page);assert.equal(s.opened,true);assert.equal(s.noDoc,false);assert.equal(s.notes.length,1);assert.deepEqual(s.items,items);
 
   // [6] קליטה רגילה (לא "בלי תעודה") — "סיום" בשדות ריקים עדיין חוסם
   await page.evaluate(()=>t.regularEmpty());

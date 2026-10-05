@@ -41,6 +41,7 @@ export function app(paper, opts = {}) {
   const r = runtime({ data, storage: opts.storage || new Map(), globals: { fetch, ...(opts.globals || {}) }, sharedReceiving: !!opts.shared, loadSharedEngine: !!opts.shared });
   r.serve = (...list) => { box.list = box.calls.length ? Array(box.calls.length).fill(null).concat(list) : list; };
   r.hold = () => { let release; box.gate = new Promise(res => { release = res; }); return () => { box.gate = null; release(); }; };
+  r.held = () => !!box.gate;
   Object.defineProperty(r, 'requests', { get: () => box.calls });
   r.context.testConfirms = [];
   r.context.testCloudScans = opts.cloudScans || {};
@@ -68,12 +69,18 @@ export async function readPapers(r, n = 1, start = 0) {
   await r.run('paperJoinChain');
 }
 // מסך הקליטה: כפתור הניירות → "הכל ישר — קרא והתחל לספור"
-export function startRound(r, n = 1, start = 0, mode = 'scan') {
-  r.run(`currentView = 'receiving'; mainMode = 'receiving'; openPaperIntake({ target: 'receiving', docDate: null });
-    paperIntake.items = paperIntake.items.concat(${items(n, start, 'receiving')});`);
-  return r.run(`receivingBeginPaperRound(${JSON.stringify(mode)})`);
+// "צלם נייר מהנהג" (מכל מסך) → "הכל ישר — קרא", ובזמן הקריאה "התחל לספור עכשיו" (count: false — בלי).
+// מחזיר את הסבב (Promise). הבקשה נעצרת עד שהספירה נפתחה — אלא אם הבדיקה כבר עצרה אותה בעצמה.
+export async function startRound(r, n = 1, start = 0, { count = true } = {}) {
+  r.run(`currentView = 'receiving'; mainMode = 'receiving'; openPaperIntake({});
+    paperIntake.items = paperIntake.items.concat(${items(n, start, '')});`);
+  const release = r.held() ? null : r.hold();
+  const run = r.run('paperIntakeRun()');
+  if (count) await r.run('receivingCountNow()');
+  if (release) release();
+  return run;
 }
-export async function receive(r, n = 1, start = 0, mode = 'scan') { await startRound(r, n, start, mode); await r.run('paperJoinChain'); }
+export async function receive(r, n = 1, start = 0, opts = {}) { await (await startRound(r, n, start, opts)); await r.run('paperJoinChain'); }
 // "לקליטה" (מהמאזן או מכרטיס הנייר)
 export async function join(r, paperId, cap) {
   r.run(`paperUiClick({ dataset: { role: 'ledger-start-receiving', paper: ${JSON.stringify(paperId)}${cap ? ', cap: ' + JSON.stringify(cap) : ''} } })`);

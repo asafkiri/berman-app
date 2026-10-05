@@ -1,5 +1,5 @@
 // v126 — "כפתור אחד" בדפדפן אמיתי, שני טלפונים מבודדים על אותה קליטה משותפת (מנוע הסנכרון אמיתי).
-// A מצלם בכפתור הניירות → "קרא והתחל לספור": הספירה נפתחת מיד בשני הטלפונים ("קורא…"), B סופר
+// A מצלם ב"צלם נייר מהנהג" שבפס העליון → "קרא" → "התחל לספור עכשיו": הספירה נפתחת מיד בשני הטלפונים ("קורא…"), B סופר
 // בינתיים, והתעודה נכנסת לשניהם — בקשה אחת (A), אפס (B), בלי התנגשות. A מסיים והקליטה נשמרת עם
 // מספר התעודה. 390px בלי גלילה לצדדים.
 // Run: NODE_PATH=$(npm root -g) node tests/one-button-browser.mjs (Playwright + Chromium; BERMAN_CHROMIUM optional)
@@ -101,20 +101,24 @@ const svg=Buffer.from(photo.split(',')[1],'base64');
 try{
   const a=await device('A'), b=await device('B');
   const role=(p,r)=>p.locator('#app [data-role="'+r+'"]').first();
-  // מסך הקליטה: כפתור אחד, בלי מצלמה שנייה בפס
-  await role(a,'rc-paper-cam').waitFor({state:'visible'});
-  assert.equal(await a.locator('#app [data-role="rc-open-photo"]').count(),0);
-  assert.doesNotMatch(await a.locator('#ledgerBar').innerText(),/צלם נייר/);
+  // מסך הקליטה: אין מצלמה במסך — רק "צלם נייר מהנהג" בפס העליון
+  await a.locator('#ledgerBar [data-role="paper-photo"]').waitFor({state:'visible'});
+  assert.equal(await a.locator('#app input[type="file"]').count(),0);
+  assert.match(await a.locator('#app').innerText(),/אין קליטה פתוחה/);
   assert.ok(await a.evaluate(()=>window.t.scrollOk()),'אין גלילה לצדדים ב-390px');
   await a.screenshot({path:'/tmp/berman-one-button.png',fullPage:true});
-  // A מצלם — הצילום נכנס למסך הניירות
-  await a.setInputFiles('#rcPaperCam',{name:'paper.svg',mimeType:'image/svg+xml',buffer:svg});
-  await role(a,'paper-run-receive').waitFor({state:'visible'});
+  // A מצלם בכפתור שבפס — הצילום נכנס למסך הניירות
+  const [chooser]=await Promise.all([a.waitForEvent('filechooser'),a.locator('#ledgerBar [data-role="paper-photo"]').click()]);
+  await chooser.setFiles({name:'paper.svg',mimeType:'image/svg+xml',buffer:svg});
+  await role(a,'paper-run').waitFor({state:'visible'});
   assert.match(await a.locator('#app').innerText(),/הניירות מהנהג/);
-  assert.match(await a.locator('#app').innerText(),/קרא והתחל לספור \(1\)/);
+  assert.match(await a.locator('#app').innerText(),/הכל ישר — קרא \(1\)/);
   await a.screenshot({path:'/tmp/berman-one-button-tray.png',fullPage:true});
   await a.evaluate(()=>window.t.hold());
-  await role(a,'paper-run-receive').click();
+  await role(a,'paper-run').click();
+  // בזמן הקריאה: "התחל לספור עכשיו"
+  await role(a,'paper-count-now').waitFor({state:'visible'});
+  await role(a,'paper-count-now').click();
   // הספירה נפתחת מיד, בשני הטלפונים: "קורא…"
   await a.waitForFunction(()=>window.t.state().view==='receiving'&&window.t.state().busy&&window.t.state().requests===1);
   await b.waitForFunction(()=>window.t.state().busy&&window.t.state().opened);

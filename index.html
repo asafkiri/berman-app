@@ -134,6 +134,9 @@
     <!-- תוכן ראשי -->
     <div id="sharedReceivingBanner" class="max-w-3xl mx-auto px-4 pt-3" aria-live="polite"></div>
     <div id="ledgerBar" class="max-w-3xl mx-auto px-4 pt-2"></div>
+    <!-- v126: מצלמת הניירות — אחת לכל האפליקציה, מחוץ לכל מסך שמצטייר מחדש (צילום לא הולך לאיבוד כשהמסך מתעדכן) -->
+    <input id="paperCamGlobal" type="file" accept="image/*" capture="environment" class="hidden" aria-hidden="true" tabindex="-1">
+    <input id="paperGalGlobal" type="file" accept="image/*" multiple class="hidden" aria-hidden="true" tabindex="-1">
     <main id="app" class="max-w-3xl mx-auto p-4"></main>
 
     <!-- כפתור סיום הזמנה (צף) -->
@@ -2936,8 +2939,7 @@ function pendingReturnsBannerHtml() {
   const pendingRet = returns.filter(r => { if (r.credited) return false; const lv = retLedgerView(r.id); return !(lv && lv.main && !lv.open.length); }).length;
   if (!pendingRet) return '';
   return '<div class="flex gap-2 mb-3"><button data-role="ret-history" class="btn-tap flex-1 min-w-0 bg-rose-600 text-white rounded-xl py-3.5 px-3 font-black text-base flex items-center justify-between gap-2 shadow-md"><span class="min-w-0 truncate"><i class="fa-solid fa-triangle-exclamation"></i> ' + (pendingRet === 1 ? 'יש תעודת חזרות פתוחה לאימות' : 'יש ' + pendingRet + ' תעודות חזרות פתוחות לאימות') + '</span><span class="text-xs font-black bg-white/20 px-2 py-1 rounded-lg shrink-0">לאימות ←</span></button>' +
-    // v126: במסך הקליטה יש כפתור ניירות משלו — כאן רק המעבר לאימות
-    (currentView === 'receiving' ? '' : '<button data-role="paper-photo" aria-label="צלם תעודת זיכוי" class="btn-tap shrink-0 min-w-[52px] bg-white border-2 border-rose-200 text-rose-700 rounded-xl px-3 font-black shadow-sm"><i class="fa-solid fa-camera text-lg"></i></button>') + '</div>';
+    '</div>'; // v126: צילום — רק בכפתור "צלם נייר מהנהג" שבפס העליון
 }
 
 function renderReturns() {
@@ -3349,13 +3351,13 @@ function returnSentUnits(r) {
 function retExplainedByPapers(id) { const lv = retLedgerView(id); return !!(lv && lv.papers.length && !lv.open.length); }
 // v125: תעודת זיכוי שכבר צולמה ושויכה לתעודה הזו — במקום כפתור הצילום (צילום נוסף הוא קריאה נוספת בתשלום)
 function retLedgerView(id) { try { return currentLedger().docViews[id] || null; } catch (e) { return null; } }
-// נייר זיכוי שצולם מהכרטיס הזה ומחכה לבדיקה (או לשיוך) — במקום להזמין צילום נוסף בתשלום
+// נייר זיכוי של ההחזרה הזו שמחכה לבדיקה (או לשיוך) — במקום להזמין צילום נוסף בתשלום
 function retWaitingPaper(id) {
   try {
     const lg = currentLedger();
     const asked = pid => lg.items.some(i => i.kind === 'needsAttach' && i.paper.id === pid && (i.ask || []).indexOf(id) !== -1);
     const p = papers.filter(x => x && !x.deleted).concat(paperPendingLocal())
-      .find(x => x.forReturnId === id && x.kind !== 'charge' && x.kind !== 'delivery' && (lg.states[x.id] === 'unproven' || (lg.states[x.id] === 'needs-attach' && asked(x.id))));
+      .find(x => x.kind !== 'charge' && x.kind !== 'delivery' && ((lg.states[x.id] === 'unproven' && (x.forReturnId === id || (x.attach && x.attach.type === 'return' && x.attach.id === id))) || (lg.states[x.id] === 'needs-attach' && asked(x.id))));
     return p ? { paper: p, attach: lg.states[p.id] === 'needs-attach' } : null;
   } catch (e) { return null; }
 }
@@ -3368,13 +3370,13 @@ function retVerifyRowHtml(r) {
     ? '<div class="w-full rounded-xl px-3 py-2.5 mb-2 text-sm font-black bg-amber-50 border border-amber-200 text-amber-800">' + htmlEscape(paperLabel(waiting.paper)) + (waiting.attach ? ' צולם — לא ברור לאיזו החזרה הוא שייך' : ' צולם — מחכה לבדיקה שלך') + '</div>' +
       '<div class="flex gap-1.5 mb-2">' + (waiting.attach ? '<button data-role="ledger-open" class="btn-tap flex-1 min-h-[44px] bg-amber-500 text-white rounded-xl py-2 font-black text-sm">לענות במאזן</button>'
         : '<button data-role="ledger-paper-open" data-paper="' + htmlEscape(waiting.paper.id) + '" class="btn-tap flex-1 min-h-[44px] bg-amber-500 text-white rounded-xl py-2 font-black text-sm">לבדיקה</button>') +
-      '<button data-role="paper-photo" data-id="' + htmlEscape(r.id) + '" class="btn-tap flex-1 min-h-[44px] bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-camera"></i> צילום אחר</button></div>'
+      '</div>'
     : mainPaper
     ? '<div class="w-full rounded-xl px-3 py-2.5 mb-2 text-sm font-black ' + (lv.open.length ? 'bg-amber-50 border border-amber-200 text-amber-800' : 'bg-emerald-50 border border-emerald-200 text-emerald-800') + '">' +
         (lv.open.length ? '<i class="fa-solid fa-scale-balanced"></i> ' + htmlEscape(paperLabel(mainPaper)) + ' צולם — יש פער מול מה שהוחזר. ראה במאזן'
           : '✓ ' + htmlEscape(paperLabel(mainPaper)) + ' צולם ומתאים — לסגירת התעודה: <b>אישור</b>') + '</div>' +
-      '<button data-role="paper-photo" data-id="' + htmlEscape(r.id) + '" class="btn-tap w-full min-h-[44px] bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-xs flex items-center justify-center gap-1.5 mb-2"><i class="fa-solid fa-camera"></i> יש עוד תעודת זיכוי? צלם אותה</button>'
-    : '<button data-role="paper-photo" data-id="' + htmlEscape(r.id) + '" class="btn-tap w-full bg-blue-600 text-white rounded-xl py-2.5 font-black text-sm flex items-center justify-center gap-1.5 mb-2"><i class="fa-solid fa-camera"></i> צלם את תעודת הזיכוי</button>';
+      '<div class="text-[11px] text-slate-500 font-bold mb-2"><i class="fa-solid fa-arrow-up" aria-hidden="true"></i> יש עוד תעודת זיכוי? צלם אותה בכפתור "צלם נייר מהנהג" למעלה.</div>'
+    : '<div class="w-full rounded-xl px-3 py-2.5 mb-2 text-xs font-black bg-blue-50 border border-blue-200 text-blue-800"><i class="fa-solid fa-arrow-up" aria-hidden="true"></i> תעודת הזיכוי — צלם אותה בכפתור "צלם נייר מהנהג" למעלה. האפליקציה תמצא לבד לאיזו החזרה היא שייכת.</div>';
   return photo +
     '<div class="text-[11px] text-slate-400 font-bold mb-1.5"><i class="fa-solid fa-circle-info"></i> הספק זיכה על כל ' + units + ' היחידות? <b class="text-slate-600">אישור</b>. חסר משהו? <b class="text-slate-600">בדוק</b> וסמן מה זוכה. הסכום — רשות, לזיהוי בלבד</div>' +
     '<div class="flex gap-1.5 items-stretch mb-2">' +
@@ -5821,17 +5823,17 @@ function receivingPhotoCardHtml() {
   const ready = aiAllPagesOrientationConfirmed();
   return cards +
     '<button data-role="rc-photo-doc-add" class="btn-tap w-full bg-white border-2 border-dashed border-slate-300 text-slate-500 rounded-xl py-2 font-black text-xs mb-1"><i class="fa-solid fa-plus"></i> עוד תעודת משלוח (חיוב) מאותו משלוח</button>' +
-    '<button data-role="paper-photo" class="btn-tap w-full min-h-[44px] text-blue-700 text-xs font-black py-1.5 mb-2"><i class="fa-solid fa-camera"></i> זיכוי, החזרה או נייר חיוב קטן? צלם אותו כאן ←</button>' +
     (aiScanError ? '<div class="rounded-xl bg-rose-50 border border-rose-300 p-2.5 text-xs font-black text-rose-700 mb-2">' + htmlEscape(aiScanError) + '</div>' : '') +
     '<button data-role="rc-open-photo-quantity" ' + (ready ? '' : 'disabled') + ' class="btn-tap w-full py-3 mb-2 bg-white border-2 border-emerald-300 text-emerald-800 rounded-xl font-black text-base">פענח תעודה — הכמויות נבדקות ידנית</button>' +
     '<button data-role="rc-open-photo" ' + (ready ? '' : 'disabled') + ' class="btn-tap w-full rounded-2xl py-4 font-black text-lg flex items-center justify-center gap-2 mt-1 ' + (ready ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-400') + '"><i class="fa-solid fa-arrow-left"></i> התחל קליטה</button>' +
     '<div class="text-[11px] text-slate-500 font-bold text-center mt-1.5">הקריאה מהנייר תרוץ ברקע בזמן שאתה סורק את הסחורה. הכמויות שבתעודה לא יוצגו לך תוך כדי — הספירה נשארת עיוורת, וזה מה שתופס חוסר.</div>' +
     '<button data-role="rc-entry-manual" class="btn-tap w-full text-slate-400 py-2.5 font-black text-xs underline mt-1">אין רשת או שהנייר לא קריא — הקלד את המספרים מתחתית התעודה</button>';
 }
-// v126: כפתור אחד לכל נייר מהנהג. הצילום נכנס לקליטת הניירות; תעודת המשלוח חוזרת לכאן
-// כשהיא כבר קרואה (רק "סה״כ כללי" ו"סה״כ שורות"), זיכוי וחיוב — למאזן.
-function receivingPaperCamHtml(id, cls, label) {
-  return '<label data-role="rc-paper-cam" class="' + cls + ' cursor-pointer">' + label + '<input id="' + id + '" type="file" accept="image/*"' + (id === 'rcPaperGal' ? ' multiple' : ' capture="environment"') + ' class="hidden"></label>';
+// v126: כל נייר מהנהג עולה ממקום אחד — "📷 צלם נייר מהנהג" בפס שמתחת לכותרת, באותו מקום בכל
+// מסך. מסך הקליטה לא מצלם בעצמו: הוא מראה לאן ללחוץ ומה כבר נקרא. תעודת המשלוח מגיעה לכאן כשהיא
+// כבר קרואה (רק "סה״כ כללי" ו"סה״כ שורות"), זיכוי וחיוב — למאזן.
+function receivingCameraHintHtml(text) {
+  return '<div class="rounded-xl bg-blue-50 border border-blue-200 p-2.5 mb-3 text-[11px] font-black text-blue-800 flex items-start gap-2"><i class="fa-solid fa-arrow-up mt-0.5" aria-hidden="true"></i><span>' + htmlEscape(text) + '</span></div>';
 }
 function receivingWaitingPhotosHtml() {
   const it = paperIntake;
@@ -5840,31 +5842,32 @@ function receivingWaitingPhotosHtml() {
   return '<div class="rounded-xl bg-amber-50 border border-amber-300 p-2.5 mb-3 flex items-center justify-between gap-2"><span class="text-xs font-black text-amber-800">' + (waiting === 1 ? 'יש צילום אחד שמחכה לקריאה' : 'יש ' + waiting + ' צילומים שמחכים לקריאה') + '</span>' +
     '<button data-role="paper-goto-intake" class="btn-tap shrink-0 min-h-[44px] px-3 py-2 rounded-lg bg-white border border-amber-300 text-amber-800 text-xs font-black">המשך</button></div>';
 }
+// הניירות נקראים עכשיו בטלפון הזה — אפשר להתחיל לספור כבר עכשיו; תעודת המשלוח תיכנס לבד
+function receivingReadingHtml() {
+  const it = paperIntake;
+  if (!it || !it.busy) return '';
+  return '<div class="rounded-xl bg-violet-50 border border-violet-200 p-2.5 mb-3" role="status"><div class="text-[11px] font-black text-violet-800 flex items-center gap-2"><i class="fa-solid fa-circle-notch fa-spin"></i><span>' + htmlEscape(it.progress || 'קורא את הניירות מהנהג…') + '</span></div>' +
+    (receivingDraftEmpty() ? '<button data-role="paper-count-now" class="btn-tap w-full min-h-[44px] mt-2 bg-blue-600 text-white rounded-xl py-2.5 font-black text-sm">התחל לספור עכשיו — תעודת המשלוח תיכנס לבד</button>' : '') + '</div>';
+}
+// אין קליטה פתוחה: לאן ללחוץ, מה כבר נקרא, ודרכים בלי נייר
 function receivingOneButtonCardHtml() {
-  const it = paperIntake, reading = !!(it && it.busy);
-  return '<div class="text-center mb-3"><i class="fa-solid fa-camera-retro text-violet-600 text-4xl mb-2"></i><div class="font-black text-slate-800 text-lg">צלם את הניירות מהנהג</div>' +
-      '<div class="text-sm text-slate-500">כל נייר בצילום נפרד — תעודת משלוח, זיכוי, נייר חיוב קטן. האפליקציה מזהה כל נייר לבד: תעודת המשלוח נכנסת לקליטה כשהיא כבר קרואה, וזיכוי או חיוב עוברים למאזן.</div></div>' +
-    receivingWaitingPhotosHtml() + receivingReadyDeliveryHtml() +
-    (reading ? '<div class="rounded-xl bg-violet-50 border border-violet-200 p-2.5 mb-3 text-[11px] font-black text-violet-800 flex items-center gap-2" role="status"><i class="fa-solid fa-circle-notch fa-spin"></i><span>' + htmlEscape(it.progress || 'קורא את הניירות מהנהג…') + '</span></div>' : '') +
-    receivingPaperCamHtml('rcPaperCam', 'btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 font-black text-lg flex items-center justify-center gap-2 shadow-md', '<i class="fa-solid fa-camera text-xl"></i> צלם נייר מהנהג') +
-    receivingPaperCamHtml('rcPaperGal', 'btn-tap w-full min-h-[44px] text-blue-700 text-xs font-black py-2 flex items-center justify-center gap-1.5', '<i class="fa-solid fa-images"></i> או: בחר תמונות מהגלריה') +
-    '<div class="text-[11px] text-slate-500 font-bold mt-1"><i class="fa-solid fa-lightbulb text-amber-500"></i> טיפ: צלם קודם את תעודת המשלוח — המספרים שלה ייכנסו ראשונים.</div>' +
+  return '<div class="text-center mb-3"><i class="fa-solid fa-truck text-violet-600 text-4xl mb-2"></i><div class="font-black text-slate-800 text-lg">' + (receiptAttachTarget ? 'צירוף התעודה' : 'אין קליטה פתוחה') + '</div>' +
+      '<div class="text-sm text-slate-500">צלם את הניירות מהנהג בכפתור "צלם נייר מהנהג" למעלה — נייר אחד בכל צילום. תעודת המשלוח ' + (receiptAttachTarget ? 'תצטרף לקליטה הזאת' : 'פותחת כאן את הקליטה') + ' עם שני המספרים מהתחתית שלה, וזיכוי או חיוב עוברים למאזן.</div></div>' +
+    receivingReadingHtml() + receivingWaitingPhotosHtml() + receivingReadyDeliveryHtml() +
     '<div class="text-[11px] text-slate-500 font-bold mt-1">מתעודת המשלוח נכנסים רק "סה״כ כללי" ו"סה״כ שורות". הכמויות שבה לא יוצגו לך — הספירה נשארת עיוורת, וזה מה שתופס חוסר.</div>' +
     '<button data-role="rc-entry-photo-multi" class="btn-tap w-full min-h-[44px] text-slate-400 py-2 font-black text-xs underline mt-1">תעודת משלוח ארוכה שלא נכנסת בצילום אחד? צלם אותה עמוד אחרי עמוד</button>' +
     '<button data-role="rc-entry-manual" class="btn-tap w-full min-h-[44px] text-slate-400 py-2 font-black text-xs underline">אין רשת או שהנייר לא קריא — הקלד את המספרים מתחתית התעודה</button>';
 }
-// במסך הספירה: עוד נייר מהנהג (זיכוי, חיוב, או תעודת משלוח נוספת) — בלי לעזוב את הספירה
+// במסך הספירה: נייר נוסף שנקרא עכשיו (זיכוי, חיוב, או תעודת משלוח נוספת) — שורת מצב בלבד
 function receivingMorePapersInner() {
   const it = paperIntake;
-  const mine = !!(it && it.busy && receiptDraftId != null && it.items.some(x => x.forDraftId === receiptDraftId && (x.status === 'queued' || x.status === 'reading')));
-  const status = mine && !aiScanBusy && receiptPaperScanState !== 'running'
-    ? '<div class="rounded-xl bg-violet-50 border border-violet-200 p-2.5 mb-2 text-[11px] font-black text-violet-800 flex items-center gap-2" role="status"><i class="fa-solid fa-circle-notch fa-spin"></i><span>קורא עוד נייר מהנהג… זיכוי וחיוב יעברו למאזן לבד.</span></div>' : '';
-  return status + receivingWaitingPhotosHtml() +
-    receivingPaperCamHtml('rcPaperCam', 'btn-tap w-full min-h-[44px] bg-white border-2 border-blue-200 text-blue-700 rounded-xl py-2 font-black text-sm flex items-center justify-center gap-1.5 mb-3', '<i class="fa-solid fa-camera"></i> צלם עוד נייר מהנהג');
+  const reading = !!(it && it.busy && it.items.some(x => x.status === 'queued' || x.status === 'reading'));
+  const status = reading && !aiScanBusy && receiptPaperScanState !== 'running'
+    ? '<div class="rounded-xl bg-violet-50 border border-violet-200 p-2.5 mb-2 text-[11px] font-black text-violet-800 flex items-center gap-2" role="status"><i class="fa-solid fa-circle-notch fa-spin"></i><span>קורא עוד נייר מהנהג… תעודת משלוח נוספת תיכנס לבד, זיכוי וחיוב — למאזן.</span></div>' : '';
+  return status + receivingWaitingPhotosHtml();
 }
 function receivingMorePapersHtml() {
-  if (!AI_SCAN_ENABLED || receiptAttachTarget || (receiptNoDoc && !receiptNotes.length)) return '';
-  if (receivingNoDeliveryYet()) return ''; // בתיבה "עוד אין תעודת משלוח" יש מצלמה משלה
+  if (!AI_SCAN_ENABLED || receivingNoDeliveryYet()) return '';
   return '<div id="rcPaperRound">' + receivingMorePapersInner() + '</div>';
 }
 // הסבב נגמר בלי תעודת משלוח (או שהקריאה נקטעה) — ואין צילום ישן שמחכה
@@ -5898,15 +5901,13 @@ function receivingReadyDeliveryHtml() {
     list.map(p => '<button data-role="ledger-start-receiving" data-paper="' + htmlEscape(p.id) + '" class="btn-tap w-full min-h-[44px] mt-1 bg-white border-2 border-emerald-300 text-emerald-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-paperclip"></i> צרף: ' + htmlEscape(paperLabel(p)) + ' — בלי לצלם שוב</button>').join('') + '</div>';
 }
 function receivingNoDeliveryBoxHtml() {
-  const attach = receivingAwaitingDeliveryPapers().map(p => '<button data-role="ledger-start-receiving" data-paper="' + htmlEscape(p.id) + '" class="btn-tap w-full min-h-[44px] mt-1.5 bg-white border-2 border-emerald-300 text-emerald-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-paperclip"></i> צרף: ' + htmlEscape(paperLabel(p)) + '</button>').join('');
   return '<div class="rounded-xl bg-amber-50 border-2 border-amber-300 p-3 mb-3">' +
     '<div class="text-xs font-black text-amber-900"><i class="fa-solid fa-triangle-exclamation"></i> עוד אין תעודת משלוח בקליטה</div>' +
     '<ul class="list-disc pr-5 mt-1 space-y-0.5 text-[11px] font-bold text-amber-800">' + (receiptPaperScanProblems.length ? receiptPaperScanProblems : ['בניירות שצולמו לא נמצאה תעודת משלוח']).map(p => '<li>' + htmlEscape(p) + '</li>').join('') + '</ul>' +
-    attach +
-    receivingPaperCamHtml('rcPaperCamFix', 'btn-tap w-full mt-2 bg-blue-600 text-white rounded-xl py-2.5 font-black text-sm flex items-center justify-center gap-1.5', '<i class="fa-solid fa-camera"></i> צלם את תעודת המשלוח') +
-    receivingWaitingPhotosHtml() +
-    '<button data-role="rc-notes-edit" class="btn-tap w-full mt-1.5 bg-white border-2 border-amber-300 text-amber-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-keyboard"></i> הקלד את המספרים מתחתית התעודה</button>' +
-    '<button data-role="rc-nodoc-switch" class="btn-tap w-full mt-1.5 bg-white border border-amber-300 text-amber-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-file-circle-xmark"></i> המשך בלי נייר</button>' +
+    '<div class="text-[11px] font-black text-amber-900 mt-1.5"><i class="fa-solid fa-arrow-up" aria-hidden="true"></i> צלם את תעודת המשלוח בכפתור "צלם נייר מהנהג" למעלה — היא תיכנס לספירה הזאת לבד.</div>' +
+    receivingReadyDeliveryHtml().replace('mb-3', 'mb-0 mt-2') + receivingReadingHtml() + receivingWaitingPhotosHtml() +
+    '<button data-role="rc-notes-edit" class="btn-tap w-full min-h-[44px] mt-1.5 bg-white border-2 border-amber-300 text-amber-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-keyboard"></i> הקלד את המספרים מתחתית התעודה</button>' +
+    '<button data-role="rc-nodoc-switch" class="btn-tap w-full min-h-[44px] mt-1.5 bg-white border border-amber-300 text-amber-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-file-circle-xmark"></i> המשך בלי נייר</button>' +
   '</div>';
 }
 // v107: קליטה שכבר נספרה וחזרה לשלב צילום התעודה.
@@ -5918,14 +5919,14 @@ function receivingCountedBannerHtml() {
   const units = receiptList.reduce((a, l) => a + (Number(l.qty) || 0), 0);
   return '<div class="rounded-2xl bg-blue-50 border-2 border-blue-200 p-3 mb-3 text-[11px] font-bold text-blue-900 leading-relaxed">' +
     '<div class="font-black text-sm"><i class="fa-solid fa-list-check"></i> ' + receiptList.length + ' שורות · ' + units + ' יח׳ כבר נספרו ונשמרות</div>' +
-    'צלם את תעודת המשלוח בכפתור הניירות, והבדיקה תרוץ מול הספירה הזאת. אם אין נייר בכל זאת — "קבלת סחורה בלי נייר" למטה ממשיך מאותה ספירה.</div>';
+    'צלם את תעודת המשלוח בכפתור "צלם נייר מהנהג" למעלה, והבדיקה תרוץ מול הספירה הזאת. אם אין נייר בכל זאת — "קבלת סחורה בלי נייר" למטה ממשיך מאותה ספירה.</div>';
 }
 // v107: מתוך שדות העוגנים של קליטה שכבר נספרה ואין לה עדיין מספרים —
 // אפשר לצלם את התעודה במקום להקליד, ובקליטה בלי תעודה גם לחזור אליה.
 function receiptNotesEscapeHtml() {
   if (receiptNotes.length || !receiptList.length || receiptAttachTarget) return '';
   return '<div class="mt-2 space-y-1.5">' +
-    (AI_SCAN_ENABLED ? '<button data-role="rc-nodoc-photo" class="btn-tap w-full bg-violet-50 border-2 border-violet-200 text-violet-700 rounded-xl py-2.5 font-black text-sm"><i class="fa-solid fa-camera"></i> צלם את התעודה במקום להקליד</button>' : '') +
+    (AI_SCAN_ENABLED ? '<div class="text-[11px] font-black text-violet-700"><i class="fa-solid fa-arrow-up" aria-hidden="true"></i> אפשר לצלם את התעודה במקום להקליד — בכפתור "צלם נייר מהנהג" למעלה.</div>' : '') +
     (receiptNoDoc ? '<button data-role="rc-nodoc-back" class="btn-tap w-full bg-amber-50 border border-amber-300 text-amber-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-file-circle-xmark"></i> חזור לקליטה בלי תעודה</button>' : '') +
   '</div>';
 }
@@ -5936,7 +5937,7 @@ function receivingNoDocGateHtml() {
   if (receiptAttachTarget) return '';
   return '<div class="mt-4 pt-3 border-t border-slate-200">' +
     '<button data-role="rc-open-nodoc" class="btn-tap w-full bg-white border-2 border-amber-300 text-amber-800 rounded-2xl py-3 font-black text-sm flex items-center justify-center gap-2"><i class="fa-solid fa-file-circle-xmark"></i> קבלת סחורה בלי נייר</button>' +
-    '<div class="text-[11px] text-slate-500 font-bold text-center mt-1.5 leading-relaxed">סורקים את מה שהגיע וסוגרים כרגיל. התעודה נשמרת <b class="text-amber-700">פתוחה</b>, וכשהנייר יגיע — מצלמים אותו בכפתור הניירות והוא מצטרף לספירה הזאת בלי לצלם שוב.</div>' +
+    '<div class="text-[11px] text-slate-500 font-bold text-center mt-1.5 leading-relaxed">סורקים את מה שהגיע וסוגרים כרגיל. התעודה נשמרת <b class="text-amber-700">פתוחה</b>, וכשהנייר יגיע — מצלמים אותו בכפתור "צלם נייר מהנהג" למעלה, והוא מצטרף לספירה הזאת לבד.</div>' +
   '</div>';
 }
 // v63: המסך בזמן צירוף נייר לקליטה שנשמרה בלי תעודה. השורות כבר בפנים —
@@ -5945,7 +5946,7 @@ function receivingAttachBannerHtml() {
   if (!receiptAttachTarget) return '';
   return '<div class="rounded-2xl bg-amber-50 border-2 border-amber-300 p-3 mb-3">' +
     '<div class="font-black text-amber-900 text-sm"><i class="fa-solid fa-paperclip"></i> צירוף תעודה לקליטה מ-' + htmlEscape(receiptAttachTarget.label || '') + '</div>' +
-    '<div class="text-[11px] font-bold text-amber-800 leading-relaxed mt-0.5">' + receiptList.length + ' שורות מהספירה כבר בפנים. צלם את התעודה — מכאן זו קליטה רגילה לגמרי, והבדיקה תרוץ מול מה שנספר אז.</div>' +
+    '<div class="text-[11px] font-bold text-amber-800 leading-relaxed mt-0.5">' + receiptList.length + ' שורות מהספירה כבר בפנים. צלם את התעודה בכפתור "צלם נייר מהנהג" למעלה — מכאן זו קליטה רגילה לגמרי, והבדיקה תרוץ מול מה שנספר אז.</div>' +
     '<button data-role="rc-attach-cancel" class="btn-tap w-full mt-2 bg-white border border-amber-300 text-amber-800 rounded-xl py-2 font-black text-xs">בטל צירוף — התעודה תישאר ממתינה לנייר</button>' +
   '</div>';
 }
@@ -6163,7 +6164,7 @@ function renderReceivingScreen() {
           '<div class="text-[11px] font-bold text-amber-800 leading-relaxed mt-0.5">הכמויות נשמרות לפי הספירה, והכסף מחושב במרכזת החודשית. התעודה תישמר פתוחה עד שהנייר יגיע.' + (receiptDocDate ? ' · ' + dDisp(receiptDocDate) : '') + '</div></div>' +
           '<button data-role="rc-cancel" class="btn-tap shrink-0 text-xs font-bold text-red-500 bg-white border border-red-200 px-2.5 py-2 rounded-lg"><i class="fa-solid fa-xmark"></i></button>' +
         '</div>' +
-        (AI_SCAN_ENABLED ? '<button data-role="rc-nodoc-photo" class="btn-tap w-full mt-2 bg-white border border-amber-300 text-amber-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-camera"></i> מצאתי את התעודה — צלם אותה</button>' : '') +
+        (AI_SCAN_ENABLED ? '<div class="text-[11px] font-black text-amber-900 mt-2"><i class="fa-solid fa-arrow-up" aria-hidden="true"></i> מצאתי את התעודה? צלם אותה בכפתור "צלם נייר מהנהג" למעלה — היא תצטרף לספירה הזאת לבד.</div>' : '') +
         '<button data-role="rc-nodoc-found" class="btn-tap w-full mt-2 bg-white border border-amber-300 text-amber-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-file-invoice"></i> מצאתי את התעודה — הזן את המספרים</button>' +
       '</div>'
     : editingNotes
@@ -6758,7 +6759,10 @@ function paperScanStatusHtml() {
       '<ul class="list-disc pr-5 mt-1 space-y-0.5 text-[11px] font-bold text-amber-800">' +
         receiptPaperScanProblems.map(p => '<li>' + htmlEscape(p) + '</li>').join('') + '</ul>' +
       '<button data-role="rc-notes-edit" class="btn-tap w-full mt-2 bg-amber-600 text-white rounded-xl py-2.5 font-black text-sm"><i class="fa-solid fa-keyboard"></i> הקלד את המספרים מתחתית התעודה</button>' +
-      '<button data-role="rc-paper-rescan" class="btn-tap w-full mt-1.5 bg-white border-2 border-amber-300 text-amber-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-camera-rotate"></i> או: צלם את התעודה שוב</button>' +
+      // v126: תעודה שנכנסה מקליטת הניירות — מצלמים שוב בכפתור למעלה (צילום שאישר את עצמו מחליף אותה לבד);
+      // צילומים של הכרטיס הישן (עמוד אחרי עמוד) — "צלם שוב" מוחק אותם וחוזר לשלב הצילום
+      (aiTotalPages() === 0 && aiScanResponse ? '<div class="text-[11px] font-black text-amber-900 mt-2"><i class="fa-solid fa-arrow-up" aria-hidden="true"></i> או: צלם את התעודה שוב בכפתור "צלם נייר מהנהג" למעלה — צילום שנקרא עד הסוף מחליף את הקריאה הזאת לבד.</div>'
+        : '<button data-role="rc-paper-rescan" class="btn-tap w-full mt-1.5 bg-white border-2 border-amber-300 text-amber-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-camera-rotate"></i> או: צלם את התעודה שוב</button>') +
     '</div>';
   }
   return '';
@@ -13162,6 +13166,8 @@ function paperLabel(p) {
   if (p.kind === 'declared') return 'התשובה שלך מ-' + ledgerDayShort(p.docDay);
   return (p.kind === 'credit' ? 'נייר הזיכוי' : p.kind === 'charge' ? 'נייר החיוב' : 'נייר') + (num ? ' ' + num : '') + ' ' + day + (p.printedTime ? ' ' + p.printedTime : '');
 }
+// v126: כל נייר עולה ממקום אחד — הכפתור שבפס העליון; בכרטיסים רק אומרים זאת
+const LEDGER_PHOTO_HINT = ' כשיש נייר — צלם אותו בכפתור "צלם נייר מהנהג" למעלה.';
 // משפט אחד לכל פריט במאזן, ופעולות. lg = תוצאת paperLedger; papers = כל הניירות
 function ledgerItemText(it, lg, papers) {
   const P = id => (papers || []).find(p => p && p.id === id) || null;
@@ -13172,34 +13178,34 @@ function ledgerItemText(it, lg, papers) {
   const open = id => ({ role: 'ledger-paper-open', label: 'פרטים', paperId: id });
   switch (it.kind) {
     case 'chargedNotReceived': return { text: 'חוסר בקליטה של ' + d + ': ' + q(it.key, it.units) + ' — חויבת ולא קיבלת. לבקש זיכוי מהנהג',
-      detail: 'בתעודה חויבו ' + mtxQty(x.billed) + ', נספרו ' + mtxQty(x.received) + '.', actions: [{ role: 'ledger-photo', label: '📷 צלם תעודת זיכוי' }] };
+      detail: 'בתעודה חויבו ' + mtxQty(x.billed) + ', נספרו ' + mtxQty(x.received) + '.' + LEDGER_PHOTO_HINT, actions: [] };
     case 'chargedTwice': {
       const prev = (lg.products[it.key].parts || []).find(o => o.type === 'receipt' && o.id !== x.id && o.charge > 0);
       const prevPaper = prev && P((prev.papers || [])[0]);
       return { text: 'חויבת פעמיים על ' + q(it.key, it.units) + ' — לבקש זיכוי מהנהג',
-        detail: 'העודף מהקליטה של ' + ledgerDayShort(prev && prev.day) + ' כבר חויב ב' + paperLabel(prevPaper) + ', ובתעודה של ' + d + ' חויבו שוב: חויבו ' + mtxQty(x.billed) + ', נספרו ' + mtxQty(x.received) + '.',
-        actions: [{ role: 'ledger-photo', label: '📷 צלם תעודת זיכוי' }] };
+        detail: 'העודף מהקליטה של ' + ledgerDayShort(prev && prev.day) + ' כבר חויב ב' + paperLabel(prevPaper) + ', ובתעודה של ' + d + ' חויבו שוב: חויבו ' + mtxQty(x.billed) + ', נספרו ' + mtxQty(x.received) + '.' + LEDGER_PHOTO_HINT,
+        actions: [] };
     }
     case 'returnedNotCredited':
       if (it.askMore) return { text: 'בתעודות הזיכוי של ההחזרה מ-' + d + ' ' + (it.keys && it.keys.length > 1 ? 'חסרים: ' : 'חסר ') + list + ' — יש עוד תעודת זיכוי?',
-        actions: [{ role: 'ledger-photo', label: '📷 צלם עוד תעודת זיכוי', returnId: x.id }, { role: 'ledger-return-complete', label: 'אין עוד — חסר באמת', returnId: x.id }] };
-      return { text: 'החזרת ' + list + ' ב-' + d + ' ולא זוכית — לבקש זיכוי מהנהג', actions: [{ role: 'ledger-photo', label: '📷 צלם תעודת זיכוי', returnId: x.id }] };
+        detail: 'יש? צלם אותה בכפתור "צלם נייר מהנהג" למעלה.', actions: [{ role: 'ledger-return-complete', label: 'אין עוד — חסר באמת', returnId: x.id }] };
+      return { text: 'החזרת ' + list + ' ב-' + d + ' ולא זוכית — לבקש זיכוי מהנהג', detail: LEDGER_PHOTO_HINT.trim(), actions: [] };
     case 'returnNotCreditedYet': {
       const many = it.keys && it.keys.length > 1;
       const units = (it.keys || [{ units: it.units }]).reduce((a, z) => a + (Number(z.units) || 0), 0);
       const what = many ? (it.keys.length + ' מוצרים, ' + mtxQty(units) + ' יח׳') : list;
       return it.state === 'pending'
-        ? { text: 'ההחזרה מ-' + d + ' (' + what + ') — ממתינה לתעודת זיכוי', detail: many ? list : '', actions: [{ role: 'ledger-photo', label: '📷 צלם תעודת זיכוי', returnId: x.id }] }
-        : { text: 'ההחזרה מ-' + d + ' (' + what + ') עדיין לא זוכתה — צלם את תעודת הזיכוי או בקש מהנהג', detail: many ? list : '', actions: [{ role: 'ledger-photo', label: '📷 צלם תעודת זיכוי', returnId: x.id }] };
+        ? { text: 'ההחזרה מ-' + d + ' (' + what + ') — ממתינה לתעודת זיכוי', detail: (many ? list + '.' : '') + LEDGER_PHOTO_HINT, actions: [] }
+        : { text: 'ההחזרה מ-' + d + ' (' + what + ') עדיין לא זוכתה — צלם את תעודת הזיכוי או בקש מהנהג', detail: (many ? list + '.' : '') + LEDGER_PHOTO_HINT, actions: [] };
     }
     case 'paperChargeNotReceived': return it.state === 'question'
-      ? { text: paperLabel(P(x.id)) + ' מחייב ' + q(it.key, it.units) + ' שלא קיבלת. יש מאותו יום נייר זיכוי שעוד לא צילמת?', actions: [{ role: 'ledger-photo', label: '📷 צלם נייר זיכוי' }, open(x.id)] }
+      ? { text: paperLabel(P(x.id)) + ' מחייב ' + q(it.key, it.units) + ' שלא קיבלת. יש מאותו יום נייר זיכוי שעוד לא צילמת?', detail: LEDGER_PHOTO_HINT.trim(), actions: [open(x.id)] }
       : { text: paperLabel(P(x.id)) + ' מחייב ' + q(it.key, it.units) + ' שלא קיבלת — לבקש זיכוי מהנהג', actions: [open(x.id)] };
     case 'correctionPair': {
       const R = (lg.products[it.pair.other] && lg.products[it.pair.other].parts || []).find(o => o.type === 'return' && o.id === it.pair.returnId);
       return { text: paperLabel(P(x.id)) + ' מחייב ' + q(it.key, it.units) + ' — נראה שתעודת הזיכוי של ההחזרה מ-' + ledgerDayShort(R && R.day) + ' זיכתה ' + nm(it.key) + ' במקום ' + nm(it.pair.other) + ', וזה התיקון',
-        detail: 'אם כך, הכל מתקזז ואין מה לבקש. אם יש לך את תעודת הזיכוי הראשונה — צלם אותה, והמאזן יבדוק לבד.',
-        actions: [{ role: 'ledger-declare-correction', label: 'כן, זה תיקון' }, { role: 'ledger-photo', label: '📷 צלם את הזיכוי הראשון', returnId: it.pair.returnId }] };
+        detail: 'אם כך, הכל מתקזז ואין מה לבקש. אם יש לך את תעודת הזיכוי הראשונה — צלם אותה בכפתור "צלם נייר מהנהג" למעלה, והמאזן יבדוק לבד.',
+        actions: [{ role: 'ledger-declare-correction', label: 'כן, זה תיקון' }] };
     }
     case 'swap': {
       const R = (lg.products[it.swap.a].parts || []).find(o => o.type === 'return' && o.id === it.swap.returnId);
@@ -13214,10 +13220,10 @@ function ledgerItemText(it, lg, papers) {
         actions: src ? [open(src)] : [] };
     }
     case 'receivedNotCharged': return it.state === 'pending'
-      ? { text: 'קיבלת ' + q(it.key, it.units) + ' יותר ממה שחויב ב-' + d + ' — אם הנהג נתן נייר חיוב, צלם אותו', actions: [{ role: 'ledger-photo', label: '📷 צלם נייר' }] }
+      ? { text: 'קיבלת ' + q(it.key, it.units) + ' יותר ממה שחויב ב-' + d + ' — אם הנהג נתן נייר חיוב, צלם אותו', detail: LEDGER_PHOTO_HINT.trim(), actions: [] }
       : { text: 'עודף בקליטה של ' + d + ': ' + q(it.key, it.units) + ' — לא חויב', actions: [] };
     case 'canceledOffset': return { text: 'עודף ' + q(it.key, it.units) + ' ב-' + ledgerDayShort(it.over.day) + ' וחוסר ' + mtxQty(it.units) + ' ב-' + ledgerDayShort(it.short.day) + ' — ביטלת את הקיזוז ביניהם. יש נייר חיוב על העודף?',
-      actions: [{ role: 'ledger-photo', label: '📷 צלם נייר' }, { role: 'ledger-ack-offset', label: 'אין נייר — לקזז' }] };
+      detail: LEDGER_PHOTO_HINT.trim(), actions: [{ role: 'ledger-ack-offset', label: 'אין נייר — לקזז' }] };
     case 'netted': return { text: nm(it.key) + ': עודף ב-' + ledgerDayShort(it.over.day) + ' וחוסר ב-' + ledgerDayShort(it.short.day) + ' התקזזו', actions: [] };
     case 'unproven': return { text: paperLabel(it.paper) + ' לא נקרא עד הסוף — לבדוק', actions: [{ role: 'ledger-paper-open', label: 'לבדיקה', paperId: it.paper.id }] };
     case 'needsAttach': return { text: 'לאיזו החזרה שייך ' + paperLabel(it.paper) + '?', actions: (it.ask || []).filter(id => (lg.docDays || {})[id]).map(id => {
@@ -13669,21 +13675,18 @@ function paperAttachNow(paper) {
   const rets = returns.filter(rt => { const d = ledgerReturnDay(rt); return rt.id === paper.forReturnId || (d >= lg.start && d >= ledgerAddDays(day, -LEDGER_RETURN_WINDOW_DAYS) && d <= day); });
   return paperAttach(paper, ledgerDocBase(recs, rets), (lg.placed || []).filter(p => p.id !== paper.id), null, lg.start);
 }
-// opts.target: 'receiving' — צולם ממסך הקליטה (תעודת המשלוח נכנסת לקליטה הזאת); docDate — התאריך שנבחר שם
+// v126: מסך הניירות אחד לכל מקום — מה שקורה לנייר נקבע לפי הנייר, לא לפי המסך שממנו צולם
 function openPaperIntake(opts) {
   opts = opts || {};
   const want = opts.forReturnId || '';
-  const target = opts.target === 'receiving' ? 'receiving' : '';
   // סבב שעוד רץ, או צילומים שעוד לא נקראו — חוזרים אליו. קריאה ששולמה אף פעם לא נזרקת.
   if (paperIntake && (paperIntake.busy || paperIntake.preparing || paperIntake.items.some(x => x.status === 'photo' || x.status === 'queued' || x.status === 'reading'))) {
     paperIntake.forReturnId = want; // לצילומים הבאים בלבד; כל צילום זוכר מאיפה צולם
-    paperIntake.target = target;
-    if (opts.docDate !== undefined) paperIntake.docDate = opts.docDate || null;
     setView('paperIntake');
     return;
   }
   paperIntakeSession++;
-  paperIntake = { items: [], forReturnId: want, target, docDate: opts.docDate || null, busy: false, preparing: false, bind: null, progress: '', note: '' };
+  paperIntake = { items: [], forReturnId: want, busy: false, preparing: false, bind: null, progress: '', note: '' };
   const stale = readLocalJson(PAPER_INFLIGHT_KEY, null);
   if (stale && !paperUploadBusy) {
     try { localStorage.removeItem(PAPER_INFLIGHT_KEY); } catch (e) {}
@@ -13707,11 +13710,17 @@ async function paperIntakeAddFiles(files) {
       const hash = await paperFileHash(file);
       const captureId = makeOperationId('cap');
       const forReturnId = it.forReturnId || '';
-      const target = it.target || '';
-      const forDraftId = target === 'receiving' ? (it.bind ? it.bind.draftId : receiptDraftId) || null : null;
+      // סבב שכבר פתח קליטה ("התחל לספור עכשיו") — הצילומים שנוספים אליו שייכים לה
+      const target = '', forDraftId = it.bind ? it.bind.draftId : null;
       if (it.items.some(x => x.hash === hash && x.status !== 'error')) { it.items.push({ captureId, hash, status: 'dup-batch' }); continue; }
       const known = paperByHash(hash);
-      if (known) { it.items.push({ captureId, hash, status: known.rejected ? 'rejected' : 'dup', paperId: known.paper ? known.paper.id : null, dupCap: known.local ? known.local.captureId : null, target, forDraftId }); continue; }
+      if (known) {
+        const dup = { captureId, hash, status: known.rejected ? 'rejected' : 'dup', paperId: known.paper ? known.paper.id : null, dupCap: known.local ? known.local.captureId : null, target, forDraftId };
+        it.items.push(dup);
+        // צילום חוזר של תעודת משלוח שכבר נקראה — נכנסת לקליטה מהקריאה הקיימת, בלי בקשה
+        if (dup.status === 'dup' && known.paper && known.paper.kind === 'delivery') receivingJoinDelivery({ paperId: dup.paperId, cap: captureId, item: dup, explicit: false }).catch(e => console.error('paper join failed', e));
+        continue;
+      }
       try {
         const page = await aiCompressInvoiceImage(file);
         page.orientationConfirmed = true;
@@ -13942,6 +13951,7 @@ function receivingDeliveryRoute(scan, paper, item, opts) {
   const num = receiptPaperNumber(paper.number) || receiptPaperDocNumber(doc);
   const cap = opts.cap || (item && item.captureId) || null;
   const mine = !!(item && item.forDraftId != null && item.forDraftId === receiptDraftId);
+  // v126: כל נייר עולה מאותו מקום — "לא קשור" הוא המצב הרגיל; קשור רק לסבב שפתח קליטה ("התחל לספור")
   const unbound = !item || item.forDraftId == null;
   const self = bermanPaperAnchorCheck(doc), selfOk = self.ok;
   const day = String(paper.docDay || '');
@@ -13978,7 +13988,7 @@ function receivingDeliveryRoute(scan, paper, item, opts) {
   if (receivingDraftEmpty()) {
     const bare = day && receipts.find(r => r && receiptAwaitingDoc(r) && storedReceiptDate(r) === day);
     if (bare) return ask('bare', 'bare', { receipt: bare });
-    if (unbound && ((item && item.target === 'receiving') || day === todayStr())) return { action: 'new' };
+    if (unbound && day === todayStr()) return { action: 'new' };
     return ask('date-new', 'new');
   }
   // 8. טיוטה עם סיכום תעודה בלי פירוט הקריאה
@@ -13987,7 +13997,7 @@ function receivingDeliveryRoute(scan, paper, item, opts) {
   if (typed) {
     const one = receiptNotes.length === 1 ? normNote(receiptNotes[0]) : null;
     const same = !!(one && selfOk && one.kind !== 'credit' && Number(one.units) === self.printedUnits && Number(one.lines) === self.printedLines);
-    if (same && (mine || opts.explicit)) return { action: 'replace-typed', reason: 'typed' };
+    if (same && (mine || unbound || opts.explicit)) return { action: 'replace-typed', reason: 'typed' }; // אותם מספרים — לא מאבדים כלום
     return ask('typed', 'replace-typed', { typedUnits: receiptNoteUnits, typedLines: receiptNoteLines, units: self.printedUnits, lines: self.printedLines });
   }
   // 10. קריאה שאישרה את עצמה — התעודה מתווספת כתעודה נוספת מאותו משלוח
@@ -13995,13 +14005,15 @@ function receivingDeliveryRoute(scan, paper, item, opts) {
     const pages = aiScanDocuments.reduce((a, d) => a + aiScanDocumentPageCount(d), 0);
     if (aiScanDocuments.length >= 4 || docs.length >= 4 || pages + 1 > 8) return { action: 'refuse', reason: 'full' };
     if (!selfOk) return ask('selfcheck', 'append');
-    return mine ? { action: 'append' } : ask('other-receiving', 'append');
+    // תעודה נוספת מאותו יום כמו הקליטה (או כמו תעודה שכבר בה) — אותו משלוח, נכנסת לבד
+    const sameDelivery = !!day && (day === recvDay || docs.some(d => priceAuditDate(d && d.docDate) === day));
+    return mine || (unbound && sameDelivery) ? { action: 'append' } : ask('other-receiving', 'append');
   }
   // 11. קריאה שלא אישרה את עצמה
-  if (resp) return better && (mine || opts.explicit) ? { action: 'replace' } : ask('replace-failed', 'replace');
-  // 12. אין קריאה: ממתינה לנייר, בלי נייר, צירוף, ספירה לפני צילום, או קריאה שנכשלה
+  if (resp) return better ? { action: 'replace' } : ask('replace-failed', 'replace'); // צילום אחר של אותה תעודה, שאישר את עצמו
+  // 12. אין קריאה: ממתינה לנייר, בלי נייר, צירוף, ספירה לפני צילום, או קריאה שנכשלה — מאותו יום נכנסת לבד
   if (mine) return { action: 'replace' };
-  if (unbound && sameDay && !receiptNoDoc && !receiptAttachTarget) return { action: 'replace' };
+  if (unbound && sameDay) return { action: 'replace' };
   return ask(receiptAttachTarget ? 'attach' : receiptNoDoc ? 'nodoc' : 'date', 'replace');
 }
 // הכנסת תעודת משלוח שנקראה לטיוטה — אותה צורה בדיוק שהקליטה בונה אחרי קריאה משלה, בלי
@@ -14169,8 +14181,6 @@ async function receivingJoinDeliveryNow({ paperId, cap, item, explicit, force, s
       if (shared && !(Array.isArray(per) && per.some(p => p && p.paperId === paperId))) return queue(said('wait', { reason: 'busy' }), src);
       paperJoinPending.delete(paperId);
       setJoin({ state: res.ok ? 'joined' : 'joined-failed', draftId: receiptDraftId });
-      // שאר תעודות המשלוח של אותו סבב — לאותה קליטה
-      if (item && paperIntake && paperIntake.items.indexOf(item) !== -1) paperIntake.items.forEach(x => { if (x !== item && x.target === 'receiving' && x.forDraftId == null) x.forDraftId = receiptDraftId; });
       if (explicit && currentView !== 'receiving') setView('receiving');
       else if (currentView === 'receiving') renderReceiving();
       return res.ok ? 'joined' : 'joined-failed';
@@ -14210,61 +14220,49 @@ function paperJoinView(item, p) {
   if (j && j.text && j.state !== 'joined' && j.state !== 'joined-failed') return { text: j.text, tone: 'border-amber-200 bg-amber-50', cls: 'text-amber-800', waiting: j.state === 'wait' };
   return { text: 'זו תעודת משלוח — היא כבר נקראה. "לקליטה" מכניס אותה לקליטה כפי שנקראה' + nums + ', בלי לצלם שוב ובלי להקליד. הכמויות לא מוצגות — סופרים כרגיל.', tone: 'border-amber-200 bg-amber-50', cls: 'text-amber-800' };
 }
-// ===== v126: סבב ניירות מתוך הקליטה — "קרא והתחל לספור" =====
-// הספירה מתחילה מיד, והניירות נקראים ברקע. בקליטה חדשה הטלפון שמתחיל את הסבב מסמן אותה
-// "קוראת" (אותו מצב שטלפון ב-v125 מכיר כ"פענוח שרץ בטלפון אחר": ספינר, בלי קריאה בתשלום,
-// הסיום מחכה) ומחזיק את מנעול הקריאה עד סוף הסבב — המנעול נלקח אחרי שהקליטה קיבלה מזהה,
-// כי מנעול של מזהה אחר נזרק. סוף הסבב נשמר בקליטה לפני שהמנעול משתחרר.
+// ===== v126: "התחל לספור עכשיו" — בזמן שהניירות נקראים =====
+// הספירה נפתחת מיד, ותעודת המשלוח נכנסת אליה כשנקראה. הטלפון שפותח מסמן את הקליטה "קוראת" (אותו
+// מצב שטלפון ב-v125 מכיר כ"פענוח שרץ בטלפון אחר": ספינר, בלי קריאה בתשלום, הסיום מחכה) ומחזיק את
+// מנעול הקריאה עד סוף הסבב — המנעול נלקח אחרי שלקליטה יש מזהה (מנעול של מזהה אחר נזרק), וסוף
+// הסבב נשמר לפני שהמנעול משתחרר.
 let paperRoundEndPending = null;
-async function receivingBeginPaperRound(mode) {
-  const it = paperIntake; if (!it || it.starting) return;
-  it.starting = true;
-  try {
-    const toRead = () => it.items.filter(x => x.status === 'photo' || x.status === 'queued');
-    // סבב שכבר קורא — הצילומים החדשים מצטרפים אליו
-    if (it.busy) {
-      const d = it.bind ? it.bind.draftId : (receiptDraftId || null);
-      it.items.forEach(x => { if (x.target === 'receiving' && x.status === 'photo') x.forDraftId = d; });
-      setView('receiving'); return paperIntakeRun();
-    }
-    let owner = false;
-    if (canEditSharedReceipt()) {
+async function receivingCountNow() {
+  const it = paperIntake;
+  const canOpen = () => it && paperIntake === it && it.busy && !it.bind && receivingDraftEmpty() && canEditSharedReceipt() && !pendingReceipt && !reconcileData
+    && !sharedReceiptFinalizing && aiTotalPages() === 0 && !aiScanBusy && receiptPaperScanState !== 'running' && !scanLeaseLive();
+  let started = false;
+  if (canOpen() && !it.starting) {
+    it.starting = true;
+    try {
       try { await sharedFlush(); } catch (e) {}
-      owner = toRead().length > 0 && canEditSharedReceipt() && !pendingReceipt && !reconcileData && !sharedReceiptFinalizing && aiTotalPages() === 0
-        && !aiScanBusy && receiptPaperScanState !== 'running' && !scanLeaseLive() && !it.bind;
-    } else showToast('הקליטה המשותפת לא זמינה כרגע — הניירות נקראים, ותעודת המשלוח תיכנס לבד כשיחזור החיבור.', null, null, 4500);
-    if (owner) {
-      const fresh = !aiScanResponse && !(receiptNotes.length && receiptAnchorSource !== 'paper') && receiptPaperScanState !== 'summary-only';
-      const wasOpened = receiptOpened;
-      receiptOpened = true; receiptEntryMode = 'photo'; receiptNoDoc = false; editingNotes = false; receiptDupConfirmed = false; receiptLinesConfirmed = false;
-      if (!wasOpened) receiptCountingMode = receiptAttachTarget ? 'scan' : (mode === 'manual' ? 'manual' : 'scan');
-      if (it.docDate && !receiptAttachTarget) receiptDocDate = it.docDate;
-      if (fresh) {
+      if (canOpen()) {
+        receiptOpened = true; receiptEntryMode = 'photo'; receiptNoDoc = false; editingNotes = false; receiptDupConfirmed = false; receiptLinesConfirmed = false;
+        receiptCountingMode = 'scan';
         aiCloseOrientationReview(); aiScanSession++;
         receiptNotes = []; recomputeNoteTotal(); receiptAnchorSource = null;
         aiScanDocuments = []; aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAttemptCount = 0; aiScanAutoRotationNote = '';
         receiptPaperScanState = 'running'; receiptPaperScanProblems = [];
         aiScanBusy = true; aiScanProgressText = 'קורא את הניירות מהנהג' + (deviceName ? ' בטלפון ' + deviceName : '') + '…';
         aiScanBasis = { notes: aiScanNoteSignature(), lines: null };
+        saveReceiptDraft(); // נותן לקליטה מזהה
+        started = true;
+        // הסבב קשור לקליטה מיד (לפני כל המתנה) — כך שסוף הסבב תמיד מוריד את "קוראת"
+        const bind = { draftId: receiptDraftId, owner: true, fresh: true, token: null };
+        it.bind = bind;
+        it.items.forEach(x => { if (x.status === 'queued' || x.status === 'reading' || x.status === 'photo') x.forDraftId = bind.draftId; });
+        try { await sharedFlush(); } catch (e) {}
+        if (sharedReceiving) {
+          let token = null;
+          try { token = await sharedReceiving.acquireScan(); } catch (e) { /* מנעול של טלפון אחר — התעודה תחכה לו */ }
+          // הסבב נגמר בזמן שחיכינו למנעול — לא מחזיקים אותו
+          if (token && (paperIntake !== it || it.bind !== bind)) { try { await sharedReceiving.releaseScan(token); } catch (e) {} }
+          else if (token) { bind.token = token; sharedReceiptScanToken = token; }
+        }
       }
-      saveReceiptDraft(); // נותן לקליטה מזהה
-      try { await sharedFlush(); } catch (e) {}
-      it.bind = { draftId: receiptDraftId, owner: true, fresh, token: null };
-      if (sharedReceiving) { try { it.bind.token = await sharedReceiving.acquireScan(); sharedReceiptScanToken = it.bind.token; } catch (e) { /* מנעול של טלפון אחר — התעודה תחכה לו */ } }
-    } else if (canEditSharedReceipt() && receiptDraftId) it.bind = { draftId: receiptDraftId, owner: false };
-    const d = it.bind ? it.bind.draftId : (receiptDraftId || null);
-    it.items.forEach(x => { if (x.target === 'receiving' && (x.status === 'photo' || x.status === 'queued')) x.forDraftId = d; });
-    setView('receiving');
-    if (mode !== 'manual' && receiptOpened && !receiptAttachTarget && receiptCountingMode === 'scan' && canEditSharedReceipt()) openReceivingScanner();
-    // צילום חוזר של תעודת משלוח שכבר נקראה — נכנסת בלי קריאה
-    it.items.forEach(x => {
-      if (x.status !== 'dup' || x.target !== 'receiving' || !x.paperId || (x.join && x.join.state)) return;
-      const f = paperFind(x.paperId); if (!f || f.paper.kind !== 'delivery') return;
-      x.forDraftId = d;
-      receivingJoinDelivery({ paperId: x.paperId, cap: x.captureId, item: x, explicit: false }).catch(e => console.error('paper join failed', e));
-    });
-    return paperIntakeRun(); // לא מחכים לה בלחיצה — הספירה כבר פתוחה
-  } finally { it.starting = false; }
+    } finally { it.starting = false; }
+  }
+  setView('receiving');
+  if (started && canEditSharedReceipt()) openReceivingScanner(); // ספירה שנפתחה עכשיו — הסורק מיד
 }
 // סוף הסבב: הקליטה כבר לא "קוראת". בלי תעודת משלוח — אומרים זאת ונותנים דרכים להמשיך.
 async function receivingEndPaperRound(bind) {
@@ -14293,7 +14291,8 @@ async function receivingEndPaperRound(bind) {
 // נייר מהנהג עוד נקרא לקליטה הזאת: 'here' — בטלפון הזה; 'other' — בטלפון אחר; '' — לא
 function receivingPaperReadRunning() {
   const d = receiptDraftId;
-  if (d != null && paperIntake && paperIntake.busy && paperIntake.items.some(x => x.forDraftId === d && (x.status === 'queued' || x.status === 'reading'))) return 'here';
+  // נייר שנקרא עכשיו בטלפון הזה — אולי עוד תעודת משלוח של המשלוח הזה
+  if (d != null && paperIntake && paperIntake.busy && paperIntake.items.some(x => x.status === 'queued' || x.status === 'reading')) return 'here';
   if (d != null && Array.from(paperJoinPending.values()).some(j => j.item && j.item.forDraftId === d)) return 'here';
   if (scanLeaseOther()) return 'other';
   return '';
@@ -14386,30 +14385,21 @@ function renderPaperIntake() {
   if (!it) { setView('ledger'); return; }
   const R = it.forReturnId ? returns.find(r => r.id === it.forReturnId) : null;
   const waiting = it.items.filter(x => x.status === 'photo').length;
-  const toReceiving = it.target === 'receiving';
-  const off = it.preparing ? ' opacity-50 pointer-events-none' : '';
-  // v126: מתוך הקליטה — "קרא והתחל לספור": הספירה נפתחת מיד והניירות נקראים ברקע
-  const run = !waiting ? ''
-    : toReceiving ? '<button data-role="paper-run-receive" data-mode="scan" class="btn-tap w-full bg-emerald-600 text-white rounded-2xl py-4 font-black text-lg shadow-md mb-2"><i class="fa-solid fa-check"></i> ' + (receiptOpened ? 'הכל ישר — קרא וחזור לספירה' : 'הכל ישר — קרא והתחל לספור') + ' (' + waiting + ')</button>' +
-        (receiptOpened || it.busy ? '' : '<button data-role="paper-run-receive" data-mode="manual" class="btn-tap w-full min-h-[44px] bg-white border-2 border-emerald-300 text-emerald-800 rounded-2xl py-2.5 font-black text-sm mb-3">קרא — אבדוק את הכמויות ידנית מול הנייר</button>')
-    : '<button data-role="paper-run" class="btn-tap w-full bg-emerald-600 text-white rounded-2xl py-4 font-black text-lg shadow-md mb-3"><i class="fa-solid fa-check"></i> הכל ישר — קרא (' + waiting + ')</button>';
+  // v126: אפשר לספור כבר בזמן הקריאה (תעודת המשלוח תיכנס לבד), או לחזור לקליטה שכבר פתוחה
+  const open = !receivingDraftEmpty();
+  const count = open ? '<button data-role="paper-count-now" class="btn-tap w-full min-h-[48px] bg-blue-600 text-white rounded-2xl py-3 font-black mb-3"><i class="fa-solid fa-arrow-left"></i> לספירה</button>'
+    : it.busy ? '<button data-role="paper-count-now" class="btn-tap w-full min-h-[48px] bg-white border-2 border-blue-300 text-blue-800 rounded-2xl py-3 font-black text-sm mb-3"><i class="fa-solid fa-barcode"></i> יש סחורה לקלוט? התחל לספור עכשיו — תעודת המשלוח תיכנס לבד</button>' : '';
   app.innerHTML =
-    '<div class="px-1 py-1 mb-3"><h2 class="font-black text-2xl text-slate-800">' + (toReceiving ? 'הניירות מהנהג' : 'צלם נייר מהנהג') + '</h2>' +
+    '<div class="px-1 py-1 mb-3"><h2 class="font-black text-2xl text-slate-800">הניירות מהנהג</h2>' +
       '<div class="text-sm text-slate-600 mt-1">' + (R ? 'תעודת הזיכוי של ההחזרה מ-' + htmlEscape(ledgerDayShort(ledgerReturnDay(R))) + '. ' : '') +
-        (toReceiving ? '<b>נייר אחד בכל צילום.</b> תעודת המשלוח נכנסת לקליטה כשהיא כבר קרואה — רק "סה״כ כללי" ו"סה״כ שורות", בלי כמויות. זיכוי ונייר חיוב קטן — למאזן.'
-          : 'כל נייר שהנהג נתן — תעודת משלוח, חיוב, זיכוי, החזרה. <b>נייר אחד בכל צילום.</b> האפליקציה קוראת ומתאימה לבד.') + '</div></div>' +
+        '<b>נייר אחד בכל צילום</b> — עוד נייר? שוב "צלם נייר מהנהג" למעלה. כל נייר הולך לבד: תעודת המשלוח לקליטה (רק "סה״כ כללי" ו"סה״כ שורות", בלי כמויות), זיכוי ונייר חיוב — למאזן.</div></div>' +
     (it.note ? '<div class="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-xs font-bold text-amber-800 mb-3">' + htmlEscape(it.note) + '</div>' : '') +
-    '<div class="grid grid-cols-2 gap-2 mb-3">' +
-      '<label class="btn-tap bg-blue-600 text-white rounded-2xl py-4 font-black flex items-center justify-center gap-2 shadow-md cursor-pointer' + off + '"><i class="fa-solid fa-camera text-lg"></i> צלם<input id="paperCamInput" type="file" accept="image/*" capture="environment" class="hidden"></label>' +
-      '<label class="btn-tap bg-white border-2 border-slate-200 text-slate-700 rounded-2xl py-4 font-black flex items-center justify-center gap-2 cursor-pointer' + off + '"><i class="fa-solid fa-images"></i> מהגלריה<input id="paperGalInput" type="file" accept="image/*" multiple class="hidden"></label>' +
-    '</div>' +
     (it.preparing ? '<div class="text-xs font-black text-slate-500 text-center mb-2" role="status"><i class="fa-solid fa-spinner fa-spin"></i> מכין את התמונות…</div>' : '') +
-    run +
+    (waiting ? '<button data-role="paper-run" class="btn-tap w-full bg-emerald-600 text-white rounded-2xl py-4 font-black text-lg shadow-md mb-3"><i class="fa-solid fa-check"></i> הכל ישר — קרא (' + waiting + ')</button>' : '') +
     (it.progress ? '<div class="bg-slate-900 text-white rounded-full px-4 py-2.5 text-sm font-black text-center mb-3" role="status" aria-live="polite"><i class="fa-solid fa-spinner fa-spin"></i> ' + htmlEscape(it.progress) + '</div>' : '') +
-    '<div id="paperIntakeList" class="space-y-2 mb-3">' + it.items.map(paperIntakeItemHtml).join('') + '</div>' +
-    '<div class="text-[11px] text-slate-400 font-bold mb-2"><i class="fa-solid fa-circle-info"></i> תעודת משלוח שמצולמת כאן נכנסת לקליטה כשהיא כבר קרואה — בלי לצלם שוב ובלי להקליד.</div>' +
-    (toReceiving && !waiting ? '<button data-role="paper-goto-receiving" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-3 font-black mb-2"><i class="fa-solid fa-arrow-left"></i> לספירה</button>' : '') +
-    '<button data-role="ledger-open" class="btn-tap w-full bg-white border-2 border-slate-200 text-slate-700 rounded-2xl py-3 font-black mb-24"><i class="fa-solid fa-scale-balanced"></i> למאזן מול ברמן</button>';
+    count +
+    (it.items.length ? '' : '<div class="rounded-xl bg-blue-50 border border-blue-200 p-3 mb-3 text-xs font-black text-blue-800"><i class="fa-solid fa-arrow-up" aria-hidden="true"></i> צלם נייר בכפתור "צלם נייר מהנהג" למעלה.</div>') +
+    '<div id="paperIntakeList" class="space-y-2 mb-24">' + it.items.map(paperIntakeItemHtml).join('') + '</div>';
 }
 function refreshPaperIntake() { if (currentView === 'paperIntake') renderPaperIntake(); }
 
@@ -14706,13 +14696,13 @@ function renderLedger() {
     '<div class="flex items-start justify-between gap-2 px-1 py-1 mb-3"><div><h2 class="font-black text-2xl text-slate-800">מאזן מול ברמן</h2>' +
       '<div class="text-xs text-slate-500 font-bold mt-0.5">מה שחויב וזוכה בניירות, מול מה שנקלט והוחזר — מ-' + htmlEscape(ledgerDayShort(lg.start)) + '</div>' +
       (limited && !ledgerClosedThrough ? '<div class="text-[11px] text-amber-700 font-bold mt-0.5">מוצגות 100 הקליטות האחרונות, ולכן המאזן מתחיל ב-' + htmlEscape(ledgerDayShort(lg.start)) + '.</div>' : '') + '</div>' +
-      '<button data-role="paper-photo" class="btn-tap shrink-0 min-h-[44px] bg-blue-600 text-white rounded-xl px-3 py-2.5 font-black text-sm shadow"><i class="fa-solid fa-camera"></i> צלם נייר</button></div>' +
+      '</div>' + // v126: צילום — בכפתור שבפס העליון, כמו בכל מסך
     (main.length || conflicts.length ? '<div class="space-y-2 mb-4">' + conflicts.map(ledgerConflictCardHtml).join('') + main.map(it => ledgerItemCardHtml(it, lg, all)).join('') + '</div>'
       : '<div class="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-center mb-4"><div class="text-emerald-800 font-black"><i class="fa-solid fa-circle-check"></i> הכל מאוזן</div><div class="text-xs text-emerald-700 font-bold mt-1">כל מה שחויב וזוכה תואם למה שנקלט והוחזר.</div></div>') +
     (pending.length ? '<details class="mb-3"><summary class="font-black text-sm text-slate-600 cursor-pointer px-1 py-3">ממתין (' + pending.length + ')</summary><div class="space-y-2 mt-2">' + pending.map(it => ledgerItemCardHtml(it, lg, all)).join('') + '</div></details>' : '') +
     (info.length ? '<details class="mb-3"><summary class="font-black text-sm text-slate-600 cursor-pointer px-1 py-3">לידיעה (' + info.length + ')</summary><div class="space-y-2 mt-2">' + info.map(it => ledgerItemCardHtml(it, lg, all)).join('') + '</div></details>' : '') +
     '<div class="bg-white border border-slate-200 rounded-2xl p-3 mb-3"><div class="font-black text-slate-700 mb-1">ניירות אחרונים</div>' +
-      (recent.length ? recent.map(paperRow).join('') : '<div class="text-xs text-slate-400 font-bold py-2">עוד לא צולם נייר. כל נייר שהנהג נותן — צלם אותו כאן.</div>') +
+      (recent.length ? recent.map(paperRow).join('') : '<div class="text-xs text-slate-400 font-bold py-2">עוד לא צולם נייר. כל נייר שהנהג נותן — צלם אותו בכפתור "צלם נייר מהנהג" למעלה.</div>') +
       (all.filter(p => p.kind !== 'declared').length > 12 && !ledgerShowAll ? '<button data-role="ledger-all" class="btn-tap w-full min-h-[44px] mt-2 py-2 rounded-lg bg-slate-50 text-slate-600 text-xs font-black">הצג הכל</button>' : '') + '</div>' +
     (answers.length ? '<details class="mb-24"><summary class="font-black text-sm text-slate-600 cursor-pointer px-1 py-3">התשובות שלך (' + answers.length + ')</summary><div class="bg-white border border-slate-200 rounded-2xl p-3 mt-2">' +
       answers.map(p => '<div class="flex items-center justify-between gap-2 py-1.5 border-b border-slate-100 last:border-0"><div class="text-xs font-bold text-slate-600">' + htmlEscape(ledgerDeclarationText(p, lg)) + '</div><button data-role="ledger-undo" data-id="' + htmlEscape(p.id) + '" class="btn-tap shrink-0 min-h-[44px] px-3 py-1 rounded-lg bg-slate-100 text-slate-600 text-xs font-black">בטל</button></div>').join('') + '</div></details>' : '<div class="h-24"></div>');
@@ -14766,32 +14756,46 @@ function ledgerDocLineHtml(id) {
 // הפס שמתחת לכותרת: צילום נייר ומצב המאזן, בכל מסכי העבודה
 function refreshLedgerBar() {
   const el = document.getElementById('ledgerBar'); if (!el) return;
-  const show = ['receiving', 'returns', 'manage', 'receiptsHistory'].indexOf(currentView) !== -1;
+  // v126: המקום האחד לכל נייר מהנהג — באותו מקום בכל מסך עבודה (גם בקליטה, במאזן ובמסך הניירות)
+  const show = ['receiving', 'returns', 'manage', 'receiptsHistory', 'ledger', 'paperIntake'].indexOf(currentView) !== -1;
   if (!show) { el.innerHTML = ''; return; }
   let n = 0, failed = false;
   try { n = currentLedger().count + paperLocalConflicts().length; } catch (e) { failed = true; console.error('ledger failed', e); }
   const tone = failed ? 'bg-slate-100 border-2 border-slate-200 text-slate-600' : n ? 'bg-amber-500 text-white' : 'bg-emerald-50 border-2 border-emerald-200 text-emerald-800';
-  // v126: במסך הקליטה יש כפתור ניירות משלו
-  el.innerHTML = '<div class="flex gap-2">' + (currentView === 'receiving' ? '' : '<button data-role="paper-photo" class="btn-tap flex-1 min-h-[44px] bg-white border-2 border-blue-200 text-blue-700 rounded-xl py-2.5 font-black text-sm flex items-center justify-center gap-1.5"><i class="fa-solid fa-camera"></i> צלם נייר מהנהג</button>') +
-    '<button data-role="ledger-open" class="btn-tap flex-1 min-h-[44px] rounded-xl py-2.5 font-black text-sm flex items-center justify-center gap-1.5 ' + tone + '"><i class="fa-solid fa-scale-balanced"></i> ' + (failed ? 'מאזן — לא חושב' : n ? 'מאזן: ' + n + ' לטיפול' : 'מאזן ✓') + '</button></div>';
+  el.innerHTML = '<div class="flex gap-2">' +
+    '<button data-role="paper-photo" class="btn-tap flex-1 min-w-0 min-h-[48px] bg-blue-600 text-white rounded-xl py-2.5 font-black text-sm flex items-center justify-center gap-1.5 shadow"><i class="fa-solid fa-camera"></i> צלם נייר מהנהג</button>' +
+    '<button data-role="paper-gallery" aria-label="בחר תמונות של ניירות מהגלריה" class="btn-tap shrink-0 min-w-[48px] min-h-[48px] bg-white border-2 border-blue-200 text-blue-700 rounded-xl flex items-center justify-center"><i class="fa-solid fa-images"></i></button>' +
+    (currentView === 'ledger' ? '' : '<button data-role="ledger-open" class="btn-tap flex-1 min-w-0 min-h-[48px] rounded-xl py-2.5 font-black text-sm flex items-center justify-center gap-1.5 ' + tone + '"><i class="fa-solid fa-scale-balanced"></i> ' + (failed ? 'מאזן — לא חושב' : n ? 'מאזן: ' + n + ' לטיפול' : 'מאזן ✓') + '</button>') + '</div>';
+}
+// הצילום עצמו: הכפתור בפס פותח את המצלמה (או את הגלריה) של כל האפליקציה, והקבצים נכנסים למסך הניירות
+function paperOpenCamera(gallery) {
+  const input = document.getElementById(gallery ? 'paperGalGlobal' : 'paperCamGlobal');
+  if (input && typeof input.click === 'function') input.click(); else openPaperIntake({});
+}
+function paperPhotoFiles(files) {
+  files = Array.from(files || []);
+  if (!files.length) return;
+  openPaperIntake({});
+  return paperIntakeAddFiles(files);
 }
 // לחיצות על כל רכיבי הניירות והמאזן — גם מהפס שמחוץ ל-app
 function paperUiClick(t) {
   const role = t.dataset.role, id = t.dataset.id;
-  if (role === 'paper-photo') { openPaperIntake({ forReturnId: id || t.dataset.return || '' }); return true; }
+  // v126: המקום האחד לכל נייר — המצלמה (או הגלריה) של כל האפליקציה
+  if (role === 'paper-photo' || role === 'ledger-photo') { paperOpenCamera(false); return true; }
+  if (role === 'paper-gallery') { paperOpenCamera(true); return true; }
+  if (role === 'paper-count-now') { receivingCountNow(); return true; }
   if (role === 'ledger-open') { setView('ledger'); return true; }
   if (role === 'ledger-all') { ledgerShowAll = true; renderLedger(); return true; }
   if (role === 'paper-rotate') { paperIntakeRotate(id); return true; }
   if (role === 'paper-remove') { paperIntakeRemove(id); return true; }
   if (role === 'paper-run') { paperIntakeRun(); return true; }
-  if (role === 'paper-run-receive') { receivingBeginPaperRound(t.dataset.mode || 'scan'); return true; }
   if (role === 'paper-goto-intake') { if (paperIntake) setView('paperIntake'); return true; }
   if (role === 'paper-retry') { const item = paperIntake && paperIntake.items.find(x => x.captureId === id); if (item && item.page && item.status === 'error') { item.status = 'photo'; paperIntakeRun(); } return true; }
   if (role === 'paper-open' || role === 'ledger-paper-open') { openPaperReview(id || t.dataset.paper, t.dataset.cap); return true; }
   if (role === 'paper-conflict-keep') { paperResolveConflict(t.dataset.cap, true); return true; }
   if (role === 'paper-conflict-drop') { paperResolveConflict(t.dataset.cap, false); return true; }
   if (role === 'ledger-undo') { undoLedgerDeclaration(id).then(() => { if (currentView === 'ledger') renderLedger(); refreshLedgerBar(); }); return true; }
-  if (role === 'ledger-photo') { openPaperIntake({ forReturnId: t.dataset.return || '' }); return true; }
   // v126: "לקליטה" — התעודה כבר נקראה; היא נכנסת לקליטה כפי שנקראה, בלי קריאה חדשה ובלי להקליד
   if (role === 'ledger-start-receiving') {
     const pid = t.dataset.paper || id;
@@ -16282,8 +16286,8 @@ function renderReceiptsHistory() {
         ((rc.noteTotalInc != null || paperNumbers.length) ? '<div class="text-[11px] text-slate-400 font-bold mt-1 px-1"><i class="fa-solid fa-file-invoice"></i> ' + (paperNumbers.length ? 'תעודה ' + paperNumbers.map(htmlEscape).join(', ') + ' · ' : (rc.noteParts && rc.noteParts.length > 1 ? rc.noteParts.length + ' תעודות ספק · ' : 'תעודת ספק · ')) + (rc.noteTotalInc != null ? 'סכום מודפס ₪' + fmtMoney(rc.noteTotalInc) + ' (לזיהוי בלבד)' : '') + '</div>' : '') +
         (di.awaitingDoc ? '<div class="mt-2 bg-amber-50 border-2 border-amber-300 rounded-xl p-3">' +
           '<div class="font-black text-amber-900 text-sm mb-1"><i class="fa-solid fa-file-circle-xmark"></i> נקלטה בלי תעודה</div>' +
-          '<div class="text-[11px] font-bold text-amber-800 leading-relaxed mb-2">הכמויות כאן הן מה שנספר בפועל — אין נייר לאמת מולו, ולכן אי אפשר לתבוע מהספק חוסר. כשהתעודה תגיע, צלם אותה כאן והבדיקה הרגילה תרוץ מול הספירה הזאת.</div>' +
-          '<button data-role="rc-attach-doc" data-id="' + rc.id + '" class="btn-tap w-full bg-amber-500 text-white rounded-xl py-2.5 font-black text-sm"><i class="fa-solid fa-camera-retro"></i> התעודה הגיעה — צלם וצרף</button>' +
+          '<div class="text-[11px] font-bold text-amber-800 leading-relaxed mb-2">הכמויות כאן הן מה שנספר בפועל — אין נייר לאמת מולו, ולכן אי אפשר לתבוע מהספק חוסר. כשהתעודה תגיע, צלם אותה בכפתור "צלם נייר מהנהג" למעלה — האפליקציה תציע לצרף אותה לקליטה הזאת, והבדיקה הרגילה תרוץ מול הספירה.</div>' +
+          '<button data-role="rc-attach-doc" data-id="' + rc.id + '" class="btn-tap w-full min-h-[44px] bg-amber-500 text-white rounded-xl py-2.5 font-black text-sm"><i class="fa-solid fa-paperclip"></i> התעודה הגיעה — צרף אותה</button>' +
         '</div>' : '') +
         (fixOpen ? '<div class="mt-2 bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs">' +
           '<div class="font-black text-rose-700 mb-1"><i class="fa-solid fa-triangle-exclamation"></i> הפרשים מול התעודה</div>' +
@@ -19816,6 +19820,8 @@ $('sendModal').addEventListener('click', (e) => { const b = e.target.closest('[d
 
 // v125: הפס של הניירות והמאזן יושב מחוץ ל-app
 (() => { const bar = document.getElementById('ledgerBar'); if (bar) bar.addEventListener('click', e => { const t = e.target.closest('[data-role]'); if (t) paperUiClick(t); }); })();
+// v126: המצלמה והגלריה של הניירות — קלטים קבועים מחוץ למסך, כך שעדכון של המסך בזמן הצילום לא מאבד אותו
+['paperCamGlobal', 'paperGalGlobal'].forEach(id => { const input = document.getElementById(id); if (input) input.addEventListener('change', () => { const files = Array.from(input.files || []); input.value = ''; paperPhotoFiles(files); }); });
 app.addEventListener('input', (e) => {
   const t = e.target; const role = t.getAttribute && t.getAttribute('data-role');
   if ((currentView === 'paperReview') && paperUiInput(t)) return; // v125
@@ -19888,15 +19894,6 @@ app.addEventListener('change', (e) => {
   if (t && t.getAttribute && t.getAttribute('data-role') === 'rc-qty') { refreshReceipt(); return; }
   if (t && t.id === 'backupImportFile') { handleBackupFile(t.files && t.files[0]); return; }
   if (t && (t.id === 'paperCamInput' || t.id === 'paperGalInput')) { const files = Array.from(t.files || []); t.value = ''; paperIntakeAddFiles(files); return; } // v125
-  // v126: כפתור הניירות במסך הקליטה — הצילום נכנס לקליטת הניירות, שמכוונת לקליטה הזאת
-  if (t && t.closest && t.closest('[data-role="rc-paper-cam"]') && t.type === 'file') {
-    const files = Array.from(t.files || []); t.value = '';
-    if (!files.length) return;
-    const dateEl = $('rcDocDate');
-    openPaperIntake({ target: 'receiving', docDate: !receiptOpened && dateEl ? ((dateEl.value || '').trim() || null) : undefined });
-    paperIntakeAddFiles(files);
-    return;
-  }
   if (t && (t.id === 'promoSheetFile' || t.id === 'promoSheetCam')) { const files = Array.from(t.files || []); t.value = ''; promoImportFromFiles(files); return; } // v13; v24: גם מסלול המצלמה
   if (t && t.getAttribute && t.getAttribute('data-role') === 'ai-file') {
     const docIndex = parseInt(t.dataset.doc, 10);
@@ -20104,7 +20101,7 @@ app.addEventListener('click', (e) => {
   // צילום חוזר אחרי שהנייר לא אישר את עצמו — מוחק את הצילומים ומחזיר לשלב הצילום
   else if (role === 'rc-paper-rescan') { bermanSeedPhotoFirstScan(1); receiptEntryMode = 'photo'; receiptOpened = false; saveReceiptDraft(); renderReceiving(); }
   else if (role === 'rc-open') { receiptCountingMode = 'scan'; const en = readNoteEntry(receiptNotes.length === 0); if (en === false) return; if (en) receiptNotes.push(en); noteEntryKind = 'charge'; recomputeNoteTotal(); if (!receiptNetPositive()) { showToast(receiptNetProblemText(), null, null, 5000); saveReceiptDraft(); refreshReceipt(); return; } receiptDocDate = (($('rcDocDate') || {}).value || '').trim() || null; recomputeNoteTotal(); receiptOpened = true; receiptAnchorSource = 'manual'; receiptDupConfirmed = false; receiptLinesConfirmed = false; saveReceiptDraft(); refreshReceipt(); if (!receiptAttachTarget) openReceivingScanner(); }
-  else if (role === 'rc-cancel') { showConfirm('ביטול תעודה', 'לבטל את התעודה הנוכחית? כל הפריטים שנסרקו יימחקו.', 'בטל תעודה', () => { rcMultiPhotoWanted = false; receiptList = []; receiptQuantityReview = null; receiptCountingMode = 'scan'; receiptNotes = []; receiptDocDate = null; receiptDraftId = null; receiptEntryMode = 'photo'; receiptAnchorSource = null; receiptPaperScanState = ''; receiptPaperScanProblems = []; recomputeNoteTotal(); receiptOpened = false; editingNotes = false; reconcileData = null; receiptDupConfirmed = false; receiptLinesConfirmed = false; receiptNoDoc = false; receiptAttachTarget = null; resetAiInvoiceScan(); saveReceiptDraft(); setView('receiving'); }); } // v25: ביטול תעודה משחרר גם את צילומי הסריקה
+  else if (role === 'rc-cancel') { showConfirm('ביטול תעודה', 'לבטל את התעודה הנוכחית? כל הפריטים שנסרקו יימחקו.', 'בטל תעודה', () => { rcMultiPhotoWanted = false; paperJoinPending.clear(); receiptList = []; receiptQuantityReview = null; receiptCountingMode = 'scan'; receiptNotes = []; receiptDocDate = null; receiptDraftId = null; receiptEntryMode = 'photo'; receiptAnchorSource = null; receiptPaperScanState = ''; receiptPaperScanProblems = []; recomputeNoteTotal(); receiptOpened = false; editingNotes = false; reconcileData = null; receiptDupConfirmed = false; receiptLinesConfirmed = false; receiptNoDoc = false; receiptAttachTarget = null; resetAiInvoiceScan(); saveReceiptDraft(); setView('receiving'); }); } // v25: ביטול תעודה משחרר גם את צילומי הסריקה
   else if (role === 'rc-note-add') { const en = readNoteEntry(true); if (en === false) return; if (en) { receiptNotes.push(en); noteEntryKind = 'charge'; recomputeNoteTotal(); saveReceiptDraft(); } refreshReceipt(); const inp = $('rcNoteInput'); if (inp) inp.focus(); }
   // v51: הבורר אינו בונה את המסך מחדש — רק מסמן את עצמו. כך אפשר להקליד
   // סכום, להיזכר שזו תעודת זיכוי וללחוץ מינוס בלי לאבד את מה שכבר הוקלד.
@@ -20543,8 +20540,6 @@ async function finishSharedReceipt(id, data) {
 function sharedReceiptEventTouchesWorkflow(target) {
   if (!target || !target.closest) return false;
   if (target.closest('#sharedReceivingBanner')) return false;
-  // v126: מצלמת הניירות אינה עריכה של הקליטה — עובדת גם כשהקליטה לקריאה בלבד (התעודה נכנסת אחר כך)
-  if (target.closest('[data-role="rc-paper-cam"]')) return false;
   if (target.closest('#app') && ['receiving', 'reconcile'].includes(currentView)) return true;
   if (target.closest('#receiptSummaryModal, #receiptQuantityModal, #aiOrientationModal, #aiLiveCameraModal')) return true;
   if (target.closest('#qtyModal') && qtyTarget === 'receipt') return true;
@@ -20567,7 +20562,7 @@ function guardSharedReceiptEvent(event) {
   // Pure navigation and closing a read-only photo remain available.
   const role = event.target.closest('[data-role]')?.dataset.role;
   const id = event.target.closest('[id]')?.id;
-  if (['rc-history', 'rc-recon-cancel', 'paper-photo', 'ledger-open', 'rc-paper-cam', 'paper-goto-intake'].includes(role) || ['receiptQuantityClose', 'rs_cancel', 'qty_cancel', 'scanClose', 'confirmCancel'].includes(id)) return;
+  if (['rc-history', 'rc-recon-cancel', 'paper-photo', 'ledger-open', 'paper-goto-intake', 'paper-count-now'].includes(role) || ['receiptQuantityClose', 'rs_cancel', 'qty_cancel', 'scanClose', 'confirmCancel'].includes(id)) return;
   if (['aiOrientationConfirm', 'aiOrientationCancel'].includes(id) && aiOrientationSession?.reviewOnly) return;
   event.preventDefault(); event.stopImmediatePropagation(); sharedReceiptReadOnlyNotice();
 }
