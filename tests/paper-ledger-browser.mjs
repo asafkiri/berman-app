@@ -69,12 +69,17 @@ try {
   await page.goto(url);
   await page.waitForFunction(() => window.t && window.t.loaded);
   // הפס — v126: המקום האחד לכל נייר, באותו מקום בכל מסך (גם בקליטה)
-  assert.match(await page.locator('#ledgerBar').innerText(), /צלם נייר מהנהג[\s\S]*מאזן: 2 לטיפול/);
+  // v129: בפס רק המצלמה; מה שפתוח — משפט לכל דבר במסך הקליטה
+  assert.match(await page.locator('#ledgerBar').innerText(), /צלם נייר מהנהג/);
+  assert.doesNotMatch(await page.locator('#ledgerBar').innerText(), /מאזן/);
+  const home = await page.locator('#app').innerText();
+  assert.match(home, /2 דברים לטיפול מול ברמן[\s\S]*חויבת פעמיים על לחמניות 10 בשקית ×2/);
+  assert.doesNotMatch(home, /תעודות עם הפרש פתוח/);
   assert.equal(await page.locator('#app input[type="file"]').count(), 0, 'במסך עצמו אין מצלמה');
   await page.evaluate(() => window.t.go('returns'));
-  assert.match(await page.locator('#ledgerBar').innerText(), /צלם נייר מהנהג[\s\S]*מאזן: 2 לטיפול/);
+  assert.doesNotMatch(await page.locator('#ledgerBar').innerText(), /מאזן/);
   await page.evaluate(() => window.t.go('receiving'));
-  await page.locator('#ledgerBar [data-role="ledger-open"]').click();
+  await page.locator('#app [data-role="ledger-open"]', { hasText: 'חויבת פעמיים' }).click();
   assert.equal(await page.evaluate(() => window.t.view()), 'ledger');
   assert.match(await page.locator('#ledgerBar').innerText(), /צלם נייר מהנהג/, 'גם במסך המאזן — אותו כפתור');
   assert.doesNotMatch(await page.locator('#ledgerBar').innerText(), /מאזן:/, 'בלי כפתור המאזן במסך המאזן עצמו');
