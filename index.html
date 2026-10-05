@@ -2147,6 +2147,7 @@ function actionTitleFromCloud(actionName, task) {
     'save app config': ['settings', 'שמירת הגדרות מערכת'],
     'create promo': ['promo', 'יצירת מבצע'],
     'adopt invoice price': ['price', 'אימוץ מחיר מהחשבונית'],
+    'save product invoice price': ['price', 'שינוי מחיר חשבונית (ניסיון חוזר)'],
     'save promo': ['promo', 'שמירת מבצע'],
     'restore from trash': ['restore', 'שחזור מסל מחזור'],
     'delete trash item': ['delete', 'מחיקה לצמיתות מסל מחזור'],
@@ -2178,10 +2179,10 @@ function actionDetailsFromCloud(actionName, task) {
   if (actionName === 'split credit note to shortage' || actionName === 'cancel credit note split') return (task && task.summary) || '';
   if (actionName === 'add product' || actionName === 'create product' || actionName === 'save product') return d.name ? ('מוצר: ' + d.name + ' · מומלץ: ' + (d.average || 0) + ' · ברירת מחדל: ' + (d.defaultUnit === 'unit' ? 'יחידות' : 'ארגז')) : '';
   if (actionName === 'sync legacy default units') return 'סונכרנו בחירות ארגז/יחידה מהמכשיר הזה לענן';
-  if (actionName === 'adopt invoice price') {
+  if (actionName === 'adopt invoice price' || actionName === 'save product invoice price') {
     const id = task && task.path ? task.path[task.path.length - 1] : '';
     const p = products.find(x => x.id === id);
-    const last = (d.priceHistory || []).slice(-1)[0];
+    const last = (task && task.priceEntry) || (d.priceHistory || []).slice(-1)[0];
     return (p ? p.name + ' · ' : '') + (last ? '₪' + fmt3(last.price) + ' מ-' + dDisp(last.from) : '');
   }
   if (actionName === 'add contact') return d.name ? ('איש קשר: ' + d.name + ' · ' + (d.phone || '')) : '';
@@ -2566,7 +2567,7 @@ function buildSystemHealth() {
     status: openReceipts.length ? 'warn' : 'ok',
     title: 'תעודות עם הפרש פתוח',
     text: openReceipts.length ? ('יש ' + openReceipts.length + ' תעודות קליטה עם חוסר/עודף שלא נסגר.') : 'אין תעודות קליטה עם הפרש פתוח.',
-    detail: openReceipts.length ? (function () { const b = receiptsBalance(); return 'חוסר ' + mtxQty(b.shortUnits) + ' יח׳ · עודף ' + mtxQty(b.overUnits) + ' יח׳'; })() : '',
+    detail: openReceipts.length ? (function () { const b = receiptsBalance(); return ['חוסר ' + mtxQty(b.shortUnits) + ' יח׳ · עודף ' + mtxQty(b.overUnits) + ' יח׳', b.gapUnits > 0 ? mtxQty(b.gapUnits) + ' יח׳ בנייר שטרם שויכו' : '', b.gapExtra > 0 ? mtxQty(b.gapExtra) + ' יח׳ מעבר לנייר' : '', b.awaiting > 0 ? b.awaiting + ' ממתינות לנייר' : ''].filter(Boolean).join(' · '); })() : '',
     actionRole: openReceipts.length ? 'health-go-receipts' : null,
     actionText: 'תעודות'
   });
@@ -4834,7 +4835,9 @@ function removeCloudFailedWrite(id) {
   cloudFailedWrites = cloudFailedWrites.filter(x => x.id !== id);
   saveCloudFailedWrites();
 }
-function clearSupersededProductFailedWrites(productId) {
+// newFrom: התאריך שהשמירה החדשה קבעה לו מחיר (או null). רשומה ישנה בתור לאותו תאריך
+// נדרסת על ידיה ויורדת; רשומה לתאריך אחר נשארת כפעולה משלה.
+function clearSupersededProductFailedWrites(productId, newFrom) {
   if (!productId) return;
   delete pendingUnitIntents[productId];
   if (!cloudFailedWrites.length) return;
@@ -4857,7 +4860,7 @@ function clearSupersededProductFailedWrites(productId) {
       changed = true;
       // v124: השמירה החדשה מחליפה את שדות המוצר, לא את המחיר המתוארך שבתור — הוא נשאר
       // כפעולה משלו וימוזג לענן בניסיון הבא
-      if (task.priceEntry) { item.task = { op: 'price-entry', path: task.path, priceEntry: task.priceEntry, operationId: task.operationId }; item.actionName = 'save product invoice price'; return true; }
+      if (task.priceEntry && task.priceEntry.from !== newFrom) { item.task = { op: 'price-entry', path: task.path, priceEntry: task.priceEntry, operationId: task.operationId }; item.actionName = 'save product invoice price'; return true; }
       return false;
     }
     return true;
@@ -4927,7 +4930,11 @@ async function executePriceEntryTask(task) {
   const history = await runTransaction(db, async tx => {
     const snap = await tx.get(ref);
     if (!snap.exists()) throw new Error('המוצר לא נמצא בענן');
-    const h = priceHistoryWith(snap.data(), e.from, e.price, e.source || null);
+    const cur = snap.data() || {};
+    // רשומה לאותו תאריך שנכתבה אחרי זו (ממכשיר אחר) גוברת — ניסיון חוזר ישן אינו דורס אותה
+    const stamp = s => Number(s && (s.at || s.adoptedAt)) || 0;
+    const same = (Array.isArray(cur.priceHistory) ? cur.priceHistory : []).find(h => h && String(h.from) === String(e.from));
+    const h = same && stamp(same.source) > stamp(e.source) ? cur.priceHistory : priceHistoryWith(cur, e.from, e.price, e.source || null);
     tx.update(ref, { ...(task.op === 'update' ? (task.data || {}) : {}), priceHistory: h });
     return h;
   });
@@ -12215,10 +12222,15 @@ function productInvoicePriceUnverified(p) {
   return !!p && p.discountSet === false && !(Array.isArray(p.priceHistory) && p.priceHistory.some(h => h && Number(h.price) > 0));
 }
 // v124: שדות תאימות למכשיר ב-v123, שמחשב בשמירת מוצר price = מחירון × (1 − אחוז):
-// האחוז נגזר מהמחיר הבסיסי, כך שהחישוב שלו מחזיר אותו מחיר. אינם נקראים ב-v124.
+// האחוז נגזר מהמחיר הבסיסי, כך שהחישוב שלו מחזיר את הבסיס בקירוב (האחוז שלו בשתי
+// ספרות — סטייה של עד מחירון × 0.00005, כלומר לכל היותר אלפית במחיר החשבונית). אינם
+// נקראים ב-v124. מחיר מעל המחירון אינו ניתן לייצוג ב-v123 (אחוז שלילי חוסם שם שמירה)
+// — אז לא נכתב דבר.
 function productCompatDiscount(price, listPrice) {
   const pr = Number(price) || 0, lp = Number(listPrice) || 0;
-  return pr > 0 && lp > 0 ? { discountPct: Math.round((1 - pr / lp) * 10000) / 100, discountSet: true } : {};
+  if (!(pr > 0 && lp > 0)) return {};
+  const pct = Math.round((1 - pr / lp) * 10000) / 100;
+  return pct >= 0 && pct < 100 ? { discountPct: pct, discountSet: true } : {};
 }
 function productInvoiceDiscountPct(p, day) {
   const list = productListPrice(p), price = priceAt(p, day || todayStr());
@@ -12407,7 +12419,7 @@ function mtxRowFlags(row) {
     (row.prices.length > 1 ? ' <i class="fa-solid fa-arrow-right-arrow-left text-amber-600" title="המחיר השתנה בתוך התקופה (מחיר חדש או מבצע שהתחיל באמצע) — בחשבונית מופיע מחיר אחד לשורה"></i>' : '') +
     (row.openUnits > 0 ? ' <span class="text-[10px] font-black text-rose-600">חסר ' + mtxQty(row.openUnits) + ' יח׳ שטרם זוכה</span>' : '') +
     (row.openUnits < 0 ? ' <span class="text-[10px] font-black text-amber-600">+' + mtxQty(-row.openUnits) + ' יח׳ מעבר לחיוב</span>' : '') +
-    // v123: שורה ידנית בלי מוצר במאגר — הכמות נספרת, אבל אין לה מחיר בחשבון החודש
+    // v124: מוצר בלי מחיר (ידני שאינו במאגר, או מוצר בקטלוג בלי מחיר) — הכמות נספרת, אבל לא הכסף
     (row.unpriced ? ' <span class="text-[10px] font-black text-amber-600" title="אין מחיר למוצר (מוצר ידני שאינו במאגר, או מוצר בלי מחיר בכרטיס) — הכמות נספרת אבל לא הכסף; קבע מחיר בכרטיס המוצר או השווה מול החשבונית ידנית">ללא מחיר</span>' : '');
 }
 // התצוגה הראשית: שורה לכל מוצר על כל רוחב המסך, בלי גלילה לצדדים —
@@ -12667,6 +12679,9 @@ function receiptDiscrepancyInfo(rc, opts) {
   // קיזוז בין תעודות נשמר ברמת מוצר וכמות. הוא צורך רק את ההפרש שאושר,
   // ולעולם אינו מסתיר חוסר/עודף אחר שנשאר באותה תעודה.
   const externalOffsets = opts.skipExternal ? [] : consumeStoredReceiptOffsets(rc, shortItems, overItems);
+  // v124: קיזוז לפי שווי צורך כמות שברית (סכום ÷ מחיר); שארית של פחות מ-0.01 יח׳ אינה
+  // פער — אחרת התעודה נשארה פתוחה לנצח על ₪0.00 שאי אפשר לקזז שוב. כמויות אמיתיות שלמות.
+  shortItems.concat(overItems).forEach(it => { const n = Number(it.n) || 0; if (n > 0 && n < 0.01) it.n = 0; });
   // v123: זיכוי החוסר — כלל אחד לסגירת התעודה, להצעה בחלון "התקבל בזיכוי" ולמרכזת
   // (receiptCreditedShortUnits). קודם הזיכוי ביחידות (shortCreditUnits — סומן ביחידות,
   // או קישור לתעודת חזרות): הוא מפורש לפי מוצר. אחריו הזיכוי הכספי הישן (לפני v123)
@@ -12737,7 +12752,7 @@ function receiptDiscrepancyInfo(rc, opts) {
 // v124: מאזן הסחורה ביחידות בלבד (כמו returnsBalance) — הכסף במרכזת החודשית
 // שאריות של אלפיות יחידה (קיזוז לפי שווי ישן) אינן חוסר: מתחת ל-0.01 נחשב 0
 function receiptsBalance() {
-  let n = 0, shortUnits = 0, overUnits = 0, shortDocs = 0, gapUnits = 0, awaiting = 0;
+  let n = 0, shortUnits = 0, overUnits = 0, shortDocs = 0, gapUnits = 0, gapExtra = 0, awaiting = 0;
   const u = v => { const x = Math.round((Number(v) || 0) * 100) / 100; return x >= 0.01 ? x : 0; };
   receipts.forEach(rc => {
     const di = receiptDiscrepancyInfo(rc);
@@ -12745,10 +12760,12 @@ function receiptsBalance() {
     n++;
     const s = di.shortFullyCredited ? 0 : u(di.shortUnits);
     shortUnits += s; overUnits += u(di.overUnits); if (s > 0) shortDocs++;
-    gapUnits += Math.abs(Number(di.unresolvedUnitsGap) || 0);
+    // פער יחידות שלא שויך: חיובי — בנייר יותר ממה שנספר; שלילי — נספר יותר מהנייר
+    const g = Number(di.unresolvedUnitsGap) || 0;
+    if (g > 0) gapUnits += g; else gapExtra -= g;
     if (di.awaitingDoc) awaiting++;
   });
-  return { n, shortUnits: Math.round(shortUnits * 100) / 100, overUnits: Math.round(overUnits * 100) / 100, shortDocs, gapUnits, awaiting };
+  return { n, shortUnits: Math.round(shortUnits * 100) / 100, overUnits: Math.round(overUnits * 100) / 100, shortDocs, gapUnits, gapExtra, awaiting };
 }
 function receiptsBalanceBannerHtml() {
   const b = receiptsBalance();
@@ -12756,8 +12773,8 @@ function receiptsBalanceBannerHtml() {
   const docs = b.shortDocs === 1 ? 'בתעודה אחת' : 'ב-' + b.shortDocs + ' תעודות';
   if (b.shortUnits > 0) return '<div class="bg-rose-600 text-white rounded-2xl p-4 mb-3 shadow-md"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-scale-unbalanced"></i> חסרות ' + mtxQty(b.shortUnits) + ' יח׳ ' + docs + '</div><div class="text-xs text-white/90 mt-1">יחידות שחויבו בתעודה ולא הגיעו, וטרם זוכו או הושלמו' + (b.overUnits > 0 ? ' · ועוד ' + mtxQty(b.overUnits) + ' יח׳ בעודף' : '') + '</div></div>';
   if (b.overUnits > 0) return '<div class="bg-blue-600 text-white rounded-2xl p-4 mb-3 shadow-md"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-scale-unbalanced-flip"></i> התקבלו ' + mtxQty(b.overUnits) + ' יח׳ מעבר לתעודות</div><div class="text-xs text-white/90 mt-1">העודף מתועד בלבד — במרכזת החודשית משלמים לפי מה שחויב</div></div>';
-  if (b.gapUnits > 0 || b.awaiting > 0) return '<div class="bg-amber-500 text-white rounded-2xl p-4 mb-3 shadow-md"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-hourglass-half"></i> ' + (b.n === 1 ? 'תעודה אחת פתוחה' : b.n + ' תעודות פתוחות') + ' בלי חוסר או עודף בשורות</div><div class="text-xs text-white/90 mt-1">' +
-    [b.gapUnits > 0 ? mtxQty(b.gapUnits) + ' יח׳ בנייר שטרם שויכו לשורות' : '', b.awaiting > 0 ? (b.awaiting === 1 ? 'קליטה אחת ממתינה לנייר' : b.awaiting + ' קליטות ממתינות לנייר') : ''].filter(Boolean).join(' · ') + '</div></div>';
+  if (b.gapUnits > 0 || b.gapExtra > 0 || b.awaiting > 0) return '<div class="bg-amber-500 text-white rounded-2xl p-4 mb-3 shadow-md"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-hourglass-half"></i> ' + (b.n === 1 ? 'תעודה אחת פתוחה' : b.n + ' תעודות פתוחות') + ' בלי חוסר או עודף בשורות</div><div class="text-xs text-white/90 mt-1">' +
+    [b.gapUnits > 0 ? mtxQty(b.gapUnits) + ' יח׳ בנייר שטרם שויכו לשורות' : '', b.gapExtra > 0 ? mtxQty(b.gapExtra) + ' יח׳ שנספרו מעבר לנייר' : '', b.awaiting > 0 ? (b.awaiting === 1 ? 'קליטה אחת ממתינה לנייר' : b.awaiting + ' קליטות ממתינות לנייר') : ''].filter(Boolean).join(' · ') + '</div></div>';
   return '<div class="bg-emerald-500 text-white rounded-2xl p-4 mb-3 shadow-md"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-scale-balanced"></i> מאזן הסחורה מול הספק מאוזן ✓</div><div class="text-xs text-white/90 mt-1">אין יחידות חסרות או עודפות בתעודות הפתוחות</div></div>';
 }
 // ===== v66: בלש הזיכוי המשולב — לאיזה חוסר שייך העודף שעל תעודת החזרות =====
@@ -12960,7 +12977,7 @@ function receiptDiffRowHtml(rc, item, dir, di) {
   return '<div class="flex items-center justify-between gap-2 py-1.5 ' + (isShort ? 'text-rose-700' : 'text-amber-700') + '">' +
     '<div class="min-w-0"><div class="font-bold truncate">' + (isShort ? 'חסר: ' : 'עודף: ') + htmlEscape(item.name) + '</div><div class="text-[11px] opacity-80">' + paperText + (paper ? (isShort ? 'חסר\u00a0' : 'עודף\u00a0') : '') + offsetSideQtyText(side) + ' · ₪' + fmtMoney(side.value) + '</div></div>' +
     (side.price > 0 ? '<button data-role="rc-offset-choose" data-id="' + htmlEscape(rc.id) + '" data-product="' + htmlEscape(item.productId) + '" data-dir="' + dir + '" class="btn-tap shrink-0 bg-white border ' + (isShort ? 'border-rose-300 text-rose-700' : 'border-amber-300 text-amber-700') + ' rounded-lg px-2.5 py-2 text-[11px] font-black"><i class="fa-solid fa-scale-balanced"></i> מצא קיזוז</button>'
-      : '<span class="shrink-0 text-[10px] font-black text-slate-400">אין מחיר למוצר — קבע בכרטיס המוצר</span>') +
+      : '<span class="shrink-0 text-[10px] font-black text-slate-400">' + (products.some(p => p.id === item.productId) ? 'אין מחיר למוצר — קבע בכרטיס המוצר' : 'המוצר אינו במאגר — אין מחיר לקיזוז; השווה מול החשבונית') + '</span>') +
   '</div>';
 }
 function findOffsetMatch(rc, preferredOtherId, preferredProductId, preferredOtherProductId) {
@@ -12985,7 +13002,7 @@ function findOffsetMatch(rc, preferredOtherId, preferredProductId, preferredOthe
     }
   }
   // v225 מעבר 2 (v120: לפי מחירון, לא לפי מחיר שחויב): אותו מחירון, אותה כמות, מוצרים שונים.
-  // אותו עיקרון כמו הקיזוז הפנימי בתוך תעודה וכמו קבוצות המחיר של הבלש:
+  // אותו עיקרון כמו הקיזוז הפנימי בתוך תעודה:
   // כשהמחיר זהה, הכסף לא מבחין בין בני הקבוצה. בלי זה, הקיזוז הפנימי שבוחר
   // שרירותית אילו בני-4.86 לצרוך משאיר בתעודות שמות שונים (ללא-סוכר מול
   // וניל) והראי בין החודשים לא נסגר לעולם.
@@ -13397,7 +13414,7 @@ function renderManualOffsetConfirm(origin, candidate, ov) {
     '<div class="p-4 overflow-y-auto"><div class="grid grid-cols-2 gap-2"><div class="bg-rose-50 border border-rose-200 rounded-2xl p-3"><div class="text-[11px] font-black text-rose-600">חוסר</div><div class="font-black text-slate-900 truncate">' + htmlEscape(shortSide.name) + '</div><div class="text-xs font-bold text-slate-600">₪' + fmtMoney(shortSide.value) + '</div></div><div class="bg-amber-50 border border-amber-200 rounded-2xl p-3"><div class="text-[11px] font-black text-amber-600">עודף</div><div class="font-black text-slate-900 truncate">' + htmlEscape(overSide.name) + '</div><div class="text-xs font-bold text-slate-600">₪' + fmtMoney(overSide.value) + '</div></div></div>' +
     '<div class="mt-3 bg-indigo-50 border-2 border-indigo-200 rounded-2xl p-4"><label class="block text-xs font-black text-indigo-900 mb-1">סכום לקיזוז ללא מע״מ — עד ₪' + fmtMoney(maxAmount) + '</label><div class="flex items-center gap-2 bg-white border-2 border-indigo-200 rounded-xl px-3"><span class="font-black text-slate-400">₪</span><input id="manualOffsetAmount" type="text" inputmode="decimal" value="' + priceFieldVal(maxAmount) + '" class="w-full h-12 text-center text-xl font-black outline-none"></div></div>' +
     '<div id="manualOffsetImpact" class="mt-3"></div>' +
-    '<div class="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs font-bold text-amber-900"><i class="fa-solid fa-triangle-exclamation"></i> העודף לא חויב בתעודה. באישור אתה מחשיב אותו כהשלמה לחוסר עד הסכום שבחרת: הפער הקטן נסגר, ומה שנשאר מהגדול נשאר פתוח. המרכזת החודשית לא משתנה: היא מחשבת לפי מה שחויב ומה שזוכה.</div>' +
+    '<div class="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs font-bold text-amber-900"><i class="fa-solid fa-triangle-exclamation"></i> העודף לא חויב בתעודה. באישור אתה מחשיב אותו כהשלמה לחוסר עד הסכום שבחרת: <span id="manualOffsetEffect">בסכום המלא הפער הקטן נסגר, ומה שנשאר מהגדול נשאר פתוח</span>. המרכזת החודשית לא משתנה: היא מחשבת לפי מה שחויב ומה שזוכה.</div>' +
     '<button data-mo-confirm class="btn-tap mt-3 w-full bg-indigo-600 text-white rounded-2xl py-3.5 font-black text-base"><i class="fa-solid fa-check"></i> אשר קיזוז</button></div>';
   const input = ov.querySelector('#manualOffsetAmount'), impact = ov.querySelector('#manualOffsetImpact'), confirmBtn = ov.querySelector('[data-mo-confirm]');
   const refresh = () => {
@@ -13405,6 +13422,8 @@ function renderManualOffsetConfirm(origin, candidate, ov) {
     const valid = amount > 0 && amount <= maxAmount + 0.01;
     confirmBtn.disabled = !valid; confirmBtn.classList.toggle('opacity-40', !valid);
     impact.innerHTML = valid ? '' : '<div class="text-xs font-black text-rose-600">הזן סכום בין ₪0.01 ל־₪' + fmtMoney(maxAmount) + '</div>';
+    const effect = ov.querySelector('#manualOffsetEffect');
+    if (effect) effect.textContent = amount >= maxAmount - 0.005 ? 'בסכום המלא הפער הקטן נסגר, ומה שנשאר מהגדול נשאר פתוח' : 'בסכום חלקי שני הפערים נשארים פתוחים ביתרה שלהם';
   };
   input.addEventListener('input', refresh); refresh();
   ov.querySelector('[data-mo-back]').addEventListener('click', () => openManualOffsetPicker(origin.receiptId, origin.productId, origin.dir));
@@ -13424,7 +13443,7 @@ async function applyManualValueOffset(shortSide, overSide, requestedAmount) {
   if (!(amount > 0) || amount > maxAmount + 0.01) { showToast('סכום הקיזוז כבר אינו זמין', null, null, 2600); return; }
   // v124: צד שהסכום מכסה את כל שוויו נצרך בכמות המלאה — amount/price השאיר שאריות של
   // אלפיות יחידה (5.74/5.7408) שאי אפשר לקזז שוב, והתעודה נשארה פתוחה לנצח
-  const covers = side => amount >= r2(side.value) - 0.005;
+  const covers = side => amount >= r2(side.value) - 0.005 || side.qty - amount / side.price < 0.01;
   const shortQty = covers(currentShort) ? currentShort.qty : amount / currentShort.price;
   const overQty = covers(currentOver) ? currentOver.qty : amount / currentOver.price;
   const groupId = manualOffsetGroupId(currentShort, currentOver);
@@ -13442,8 +13461,8 @@ async function applyManualValueOffset(shortSide, overSide, requestedAmount) {
   shortRc.externalOffsets = shortOffsets; overRc.externalOffsets = overOffsets;
   closeManualOffsetPicker(); buzz(24);
   const leftShort = findOpenOffsetSide(shortRc.id, currentShort.productId, 'short'), leftOver = findOpenOffsetSide(overRc.id, currentOver.productId, 'over');
-  const left = leftShort || leftOver;
-  showToast(left ? ('הקיזוז אושר (₪' + fmtMoney(amount) + ') — נשאר פתוח: ' + (leftShort ? 'חוסר' : 'עודף') + ' ' + left.name + ' · ' + offsetSideQtyText(left)) : ('הקיזוז אושר — שני הפערים נסגרו (₪' + fmtMoney(amount) + ' במחירי האפליקציה)'), null, null, 3800);
+  const leftText = [leftShort ? 'חוסר ' + leftShort.name + ' · ' + offsetSideQtyText(leftShort) : '', leftOver ? 'עודף ' + leftOver.name + ' · ' + offsetSideQtyText(leftOver) : ''].filter(Boolean).join(' · ו');
+  showToast(leftText ? ('הקיזוז אושר (₪' + fmtMoney(amount) + ') — נשאר פתוח: ' + leftText) : ('הקיזוז אושר — שני הפערים נסגרו (₪' + fmtMoney(amount) + ' במחירי האפליקציה)'), null, null, 3800);
   if (currentView === 'receiptsHistory') renderReceiptsHistory();
 }
 async function cancelReceiptOffset(receiptId, groupId) {
@@ -14815,17 +14834,17 @@ async function saveProd(again) {
   const posPriceAt = posChanged ? Date.now() : (Number(existingForPos && existingForPos.posPriceAt) || null);
   const data = { code: codeVal, name, barcode, posPrice, posPriceAt, creditPrice, deposit, billingPackId, billingPackSize, category, average, defaultUnit, defaultUnitUpdatedAt: unitUpdatedAt, boxSize, hidden, quickCrate };
   // v124: מחירון נשמר כשהוזן (שדה ריק במוצר קיים אינו מוחק אותו). מוצר חדש:
-  // product.price = מחיר החשבונית, ובלעדיו המחירון המלא. מוצר קיים: product.price
-  // אינו נכתב — שינוי מחיר נרשם ב-priceHistory מ"בתוקף מ", וחודש שעבר נשאר כמו שהיה.
-  // discountPct/discountSet אינם נכתבים יותר (ההנחה נגזרת).
-  // שינוי מחיר במוצר קיים יוצא כרשומה מתוארכת (priceEntry), שנכתבת בטרנזקציה וממוזגת
-  // לתוך המוצר בענן (executePriceEntryTask). מוצר שעוד אין לו מחיר מקבל את המחיר
-  // כבסיס כשהתאריך היום או לפניו. discountPct/discountSet נכתבים רק כתאימות ל-v123.
+  // product.price = מחיר החשבונית, ובלעדיו המחירון המלא. מוצר קיים: שינוי מחיר יוצא
+  // כרשומה מתוארכת (priceEntry) מ"בתוקף מ", שנכתבת בטרנזקציה וממוזגת לתוך המוצר בענן
+  // (executePriceEntryTask), וחודש שעבר נשאר כמו שהיה. יוצא מן הכלל: מוצר שעוד אין לו
+  // מחיר מקבל את המחיר כבסיס (product.price) כשהתאריך היום או לפניו. ההנחה נגזרת;
+  // discountPct/discountSet נכתבים רק כתאימות ל-v123 (productCompatDiscount).
   if (listPrice != null || !id) data.listPrice = listPrice;
   let priceEntry = null;
   if (!id) {
     data.price = invoicePrice != null ? invoicePrice : listPrice;
-    Object.assign(data, productCompatDiscount(data.price, listPrice));
+    // בלי מחיר בחשבונית: מחירון מלא כממלא מקום — "לא אומת" גם כאן וגם ב-v123 ("אחוז לא נקבע")
+    Object.assign(data, invoicePrice != null ? productCompatDiscount(data.price, listPrice) : { discountPct: 0, discountSet: false });
   } else {
     const cur = existingForPos;
     const noBase = !!cur && !(Number(cur.price) > 0) && !(Array.isArray(cur.priceHistory) && cur.priceHistory.length);
@@ -14884,7 +14903,7 @@ async function saveProd(again) {
     if (!products.find(x => x.id === docId)) products.push(savedProduct);
   }
   // השמירה המאוחדת היא העדכנית ביותר; ניסיון ישן של שדה בודד לא יורשה לדרוס אותה אחר כך.
-  clearSupersededProductFailedWrites(docId);
+  clearSupersededProductFailedWrites(docId, invoicePrice != null ? priceFrom : null);
   const st = orderState[docId] || (orderState[docId] = { amount: '', unit: defaultUnit });
   if (!hasEnteredAmount(st.amount)) st.unit = defaultUnit;
   saveDraftPassive();

@@ -119,3 +119,21 @@ test('קליטה במבצע: "לפי המחיר הרגיל", לא "לא נספר
   const src = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /במבצע, לא נספרות|קליטות במבצע לא נספרות|קליטות במחיר מבצע לא נספרות/);
 });
+
+test('מוצר שנמחק שהשורה שלו נושאת רק productId (בלי code) — אותו כלל, בניתוח ובמרכזת', () => {
+  const r = setup();
+  const line = { productId: 'code_9999', name: 'מוצר שנמחק', barcode: '777', qty: 3, unitPrice: 9.03 };
+  const out = rows(r, [{ id: 'd', timestamp: 1, date: '2026-08-10', items: [line] }], []);
+  const w = Object.values(out)[0];
+  assert.ok(!w.rows['p:pA'] && !w.rows['p:pB'], JSON.stringify(Object.keys(w.rows)));
+  assert.equal(w.recvValue, 27.09);
+  r.context.recs = [{ id: 'd', timestamp: 1, date: '2026-08-10', items: [line] }];
+  assert.deepEqual(json(r, `rangeProductMatrixData({ recs, rets: [] }).list.map(x => [x.pid, x.billed])`), [['code_9999', 3]]);
+});
+
+test('מוצר בקטלוג בלי מחיר שזוכה בחזרה — "ללא מחיר" גם בצד החזרות', () => {
+  const r = setup();
+  r.run(`products.push({ id: 'p0', code: '9700', name: 'בלי מחיר', barcode: '0', price: 0, listPrice: 0 });`);
+  r.context.rets = [{ id: 'z', schemaVersion: 2, timestamp: 1, date: '2026-09-15', docDate: '2026-09-15', credited: true, items: [{ productId: 'p0', name: 'בלי מחיר', qty: 2 }] }];
+  assert.equal(r.run(`rangeProductMatrixData({ recs: [], rets }).list.find(x => x.pid === 'p0').unpriced`), true);
+});

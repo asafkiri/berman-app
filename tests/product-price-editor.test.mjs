@@ -5,8 +5,9 @@
 //   • ניסיון חוזר אחרי ניתוק אינו דורס רשומה שנכתבה בינתיים ממכשיר אחר, ושמירה חדשה
 //     של המוצר אינה מוחקת מהתור את המחיר המתוארך שעוד לא נשמר.
 //   • אותו מחיר כמו שבתוקף — אין כתיבה למחיר; שדה ריק — המחיר הקיים נשאר.
-//   • מוצר חדש: product.price = מחיר החשבונית, ובלעדיו המחירון המלא; discountPct/discountSet
-//     נכתבים כתאימות ל-v123 (שמחשב price = מחירון × (1 − אחוז)) ומחזירים את אותו בסיס.
+//   • מוצר חדש: product.price = מחיר החשבונית, ובלעדיו המחירון המלא ("לא אומת"); discountPct/discountSet
+//     נכתבים כתאימות ל-v123 (שמחשב price = מחירון × (1 − אחוז)) ומחזירים את הבסיס בקירוב
+//     (לכל היותר אלפית); מחיר מעל המחירון — בלי שדות תאימות (אחוז שלילי חוסם שמירה ב-v123).
 //   • מוצר בלי מחיר בכלל: מחיר עם תאריך של היום או לפניו הוא הבסיס לכל התאריכים, והרמז אומר זאת.
 //   • ההנחה מהמחירון נגזרת (תצוגה); "מחיר חשבונית לא אומת" למחיר שנזרע בלי אחוז.
 //   • המלצת המחיר ועלות השלטים לפי מחיר החשבונית שבתוקף היום.
@@ -100,7 +101,7 @@ test('אותו מחיר שבתוקף, או שדה מחיר ריק — אין כ�
 });
 
 test('מוצר חדש: מחיר החשבונית הוא product.price, ושדות התאימות ל-v123 מחזירים אותו', async () => {
-  for (const [inv, expected, pct] of [['7.25', 7.25, 27.5], ['', 10, 0]]) {
+  for (const [inv, expected, pct, set] of [['7.25', 7.25, 27.5, true], ['', 10, 0, false]]) {
     const r = setup();
     r.run(`openProdModal(null, false, '')`);
     assert.equal(r.node('prod_invoicePrice').placeholder, 'ריק = מחירון מלא');
@@ -111,7 +112,8 @@ test('מוצר חדש: מחיר החשבונית הוא product.price, ושדו�
     assert.ok(w, 'נוצר מוצר');
     assert.equal(w.data.price, expected);
     assert.equal(w.data.listPrice, 10);
-    assert.deepEqual([w.data.discountPct, w.data.discountSet], [pct, true]);
+    assert.deepEqual([w.data.discountPct, w.data.discountSet], [pct, set], 'בלי מחיר בחשבונית — "לא אומת" (גם ב-v123: "אחוז לא נקבע")');
+    if (!set) assert.match(r.run(`priceRowHtml(products.find(p => p.id === 'code_9876'))`), /מחיר חשבונית לא אומת/);
     assert.equal(Math.round(r.run(`finalUnitPrice(10, ${pct})`) * 1000) / 1000, expected, 'v123 מחשב בחזרה את אותו בסיס');
     assert.ok(!('priceHistory' in w.data));
   }
@@ -204,4 +206,93 @@ test('סריקה: "אותו מחיר — הבחירה לא עולה כסף" לפ
   assert.equal(pick(), 'code_7001', 'מחיר זהה — מכריעים');
   r.run(`products.find(p => p.id === 'code_7001').priceHistory = [{ from: '2026-10-01', price: 9.5, source: null }];`);
   assert.equal(pick(), '', 'מחיר החשבונית שונה ביום התעודה — לא מנחשים');
+});
+
+test('מחיר מעל המחירון: בלי אחוז תאימות שלילי (שחוסם שמירה ב-v123)', async () => {
+  const r = setup();
+  r.run(`openProdModal(null, false, '')`);
+  val(r, 'prod_code', '9877'); val(r, 'prod_name', 'יקר מהמחירון'); val(r, 'prod_price', '10'); val(r, 'prod_invoicePrice', '10.5'); val(r, 'prod_category', 'c1');
+  await r.run('saveProd(false)');
+  const w = productWrites(r).pop();
+  assert.equal(w.data.price, 10.5);
+  assert.ok(!('discountPct' in w.data) && !('discountSet' in w.data));
+  assert.equal(r.run('JSON.stringify(productCompatDiscount(5.65, 5.6))'), '{}');
+});
+
+function cloudSetup() {
+  const r = setup({ realCloudTasks: true });
+  const db = new Map([['products/code_9604', JSON.parse(r.run(`JSON.stringify(${P})`))]]);
+  const state = { offline: false };
+  r.context.doc = (_, ...path) => path.slice(-2).join('/');
+  r.context.updateDoc = async (ref, data) => { if (state.offline) throw new Error('offline'); db.set(ref, { ...db.get(ref), ...structuredClone(data) }); };
+  r.context.runTransaction = async (_, fn) => {
+    if (state.offline) throw new Error('offline');
+    const pending = [];
+    const out = await fn({ get: async ref => ({ exists: () => db.has(ref), data: () => structuredClone(db.get(ref)) }), update: (ref, data) => pending.push([ref, structuredClone(data)]) });
+    pending.forEach(([ref, data]) => db.set(ref, { ...db.get(ref), ...data }));
+    return out;
+  };
+  r.run('globalThis.__log = []; logAction = (...a) => __log.push(a);');
+  return { r, db, state };
+}
+
+test('שמירה מקוונת של שם ומחיר יחד: הטרנזקציה כותבת את כל שדות המוצר ואת הרשומה', async () => {
+  const { r, db } = cloudSetup();
+  open(r, 'code_9604');
+  val(r, 'prod_name', 'שם חדש'); val(r, 'prod_price', '13'); val(r, 'prod_posPrice', '15.9'); val(r, 'prod_invoicePrice', '9.5'); val(r, 'prod_priceFrom', '2026-09-01');
+  await r.run('saveProd(false)');
+  const server = db.get('products/code_9604');
+  assert.deepEqual([server.name, server.listPrice, server.posPrice, server.price], ['שם חדש', 13, 15.9, 9.03]);
+  assert.deepEqual(server.priceHistory.map(h => [h.from, h.price]), [['2026-09-01', 9.5]]);
+});
+
+test('תיקון לאותו תאריך גובר על רשומה ישנה שבתור (בלי רשת → ניסיון חוזר)', async () => {
+  const { r, db, state } = cloudSetup();
+  const today = r.run('todayStr()');
+  state.offline = true;
+  open(r, 'code_9604'); val(r, 'prod_invoicePrice', '97');
+  await r.run('saveProd(false)');
+  assert.equal(r.run('cloudFailedWrites.length'), 1);
+  state.offline = false;
+  r.run('priceEditId = null;'); open(r, 'code_9604'); val(r, 'prod_invoicePrice', '9.7');
+  await r.run('saveProd(false)');
+  assert.equal(r.run('cloudFailedWrites.length'), 0, 'הרשומה הישנה לאותו תאריך ירדה מהתור');
+  assert.deepEqual(db.get('products/code_9604').priceHistory.map(h => [h.from, h.price]), [[today, 9.7]]);
+});
+
+test('ניסיון חוזר אינו דורס רשומה לאותו תאריך שנכתבה אחריו ממכשיר אחר', async () => {
+  const { r, db, state } = cloudSetup();
+  state.offline = true;
+  await r.run(`adoptInvoicePrice('code_9604', 9.6, '2026-09-01')`);
+  assert.equal(r.run('cloudFailedWrites.length'), 1);
+  db.get('products/code_9604').priceHistory = [{ from: '2026-09-01', price: 9.65, source: { method: 'invoice', adoptedAt: Date.now() + 60000 } }];
+  state.offline = false;
+  await r.run('retryCloudFailedWrites()');
+  assert.deepEqual(db.get('products/code_9604').priceHistory.map(h => [h.from, h.price]), [['2026-09-01', 9.65]]);
+});
+
+test('יומן הפעולות: אימוץ מחיר רושם מחיר ותאריך', async () => {
+  const { r } = cloudSetup();
+  const text = r.run(`actionDetailsFromCloud('adopt invoice price', { op: 'price-entry', path: ['x', 'products', 'code_9604'], priceEntry: { from: '2026-09-01', price: 9.6, source: null } })`);
+  assert.match(text, /פרנה לבדיקה · ₪9\.6.* מ-1\.9\.2026/);
+  assert.match(r.run(`actionDetailsFromCloud('save product invoice price', { op: 'price-entry', path: ['x', 'products', 'code_9604'], priceEntry: { from: '2026-10-01', price: 9.7, source: null } })`), /₪9\.7/);
+});
+
+test('סריקה: ההכרעה לפי מחיר החשבונית ביום התעודה — לא ביום הסריקה', () => {
+  const r = setup();
+  r.run(`products.push({ id: 'code_7101', code: '7101', name: 'וריאנט', barcode: '71', listPrice: 12.9, price: 9.03, priceHistory: [{ from: '2026-09-15', price: 9.5, source: null }] },
+      { id: 'code_7102', code: '7102', name: 'וריאנט', barcode: '71', listPrice: 12.9, price: 9.03 });
+    receiptDocDate = '2026-09-10';`);
+  assert.equal(r.run(`aiSingleNameCandidateId({ catalogHintId: 'code_7101', catalogCandidateHintIds: ['code_7101', 'code_7102'] })`), 'code_7101', 'ב-10.9 שני המחירים 9.03');
+  r.run(`receiptDocDate = '2026-09-20';`);
+  assert.equal(r.run(`aiSingleNameCandidateId({ catalogHintId: 'code_7101', catalogCandidateHintIds: ['code_7101', 'code_7102'] })`), '');
+});
+
+test('שורת המחירון: המבצע הפעיל מוצג גם כשמבצע שפג קודם לו ברשימה', () => {
+  const r = setup();
+  r.run(`promos = [{ id: 'old', productIds: ['code_9604'], fixedPrice: 8.5, start: '2000-01-01', end: '2000-01-31', title: 'ישן' },
+    { id: 'now', productIds: ['code_9604'], fixedPrice: 8.2, start: '2000-02-01', end: '2099-12-31', title: 'פעיל' }];`);
+  const html = r.run(`priceRowHtml(${P})`);
+  assert.match(html, /מרכזת: [^<]*₪8\.20/, 'המבצע הפעיל (8.20), לא זה שפג (8.50)');
+  assert.doesNotMatch(html, /₪8\.50|\(לא פעיל\)/);
 });

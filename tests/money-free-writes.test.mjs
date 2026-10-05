@@ -117,7 +117,7 @@ test('מאזן הקליטות ביחידות; "ממתינות לזיכוי" — 
     { id: 'a', schemaVersion: 2, timestamp: 2, date: '2026-09-10', status: 'open', items: [{ productId: 'code_238', name: 'פיתות', qty: 1, noteQty: 3 }], noteParts: [] },
     { id: 'b', schemaVersion: 2, timestamp: 1, date: '2026-09-09', status: 'open', items: [{ productId: 'code_101', name: 'אחיד', qty: 2, noteQty: 1 }], noteParts: [] }];
   r.run(`receipts = list; returns = []; receiptHistoryFilter = 'all'; currentView = 'receiptsHistory'; renderReceiptsHistory();`);
-  assert.deepEqual(json(r, 'receiptsBalance()'), { n: 2, shortUnits: 2, overUnits: 1, shortDocs: 1, gapUnits: 0, awaiting: 0 });
+  assert.deepEqual(json(r, 'receiptsBalance()'), { n: 2, shortUnits: 2, overUnits: 1, shortDocs: 1, gapUnits: 0, gapExtra: 0, awaiting: 0 });
   const html = r.node('app').innerHTML;
   assert.match(html, /חסרות 2 יח׳ בתעודה אחת/);
   assert.match(html, /ועוד 1 יח׳ בעודף/);
@@ -188,4 +188,46 @@ test('מוצר בקטלוג בלי מחיר: "ללא מחיר" בשורת המו
   const html = r.node('app').innerHTML;
   assert.match(html, /אין מחיר למוצר — קבע בכרטיס המוצר/);
   assert.doesNotMatch(html, /data-role="rc-offset-choose"/);
+});
+
+test('מאזן הקליטות: פער בנייר בשני הכיוונים, וקליטה שממתינה לנייר — כל אחד בשמו', () => {
+  const r = runtime();
+  r.run(`receipts = [
+    { id: 'h', schemaVersion: 2, timestamp: 3, date: '2026-09-11', status: 'open', items: [{ productId: 'code_101', name: 'אחיד', qty: 13 }], noteParts: [{ units: 10, lines: 1, kind: 'charge' }] }]; returns = [];`);
+  let html = r.run('receiptsBalanceBannerHtml()');
+  assert.match(html, /3 יח׳ שנספרו מעבר לנייר/);
+  assert.doesNotMatch(html, /בנייר שטרם שויכו/);
+  r.run(`receipts = [{ id: 'w', schemaVersion: 2, timestamp: 2, date: '2026-09-10', status: 'open', noDoc: true, items: [{ productId: 'code_101', name: 'אחיד', qty: 2 }], noteParts: [] }];`);
+  html = r.run('receiptsBalanceBannerHtml()');
+  assert.match(html, /קליטה אחת ממתינה לנייר/);
+  assert.match(html, /bg-amber-500/);
+});
+
+test('שארית של פחות מ-0.01 יח׳ מקיזוז לפי שווי ישן — התעודה סגורה, המאזן ירוק', () => {
+  const r = runtime();
+  r.run(`receipts = [{ id: 'f', schemaVersion: 2, timestamp: 1, date: '2026-09-10', status: 'open', items: [{ productId: 'code_101', name: 'אחיד', qty: 0, noteQty: 1 }], noteParts: [],
+    externalOffsets: [{ id: 'x', groupId: 'x', otherId: 'g', productId: 'code_101', qty: 0.999861, dir: 'short', source: 'manual-value', amountEx: 5.74 }] }]; returns = [];`);
+  assert.equal(r.run('receiptDiscrepancyInfo(receipts[0]).open'), false);
+  const b = json(r, 'receiptsBalance()');
+  assert.deepEqual([b.n, b.shortDocs], [0, 0]);
+  assert.match(r.run('receiptsBalanceBannerHtml()'), /^$|מאוזן/);
+});
+
+test('קיזוז לפי שווי בסכום חלקי: הטוסט מונה את שני הצדדים שנשארו פתוחים', async () => {
+  const r = runtime();
+  r.context.list = [
+    { id: 'a', schemaVersion: 2, timestamp: 2, date: '2026-09-10', docDate: '2026-09-10', status: 'open', items: [{ productId: 'code_101', name: 'אחיד', qty: 0, noteQty: 3 }], noteParts: [] },
+    { id: 'b', schemaVersion: 2, timestamp: 1, date: '2026-09-09', docDate: '2026-09-09', status: 'open', items: [{ productId: 'code_238', name: 'פיתות', qty: 2, noteQty: 0 }], noteParts: [] }];
+  r.run(`receipts = list; returns = []; currentView = 'receiptsHistory'; closeManualOffsetPicker = () => {};`);
+  await r.run(`applyManualValueOffset(findOpenOffsetSide('a', 'code_101', 'short'), findOpenOffsetSide('b', 'code_238', 'over'), 3)`);
+  assert.match(r.toasts.at(-1), /נשאר פתוח: חוסר אחיד .* ועודף פיתות/);
+});
+
+test('מוצר שנמחק בשורה בלי מחיר: "המוצר אינו במאגר", לא "קבע בכרטיס המוצר"', () => {
+  const r = runtime();
+  r.run(`receipts = [{ id: 'x', schemaVersion: 2, timestamp: 1, date: '2026-09-10', status: 'open', items: [{ productId: 'code_77777', name: 'מוצר שנמחק', code: '77777', qty: 1, noteQty: 3 }], noteParts: [] }]; returns = [];
+    receiptHistoryFilter = 'all'; currentView = 'receiptsHistory'; renderReceiptsHistory();`);
+  const html = r.node('app').innerHTML;
+  assert.match(html, /המוצר אינו במאגר — אין מחיר לקיזוז/);
+  assert.doesNotMatch(html, /קבע בכרטיס המוצר/);
 });
