@@ -27,11 +27,16 @@ function app(paper, opts = {}) {
   const r = runtime({ data, storage: opts.storage || new Map(), globals: opts.globals || {} });
   r.run(`products = testData.products; returns = ${JSON.stringify(opts.returns || [])}; receipts = ${JSON.stringify(opts.receipts || [])};
     runCloudTaskSilent = async (label, task) => { testWrites.push(structuredClone(task)); return true; };
+    executePaperDropTask = async (id, cap) => { testWrites.push({ paperDrop: id, cap }); const cur = papers.find(p => p.id === id);
+      if (!cur || cur.captureId !== cap) return 'other'; papers = papers.filter(p => p.id !== id); return 'dropped'; };
     executePaperCreateTask = async task => { if (globalThis.__failCloud) throw new Error('offline'); if (globalThis.__cloudGate) await globalThis.__cloudGate;
       testWrites.push({ paperCreate: structuredClone(task) });
       const cur = papers.find(p => p.id === task.id);
-      if (cur && cur.captureId !== task.paper.captureId && paperFingerprint(cur) !== paperFingerprint(task.paper)) { const e = new Error('conflict'); e.code = 'paper-conflict'; e.existing = cur; throw e; }
-      papers = papers.filter(p => p.id !== task.id).concat([structuredClone(task.paper)]); return cur ? 'same' : 'created'; };`); // כמו המאזין: מה שנכתב לענן מגיע ל-papers
+      if (cur && cur.deleted && cur.captureId === task.paper.captureId) return 'deleted';
+      if (cur && !cur.deleted && cur.captureId === task.paper.captureId) { if ((cur.rev || 1) < (task.paper.rev || 1)) papers = papers.map(p => p.id === task.id ? structuredClone(task.paper) : p); return 'same'; }
+      if (cur && !cur.deleted && paperFingerprint(cur) !== paperFingerprint(task.paper)) { const e = new Error('conflict'); e.code = 'paper-conflict'; e.existing = cur; throw e; }
+      if (cur && !cur.deleted) return 'duplicate';
+      papers = papers.filter(p => p.id !== task.id).concat([structuredClone(task.paper)]); return 'created'; };`); // כמו המאזין: מה שנכתב לענן מגיע ל-papers
   return r;
 }
 // fetch בשליטת הבדיקה: כל קריאה מקבלת את התשובה הבאה ברשימה (האחרונה חוזרת)
@@ -144,22 +149,22 @@ test('התור: כשהקליטה בטלפון הזה מעלה תעודה — ה�
   const first = () => new Promise(res => { openFirst = () => res({ ok: true, status: 200, json: async () => structuredClone(credit142()) }); });
   const g = gated([first, ok(credit142())]);
   const r = app(credit142(), { globals: { fetch: g.fetch } });
-  r.run(`receivingUploadBusy = true; paperSleep = () => new Promise(res => { globalThis.__wake = res; });
+  r.run(`receivingUploads = 1; paperSleep = () => new Promise(res => { globalThis.__wake = res; });
     openPaperIntake({}); paperIntake.items = [{ captureId: 'c0', hash: 'h0', page: ${JSON.stringify(page(1))}, status: 'photo' }, { captureId: 'c1', hash: 'h1', page: ${JSON.stringify(page(2))}, status: 'photo' }];`);
   const running = r.run('paperIntakeRun()');
   await tick(); await tick();
   assert.equal(g.calls.length, 0, 'עדיין ממתין');
   assert.match(r.run('paperIntake.progress'), /ממתין לסיום הקריאה בקליטה/);
   // הקליטה מסתיימת; הנייר הראשון עולה. בזמן שהוא עולה הקליטה מתחילה שוב — הנייר השני מחכה לה
-  r.run('receivingUploadBusy = false; __wake();');
+  r.run('receivingUploads = 0; __wake();');
   await until(() => g.calls.length === 1);
   assert.equal(r.run('paperUploadBusy'), true);
   // aiScanBusy (המשותף בין מכשירים) כבר לא עוצר את התור — רק העלאה מהטלפון הזה
-  r.run('aiScanBusy = true; receivingUploadBusy = true;');
+  r.run('aiScanBusy = true; receivingUploads = 1;');
   openFirst();
   await until(() => r.run('paperIntake.progress').includes('ממתין'));
   assert.equal(g.calls.length, 1, 'הנייר השני לא עולה בזמן שהקליטה מעלה');
-  r.run('receivingUploadBusy = false; __wake();');
+  r.run('receivingUploads = 0; __wake();');
   await running;
   assert.equal(g.calls.length, 2);
 });
@@ -171,7 +176,7 @@ test('הקליטה מחכה לקריאת נייר שרצה (לא שתי העלא
   await tick();
   assert.ok(r.toasts.some(t => /ממתין שקריאת הנייר/.test(t)));
   assert.equal(r.run('aiScanWaitingForPaper'), true);
-  assert.equal(r.run('receivingUploadBusy'), false);
+  assert.equal(r.run('receivingUploads'), 0);
   assert.equal(r.requests.length, 0);
   await r.run('aiRunInvoiceScan()'); // לחיצה שנייה בזמן ההמתנה — לא מתחילה עוד אחת
   r.run('paperUploadBusy = false; __wake();');
@@ -202,8 +207,9 @@ test('סנכרון שרץ ברקע לא דורס: תוצאה חדשה, תיקו�
   const ids = r.writes.filter(w => w.paperCreate).map(w => w.paperCreate.id);
   // הראשון — מהקליטה עצמה; אחריו: הגרסה שנשלחה לפני התיקון, התיקון, והתוצאה החדשה
   assert.deepEqual(JSON.parse(JSON.stringify(ids.slice(1))), ['paper_290095142', 'paper_290095149', 'paper_290095143']);
-  const drop = r.writes.find(w => w.op === 'batch' && w.writes.some(x => x.op === 'delete' && x.path.at(-1) === 'paper_290095142'));
-  assert.ok(drop, 'העותק במספר הישן נמחק מהענן');
+  assert.ok(r.writes.some(w => w.paperDrop === 'paper_290095142' && w.cap === 'cap0'), 'העותק במספר הישן יוצא מהענן (רק אם הוא עדיין של אותו צילום)');
+  assert.ok(!r.run(`papers.some(p => p.id === 'paper_290095142')`));
+  assert.deepEqual(JSON.parse(JSON.stringify(store(r).cap0.dropIds || [])), []);
 });
 
 test('מחיקה בזמן שהסנכרון מחכה לענן — הנייר יוצא מהענן ולא חוזר', async () => {
@@ -341,7 +347,7 @@ test('הסוג נקבע לפי המספר: 2900 בלי מספר פנימי = נ�
   const r = app(credit142());
   const p = JSON.parse(JSON.stringify(r.run(`bermanPaperRecord({ doc: { ...${JSON.stringify(credit142().scan.documents[0])}, docType: 'unknown', headerText: null, docNumber: null } }, { captureId: 'c' })`))).paper;
   assert.equal(p.kind, null); assert.equal(p.state, 'needs-review');
-  assert.ok(p.review.notes.some(t => /בחר למעלה/.test(t)));
+  assert.ok(p.review.notes.some(t => /בחר את הסוג למטה/.test(t)));
   // A4 משרת ישן: אין סיכום מודפס, אין כותרת, אין מספר פנימי ואין 2900
   const a4 = JSON.parse(JSON.stringify(r.run(`bermanPaperRecord({ doc: { docType: 'invoice', docNumber: '1539902', totalUnits: null, printedLines: null, rows: [{ description: 'x', quantity: 3 }] } }, { captureId: 'c' })`)));
   assert.equal(a4.rejected, true);

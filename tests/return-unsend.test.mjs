@@ -39,7 +39,7 @@ function refreshAfterReturnCarry() { refreshes++; }
 function restoreDoc(name, obj) { restored = { name, obj }; }
 
 const FNS = ['r2', 'fmtMoney', 'lineTotalFromUnit', 'anIsDepositLine', 'anIsCarriedLine',
-  'returnSentUnits', 'returnItemsSignature', 'retLedgerView', 'retVerifyRowHtml', 'retUnsendLineKind', 'retUnsendPlan', 'retUnsendSameLine',
+  'returnSentUnits', 'returnItemsSignature', 'retLedgerView', 'retWaitingPaper', 'retVerifyRowHtml', 'retUnsendLineKind', 'retUnsendPlan', 'retUnsendSameLine',
   'retUnsendNewId', 'applyReturnUnsend', 'undoReturnUnsend', 'retUnsendBtnHtml'];
 // eslint-disable-next-line no-eval
 const api = eval(extractSource(FNS, []) + '\n({ ' + FNS.join(', ') + ' })');

@@ -46,10 +46,12 @@ test('בלי ניירות: המאזן זהה למרכזת בכל מוצר, וכ�
 test('היום (בלי הניירות החדשים): 233, 238, 344 לטיפול, ושאלה על 1231 שהקיזוז שלו בוטל', () => {
   const lg = ledger([]);
   assert.deepEqual(brief(lg), [['chargedNotReceived', 'code_233', 1, 'problem'], ['returnedNotCredited', 'code_344', 2, 'problem'],
-    ['returnedNotCredited', 'code_238', 1, 'problem'], ['canceledOffset', 'code_1231', 2, 'question']]);
-  assert.equal(lg.count, 4);
+    ['canceledOffset', 'code_1231', 2, 'question']]);
+  assert.deepEqual(lg.items[1].keys, [{ key: 'code_344', units: 2 }, { key: 'code_238', units: 1 }], 'החזרה אחת — פריט אחד עם שני המוצרים');
+  assert.equal(lg.count, 3);
   assert.equal(text(lg, [], 0), "חוסר בקליטה של 4.10: זוג לחמניות אצבע בש' ×1 — חויבת ולא קיבלת. לבקש זיכוי מהנהג");
-  assert.equal(text(lg, [], 3), 'עודף לחמניות 10 בשקית ×2 ב-4.10 וחוסר 2 ב-5.10 — ביטלת את הקיזוז ביניהם. יש נייר חיוב על העודף?');
+  assert.match(text(lg, [], 1), /^החזרת .*×2, .*×1 ב-4\.10 ולא זוכית — לבקש זיכוי מהנהג$/);
+  assert.equal(text(lg, [], 2), 'עודף לחמניות 10 בשקית ×2 ב-4.10 וחוסר 2 ב-5.10 — ביטלת את הקיזוז ביניהם. יש נייר חיוב על העודף?');
 });
 
 test('אחרי 141 ו-142: חיוב כפול על 1231 ×2, ושאלת תיקון על לחם אחיד — ושום דבר אחר', () => {
@@ -87,7 +89,9 @@ test('בלי נייר הצד: שאלה "יש עוד תעודת זיכוי?" על
   assert.deepEqual(lg.items[1].keys, [{ key: 'code_339', units: 3 }, { key: 'code_119', units: 1 }], 'שאלה אחת להחזרה, עם שני המוצרים');
   assert.equal(text(lg, papers, 1), 'בתעודות הזיכוי של ההחזרה מ-4.10 חסרים: ברמן אקטיב ×3, לחם מלא בטוב ×1 — יש עוד תעודת זיכוי?');
   const done = declared({ id: 'decl_done', declare: 'complete', returnId: R1004 });
-  assert.deepEqual(brief(ledger([...papers, done])).map(x => x[3]), ['problem', 'problem', 'problem'], '"זה הכל" — חסר אמיתי, מוצר-מוצר');
+  const lgDone = ledger([...papers, done]);
+  assert.deepEqual(brief(lgDone).map(x => x[3]), ['problem', 'problem'], '"זה הכל" — חסר אמיתי');
+  assert.deepEqual(lgDone.items.find(i => i.kind === 'returnedNotCredited').keys.map(z => z.key), ['code_339', 'code_119'], 'פריט אחד להחזרה, גם אחרי "זה הכל"');
   assert.equal(ledger(papers, { asOf: '2026-10-31' }).items.filter(i => i.state === 'question').length, 1, 'שורות שאושרו וחסרות בניירות נשארות שאלה גם אחרי שבועות — עד "זה הכל"');
 });
 
@@ -284,3 +288,97 @@ test('סוג שלא נקרא — "לבדיקה", לא נספר כחיוב; תע�
   assert.deepEqual(t.actions.map(a => a.role), ['ledger-paper-open', 'ledger-start-receiving']);
   assert.match(t.detail, /3 יח׳ ו-שורה אחת/);
 });
+
+// ===== סבב סקירה שני =====
+test('נייר חיוב רגיל באותו ביקור (עודף שהגיע) ליד נייר הזיכוי הראשי — לא הופך אותו ל"משלים"', () => {
+  const charge = n => paper({ id: 'paper_2900' + n, kind: 'charge', number: '2900' + n, terminalNumber: '2900' + n, numerator: n, docDay: '2026-10-04', rows: [row(1, '1231', 2)] });
+  for (const n of ['95124', '95141']) {
+    const set = [P.p123, charge(n)], lg = ledger(set);
+    assert.equal(lg.placed.find(x => x.id === P.p123.id).attach.role, 'main', n);
+    assert.equal(lg.products.code_119.net, 1, n + ': 119 שלא זוכה נשאר שאלה');
+    assert.equal(lg.products.code_339.net, 3, n);
+  }
+  // נייר החיוב 141 (100 ×13 בלי עודף בקליטה) הוא סבב תיקונים — 142 שלידו נשאר משלים (M7)
+  const lg = ledger([P.p141, P.p142]);
+  assert.equal(lg.placed.find(x => x.id === P.p142.id).attach.role, 'side');
+});
+
+test('נייר מוקדם לחודש: כל ההחזרות המתאימות לפני תחילת המאזן — "מחוץ לתקופה", לא זיכוי שמסתיר חוסר אמיתי', () => {
+  const p = paper({ id: 'paper_290090300', kind: 'credit', number: '290090300', numerator: '90300', docDay: '2026-09-09', rows: [row(1, '233', 1)] });
+  const lg = ledger([p]);
+  assert.equal(lg.states[p.id], 'outside');
+  assert.equal(lg.products.code_233.net, 1, 'החוסר של 4.10 על 233 נשאר');
+  // בחודש סגור — השאלה כוללת גם את ההחזרות שלפני (תשובה כזו מוציאה את הנייר מהמאזן)
+  const q = paper({ id: 'paper_290094800', kind: 'credit', number: '290094800', numerator: '94800', docDay: '2026-10-01', rows: [row(1, '2381', 2)] });
+  const lc = ledger([q], { closedThrough: '2026-09-30' });
+  assert.equal(lc.states[q.id], 'needs-attach');
+  const labels = ledgerItemText(lc.items.find(i => i.kind === 'needsAttach'), lc, [q]).actions.map(a => a.label);
+  assert.ok(labels.some(l => /לפני תחילת המאזן/.test(l)), labels.join(' / '));
+});
+
+test('החלפה (100 במקום 101) לא בולעת חוסר אחר של 101 בקליטה; אחרי "מקבל" החוסר נשאר על הקליטה שלו', () => {
+  const rc = F.receipts.find(r => r.id.startsWith('receipt_83b2692c'));
+  const recs = F.receipts.map(r => r === rc ? { ...rc, items: rc.items.concat([{ productId: 'code_101', code: '101', name: 'x', qty: 3, noteQty: 5 }]) } : r);
+  const run = ps => paperLedger({ recs, rets: F.returns, papers: ps, from: '2026-09-01', asOf: '2026-10-05' });
+  let lg = run([P.p123, P.pSide]);
+  assert.deepEqual(brief(lg).filter(b => b[1] === 'code_101'), [['swap', 'code_101', 13, 'problem'], ['chargedNotReceived', 'code_101', 2, 'problem']]);
+  const accept = declared({ id: 'decl_swap', declare: 'accept-swap', pair: { a: 'code_101', b: 'code_100', q: 13 }, standsFor: { returnId: R1004 } });
+  lg = run([P.p123, P.pSide, accept]);
+  const it = lg.items.find(i => i.key === 'code_101');
+  assert.equal(it.kind, 'chargedNotReceived'); assert.equal(it.part.type, 'receipt');
+  assert.equal(lg.products.code_100.net, 0);
+});
+
+test('החלפה לא ודאית (כמה מוצרים חסרים באותה כמות) — לא מנחשים איזה; כל צד מוצג בשמו', () => {
+  const p = paper({ id: 'paper_290095150', kind: 'credit', number: '290095150', numerator: '95150', docDay: '2026-10-04', forReturnId: R1004,
+    rows: [row(1, '101', 13), row(2, '459', 1)] });
+  const lg = ledger([P.p123, p]);
+  assert.ok(!lg.items.some(i => i.kind === 'swap' && i.swap.b === 'code_459'), 'אין "זיכתה חלומית במקום X" שנבחר באקראי');
+  assert.ok(lg.items.some(i => i.kind === 'creditedNotReturned' && i.key === 'code_459'));
+});
+
+test('צילום חוזר של אותו נייר עם ספרה שגויה בתחילת המספר — אותו נומרטור, נספר פעם אחת', () => {
+  const a = { ...P.p142, numerator: '95142' };
+  const b = { ...P.p142, id: 'paper_280095142', number: '280095142', terminalNumber: null, numerator: '95142', timestamp: 9 };
+  const lg = ledger([P.p123, P.pSide, P.p141, a, b]);
+  assert.deepEqual([lg.states[a.id], lg.states[b.id]].sort(), ['counted', 'duplicate']);
+  assert.deepEqual(Object.values(lg.products).filter(x => x.net).map(x => [x.key, x.net]), [['code_1231', 2]]);
+  // "אלה שני ניירות שונים" — שניהם נספרים
+  const lg2 = ledger([P.p123, P.pSide, P.p141, a, { ...b, distinctFrom: [a.id] }]);
+  assert.equal(lg2.states[b.id], 'counted');
+});
+
+test('חודש סגור: שורה לחוסר בקליטה מלפני הסגירה לא מוציאה את כל נייר הזיכוי מהמאזן', () => {
+  const rets = F.returns.map(r => r.id === R1001 ? { ...r, credited: false, creditStatus: null } : r);
+  const lines = [row(1, '333', 2), row(2, '2387', 5), row(3, '401', 1), row(4, '238', 2), row(5, '2381', 5), row(6, '3604', 1)];
+  const p = paper({ id: 'paper_290090900', kind: 'credit', number: '290090900', numerator: '90900', docDay: '2026-10-02', forReturnId: R1001, rows: lines });
+  const lg = paperLedger({ recs: F.receipts, rets, papers: [p], from: '2026-09-01', closedThrough: '2026-09-30', asOf: '2026-10-05' });
+  assert.equal(lg.states[p.id], 'counted');
+  assert.ok(!lg.items.some(i => i.kind === 'returnNotCreditedYet' && i.part.id === R1001), 'ההחזרה מ-1.10 זוכתה בנייר');
+});
+
+test('שאלת התיקון מציגה את כל שורת נייר החיוב (×13) גם כשעודף קטן אחר של אותו מוצר קיים; "כן" לא מעלים את העודף', () => {
+  const rc = F.receipts.find(r => r.id.startsWith('receipt_83b2692c'));
+  const recs = F.receipts.map(r => r === rc ? { ...rc, items: rc.items.concat([{ productId: 'code_100', code: '100', name: 'לחם אחיד', qty: 1, noteQty: 0 }]) } : r);
+  const run = ps => paperLedger({ recs, rets: F.returns, papers: ps, from: '2026-09-01', asOf: '2026-10-05' });
+  const set = [P.p141, P.p142];
+  let lg = run(set);
+  const it = lg.items.find(i => i.kind === 'correctionPair');
+  assert.equal(it.units, 13);
+  assert.match(ledgerItemText(it, lg, set).text, /×13/);
+  const decl = declared({ id: 'decl_corr_x', declare: 'correction', docDay: P.p141.docDay, rows: [{ line: 1, itemCode: '100', productId: it.key, qty: it.units }], standsFor: { returnId: it.pair.returnId, chargePaperId: it.part.id } });
+  lg = run(set.concat([decl]));
+  assert.deepEqual(lg.items.filter(i => i.key === 'code_100').map(i => [i.kind, i.units]), [['receivedNotCharged', 1]]);
+});
+
+test('נתונים פגומים (שיוך משתמש שאינו רשימה, שורה ריקה, פריטים שאינם רשימה) — המאזן לא נופל', () => {
+  const bad = [
+    paper({ id: 'p1', kind: 'credit', docDay: '2026-10-04', rows: [row(1, '101', 1)], attach: { by: 'user', type: null, rowTargets: 'x' } }),
+    paper({ id: 'p2', kind: 'credit', docDay: '2026-10-04', rows: [row(1, '101', 1)], attach: { by: 'user', type: null, rowTargets: [null] } }),
+    declared({ id: 'd1', declare: 'correction', rows: [null], standsFor: {} })
+  ];
+  const recs = F.receipts.concat([{ id: 'rc_bad', docDate: '2026-10-03', items: { a: 1 } }]);
+  const rets = F.returns.concat([{ id: 'rt_bad', docDate: '2026-10-03', items: 'x' }]);
+  assert.doesNotThrow(() => paperLedger({ recs, rets, papers: bad, from: '2026-09-01', asOf: '2026-10-05' }));
+});
+
