@@ -335,7 +335,7 @@ test(supplier+': nothing-arrived records every paper line as a full shortage, on
  assert.equal(r.run('receiptQuantityReview'),null,'nothing before the confirmation');
  assert.equal(r.run('receiptList[0].qty'),4);
  assert.equal(r.run('pendingChoice[0]'),'לא הגיע כלום?');
- assert.match(r.run('pendingChoice[1]'),/ומה שכבר נספר יימחק/);
+ assert.match(r.run('pendingChoice[1]'),/^שים לב: כבר נספרו 4 יח׳ — הספירה תימחק\./,'how much is deleted, before anything');
  r.run('pendingChoice[3]()');closeNormal(r);
  assert.deepEqual(json(r,'receiptList.map(l=>[l.productId,l.qty])'),[['milk',0],['coffee',0]]);
  assert.deepEqual(finance(r),finance(normal));

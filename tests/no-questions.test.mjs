@@ -55,7 +55,25 @@ test('אחרי השמירה — המאזן במשפט אחד', () => {
   const r = runtime({ data: { ...fixture(), products: L.products } });
   r.context.testL = { receipts: L.receipts.slice().reverse(), returns: L.returns.slice().reverse(), papers: [L.papers.p141, L.papers.p142] };
   r.run(`receipts = testL.receipts; returns = testL.returns; papers = testL.papers; todayStr = () => '2026-10-05'; ledgerInvalidate();`);
-  assert.equal(r.run('receivingBalanceLine()'), 'במאזן: חויבת פעמיים על לחמניות 10 בשקית ×2 — לבקש זיכוי מהנהג');
+  assert.equal(r.run('receivingBalanceLine()'), 'במאזן: חויבת פעמיים על לחמניות 10 בשקית ×2 — לבקש זיכוי מהנהג · תיקון של ברמן התקזז: לחם אחיד ברמן ×13');
+  r.run(`todayStr = () => '2026-10-20'; ledgerInvalidate();`);
+  assert.doesNotMatch(r.run('receivingBalanceLine()'), /תיקון של ברמן/, 'תיקון ישן — לא חוזר בכל שמירה');
+  r.run(`todayStr = () => '2026-10-05'; ledgerInvalidate();`);
   r.run(`receipts = [{ id: 'rc_ok', date: '2026-10-04', timestamp: 1, items: [{ productId: 'code_101', name: 'x', qty: 3, noteQty: 3 }] }]; returns = []; papers = []; ledgerInvalidate();`);
   assert.equal(r.run('receivingBalanceLine()'), 'הכל מאוזן מול ברמן');
+});
+
+test('סקירה 8: נייר קטן מחודש אחר — לא נכנס לבד (ברמן מחייבת אותו בחודש שהודפס); מאותו חודש — כן', async () => {
+  const r = app(small('290095177', days(-3)));
+  await readPapers(r);
+  // הקליטה של היום (מדומה) בתחילת חודש, והנייר מסוף החודש הקודם — 3 ימים אחורה
+  const p = JSON.parse(r.run(`JSON.stringify(paperFind('paper_290095177').paper)`));
+  r.context.testP = { ...p, docDay: '2026-10-30' };
+  r.run(`todayStr = () => '2026-11-02'; receiptDocDate = null;`);
+  const scan = `paperIntake.items[0].scan`;
+  r.run(`receiptOpened = false; receiptList = []; aiScanResponse = null; receiptNotes = []; aiScanDocuments = []; receiptPaperScanState = null; reconcileData = null; pendingReceipt = null;`);
+  assert.equal(r.run(`receivingDraftEmpty()`), true);
+  assert.equal(r.run(`receivingDeliveryRoute(${scan}, testP, null, { fresh: true }).reason`), 'date-new', 'חודש אחר — שואלים');
+  r.context.testP = { ...p, docDay: '2026-11-01' };
+  assert.equal(r.run(`receivingDeliveryRoute(${scan}, testP, null, { fresh: true }).action`), 'new', 'אותו חודש — נכנס לבד');
 });

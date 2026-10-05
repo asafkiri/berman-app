@@ -6075,9 +6075,11 @@ function startReceiptQuantityReview(allMatch) {
     if (allMatch || none) commitReceiptQuantityReview(); else renderReceiptQuantityReview();
   };
   if (none) {
-    const n = receiptPaperDocCount();
-    showConfirm('לא הגיע כלום?', (n > 1 ? 'לא הגיע כלום מכל ' + n + ' התעודות בקליטה: כל השורות שבהן' : 'כל השורות שבתעודה') + ' יירשמו כחוסר (0 התקבלו)' +
-      (receiptList.length ? ', ומה שכבר נספר יימחק' : '') + '. אם משהו כן הגיע — סרוק אותו או בחר "יש חוסרים או עודפים". המאזן ישייך את החוסרים למה שכבר חסר או עודף בהיסטוריה, ויראה מה באמת פתוח.', 'לא הגיע כלום', begin);
+    // ספירה שכבר נעשתה נמחקת — אומרים כמה, כדי שלא יימחק בטעות מה שבאמת הגיע
+    const n = receiptPaperDocCount(), counted = receiptList.reduce((a, l) => a + (Number(l && l.qty) || 0), 0);
+    showConfirm('לא הגיע כלום?', (counted > 0 ? 'שים לב: כבר נספרו ' + mtxQty(counted) + ' יח׳ — הספירה תימחק. ' : '') +
+      (n > 1 ? 'לא הגיע כלום מכל ' + n + ' התעודות בקליטה: כל השורות שבהן' : 'כל השורות שבתעודה') + ' יירשמו כחוסר (0 התקבלו). ' +
+      'אם משהו כן הגיע — סרוק אותו או בחר "יש חוסרים או עודפים". המאזן ישייך את החוסרים למה שכבר חסר או עודף בהיסטוריה, ויראה מה באמת פתוח.', 'לא הגיע כלום', begin);
     return;
   }
   if (allMatch && receiptList.length) showConfirm('אישור כל הכמויות', 'הכמויות שכבר הוזנו יוחלפו בכמויות שבתעודה, כולל ביטול חוסרים ועודפים שסומנו. בדקת שכולן תואמות?', 'כן, כל הכמויות תואמות', begin);
@@ -12121,10 +12123,18 @@ async function confirmReceipt() {
   else showToast('התעודה נקלטה ✓ · ' + receivingBalanceLine(), null, null, 4200); // v130: ובסוף — המאזן
 }
 // v130: המאזן במשפט אחד — אחרי שמירת קליטה
+// "הכל מאוזן" רק כשאין גם מה שממתין לנייר; תיקון של ברמן שזוהה לבד בימים האחרונים — נאמר, לא נבלע בשקט
 function receivingBalanceLine() {
-  let list = []; try { ledgerInvalidate(); list = openIssuesList(); } catch (e) { return 'המאזן לא חושב'; }
-  if (!list.length) return 'הכל מאוזן מול ברמן';
-  return 'במאזן: ' + list[0].text + (list.length > 1 ? ' (ועוד ' + (list.length - 1) + ')' : '');
+  let list = [], lg = null;
+  try { ledgerInvalidate(); list = openIssuesList(); lg = currentLedger(); } catch (e) { return 'המאזן לא חושב'; }
+  const recent = ledgerAddDays(todayStr(), -3);
+  const nm = k => (lg.products[k] && lg.products[k].name) || String(k || '').replace(/^code_/, '');
+  const fixes = lg.items.filter(it => it.kind === 'autoCorrection' && it.decl && String(it.decl.docDay) >= recent);
+  const fixText = fixes.length ? ' · תיקון של ברמן התקזז: ' + fixes.map(it => nm(it.key) + ' ×' + mtxQty(it.units)).join(', ') : '';
+  if (list.length) return 'במאזן: ' + list[0].text + (list.length > 1 ? ' (ועוד ' + (list.length - 1) + ')' : '') + fixText;
+  const waiting = lg.items.filter(it => it.state === 'pending').length;
+  if (waiting) return 'אין מה לבקש מהנהג כרגע · ' + (waiting === 1 ? 'דבר אחד ממתין' : waiting + ' דברים ממתינים') + ' לנייר (במאזן)' + fixText;
+  return 'הכל מאוזן מול ברמן' + fixText;
 }
 // v27: מחיקת תעודת חזרה — עם גיבוי וביטול מיידי, כמו בקליטה
 // v66: תעודת חזרות ששויך ממנה זיכוי לחוסר בקליטה אינה נמחקת לפני שהשיוך
@@ -12871,8 +12881,9 @@ function ledgerPaperStates(papers, recs, start, asOf) {
     else if (p.state === 'void') st = 'void';
     else if (p.kind == null) st = 'unproven'; // הסוג לא נקרא — המשתמש בוחר בבדיקה
     else if (p.kind === 'declared') st = 'counted';
-    // תעודת משלוח לא נספרת במאזן (הקליטה סופרת) — רק תזכורת עד שנקלטה, גם אם לא נקראה עד הסוף
-    else if (p.kind === 'delivery') st = inReceipt() || bareDays.has(String(p.docDay)) ? 'in-receipt' : 'awaiting-receipt';
+    // תעודת משלוח לא נספרת במאזן (הקליטה סופרת) — רק תזכורת עד שנקלטה, גם אם לא נקראה עד הסוף.
+    // v130: נייר "ת.משלוח" קטן — רק לפי המספר או התוכן (קליטה בלי נייר מאותו יום היא כמעט תמיד התעודה הגדולה)
+    else if (p.kind === 'delivery') st = inReceipt() || (!p.small && bareDays.has(String(p.docDay))) ? 'in-receipt' : 'awaiting-receipt';
     else if (p.state !== 'accepted' || !p.docDay || !rows || !rows.length || rows.some(r => !r || !r.productId || !(Number(r.qty) > 0))) st = 'unproven';
     else if (inReceipt()) st = 'in-receipt';
     if (st === 'counted' && p.kind !== 'declared') {
@@ -12971,20 +12982,10 @@ function paperAttach(p, base, others, all, start) {
   const keysOnR = Object.keys(R.rows).filter(k => R.rows[k].sent > 0);
   const covered = new Set(rows.filter(r => onR(R, r.k)).map(r => r.k));
   const hasMain = (others || []).some(o => o.attach && o.attach.type === 'return' && o.attach.id === R.id && o.attach.role === 'main');
-  // נייר זיכוי שיצא באותו יום ליד נייר חיוב (נומרטור ±3) שחלק משורותיו אינן עודף בקליטה — סבב
-  // תיקונים: לעולם לא "ראשי". חיוב שכל שורותיו הן עודף שהגיע (סחורה שנוספה בדלת) אינו תיקון.
-  const chargeUnexplained = o => {
-    // v130: נייר "ת.משלוח" קטן שנקלט — שורה שלא הגיעה בקליטה שלו (חוסר בכל הכמות)
-    if (o.recId) {
-      const rc = recs.find(d => d.id === o.recId);
-      return !!rc && (Array.isArray(o.rows) ? o.rows : []).some(r => { const x = r && rc.rows[paperRowKey(r).key], q = Number(r && r.qty) || 0; return !!x && q > 0 && x.billed - x.received >= q; });
-    }
-    const pl = (others || []).find(x => x && x.id === o.id && x.attach);
-    if (pl) return (Array.isArray(pl.attach.rowTargets) ? pl.attach.rowTargets : []).some(t => !t || !t.type);
-    return (Array.isArray(o.rows) ? o.rows : []).some(r => { const k = paperRowKey(r).key, q = Number(r && r.qty) || 0; return !nearRecs(k, +1).some(d => recRoom(d, k, +1) >= q); });
-  };
-  const nearCharge = (all || others || []).some(o => o && (o.kind === 'charge' || (o.kind === 'delivery' && o.recId)) && o.id !== p.id && String(o.docDay) === day && paperNumerator(o) && paperNumerator(p) && Math.abs(paperNumerator(o) - paperNumerator(p)) <= 3 && chargeUnexplained(o));
-  const role = !hasMain && !nearCharge && covered.size * 2 >= keysOnR.length ? 'main' : 'side';
+  // "ראשי" — רק לפי כמה מההחזרה הנייר מכסה. v130: בלי הורדה ל"משלים" בגלל נייר חיוב סמוך — נייר ראשי
+  // שחסרה בו שורה צריך להראות את החסר (בלי שאלות, תיקון של ברמן מזוהה רק כשהנייר הראשי באמת לא צולם).
+  // החזרה שנבחרה לבד בשוויון (autoPick) — אף פעם לא ראשי: הבחירה לא משנה את המאזן לפי מוצר.
+  const role = !hasMain && !p.autoPick && covered.size * 2 >= keysOnR.length ? 'main' : 'side';
   // v128: שורה שאינה בהחזרה, ושחלק מתעודת הזיכוי שלה כבר שויך לחוסר בקליטה — לאותה קליטה (בלי חלון ימים)
   const allocTarget = row => {
     const ids = (R.recAllocs || []).filter(a => a.key === row.k).map(a => a.receiptId);
@@ -13030,7 +13031,6 @@ function paperLedger(opts) {
   recs.forEach(rc => storedReceiptPaperNumbers(rc).forEach(n => { if (!recOfNum.has(n)) recOfNum.set(n, rc.id); }));
   const smallIn = papers.filter(p => states[p.id] === 'in-receipt' && p.kind === 'delivery' && p.small === true && p.docDay && Array.isArray(p.rows))
     .map(p => { const n = paperNumbers(p).find(x => recOfNum.has(x)); return n ? { ...p, recId: recOfNum.get(n) } : null; }).filter(Boolean);
-  const nearAll = real.concat(smallIn);
   const placed = [], orphans = [], asks = {};
   const outside = t => t && t.type && !byId.has(t.type + ':' + t.id) && byIdWide.has(t.type + ':' + t.id);
   const exists = t => !t || !t.type || byIdWide.has(t.type + ':' + t.id);
@@ -13038,14 +13038,14 @@ function paperLedger(opts) {
     let at = p.attach && p.attach.by === 'user' && !p.attach.ask && Array.isArray(p.attach.rowTargets) ? p.attach : null;
     if (at && (!exists(at) || at.rowTargets.some(t => !exists(t)))) { orphans.push(p); at = null; }
     // tieStart: מאזן מלא (סטטוס תעודות, מרכזת) משבץ בדיוק כמו המאזן החי, גם כשהוא מתחיל לפניו
-    if (!at) at = paperAttach(p, baseWide, placed, nearAll, opts.tieStart || start);
+    if (!at) at = paperAttach(p, baseWide, placed, real, opts.tieStart || start);
     if (at.ask) {
       const all = (Array.isArray(at.ask) ? at.ask : []).filter(id => byIdWide.has('return:' + id));
       // כל המועמדות מלפני תחילת המאזן — הנייר שייך לשם; לא נספר כאן כזיכוי בלי שיוך.
       // אחרת שואלים, גם עם ההחזרות שלפני (תשובה כזו מוציאה את הנייר מהמאזן)
       // v130: בלי שאלה — ההחזרה המתאימה ביותר מתוך תקופת המאזן (המאזן לפי מוצר לא תלוי בבחירה; [שנה] בבדיקת הנייר)
       const pick = all.find(id => byId.has('return:' + id));
-      if (pick) at = paperAttach({ ...p, forReturnId: pick, userPick: true }, baseWide, placed, nearAll, opts.tieStart || start);
+      if (pick) at = paperAttach({ ...p, forReturnId: pick, userPick: true, autoPick: true }, baseWide, placed, real, opts.tieStart || start);
       // נייר שרוב שורותיו שייכות להחזרה מלפני תחילת המאזן — לשם; נייר של חוסרים בקליטה שרק חלק ממנו
       // משותף להחזרות ישנות — נספר לפי היעדים של השורות (קליטה מלפני ההתחלה — לא נספרת)
       const onRecs = (Array.isArray(at.rowTargets) ? at.rowTargets : []).every(t => t && t.type === 'receipt' && byId.has('receipt:' + t.id));
@@ -13110,30 +13110,38 @@ function paperLedger(opts) {
   });
   // gap0 — מה שהנייר חייב/זיכה כפי שמודפס (gap משתנה אחר כך מול "כן, זה תיקון" ו"מקבל את ההחלפה"; המרכזת צריכה את המודפס)
   loose.forEach(x => push(x.k, { type: 'paper', id: x.p.id, day: String(x.p.docDay), gap: x.sign * x.q, gap0: x.sign * x.q, kind: x.p.kind, papers: [x.p.id] }));
-  // v130: תיקון של ברמן מזוהה לבד — נייר חיוב n על X בלי קליטה מתאימה, ובאותו יום נייר זיכוי סמוך (נומרטור ±3)
-  // שזיכה n על Y במקום — כאילו ענו "כן, זה תיקון" (בלי שאלה). לא כשכבר ענו, וכשהנייר הראשי של ההחזרה צולם —
-  // אז הוא עצמו מסביר. נספר כמו תשובה (גם במרכזת), ומוצג במאזן "לידיעה".
-  // גם נייר "ת.משלוח" קטן שנקלט: שורה שלא הגיעה בו (חוסר בקליטה בכל הכמות) נבדקת באותה דרך
+  // v130: תיקון של ברמן מזוהה לבד — שורת חיוב n על X שלא הגיעה, ובאותו יום נייר זיכוי סמוך (נומרטור ±3) שהוא
+  // משלים (הנייר הראשי של ההחזרה לא צולם) וזיכה n על Y שכבר זוכה ברישום — כאילו ענו "כן, זה תיקון" (בלי שאלה).
+  // רק זוג חד-משמעי: לשורת החיוב מועמדת אחת, ושורת הזיכוי מתאימה רק לה. אחרת — לא מנחשים: החיוב נשאר
+  // "חויבת ולא קיבלת" (בטוח: עדיף לבקש מאשר להסתיר חוסר). נספר כמו תשובה (גם במרכזת), ומוצג במאזן "לידיעה".
+  // שורה של נייר חיוב — כשלא נצמדה לעודף; שורה של נייר "ת.משלוח" קטן שנקלט — כשחסרה בקליטה שלו בכל הכמות,
+  // ואין לאותו מוצר עודף בקליטה סמוכה (עודף כזה — הנייר חייב אותו, לא תיקון)
   const autoDeclared = [];
-  const pairCtx = { placed: placed.concat(smallIn), docOf: (t, id) => byId.get(t + ':' + id), mainOf };
-  const autoCorrect = (cp, k, q, recId) => {
-    if (declared.some(d => d.declare === 'correction' && d.standsFor && d.standsFor.chargePaperId === cp.id && (d.rows || []).some(r => r && paperRowKey(r).key === k))) return;
-    const pair = ledgerCorrectionPair(k, { id: cp.id, type: 'paper', day: String(cp.docDay) }, q, pairCtx);
-    if (!pair) return;
-    const id = 'auto_corr_' + cp.id + '_' + k;
-    if (autoDeclared.some(d => d.id === id)) return;
-    const d = { schema: 1, id, kind: 'declared', declare: 'correction', auto: true, state: 'accepted', docDay: String(cp.docDay),
-      rows: [{ line: 1, productId: k, itemCode: (meta[k] && meta[k].code) || '', qty: pair.units }],
-      standsFor: { returnId: pair.returnId, chargePaperId: cp.id, creditPaperId: pair.creditPaperId, other: pair.other, ...(recId ? { receiptId: recId } : {}) } };
-    autoDeclared.push(d); declared.push(d); states[id] = 'counted';
-  };
-  loose.forEach(x => { if (x.sign > 0) autoCorrect(x.p, x.k, x.q, null); });
+  const pairCtx = { placed, docOf: (t, id) => byId.get(t + ':' + id), mainOf };
+  const answered = (cp, k) => declared.some(d => d.declare === 'correction' && d.standsFor && d.standsFor.chargePaperId === cp.id && (d.rows || []).some(r => r && paperRowKey(r).key === k));
+  const corrCands = [];
+  loose.forEach(x => { if (x.sign > 0 && !answered(x.p, x.k)) corrCands.push({ cp: x.p, k: x.k, q: x.q, recId: null }); });
   smallIn.forEach(sp => sp.rows.forEach(r => {
     if (!r) return;
     const k = paperRowKey(r).key, q = Number(r.qty) || 0;
-    const x = (gaps[k] || []).find(z => z.type === 'receipt' && z.id === sp.recId);
-    if (q > 0 && x && x.gap >= q) autoCorrect(sp, k, q, sp.recId);
+    const own = (gaps[k] || []).find(z => z.type === 'receipt' && z.id === sp.recId);
+    const net = (gaps[k] || []).reduce((a, z) => a + z.gap, 0);
+    const day = String(sp.docDay), lo = ledgerAddDays(day, -7), hi = ledgerAddDays(day, 1);
+    const surplusNear = (gaps[k] || []).some(z => z.type === 'receipt' && z.id !== sp.recId && z.gap < 0 && z.day >= lo && z.day <= hi);
+    if (q > 0 && own && own.gap >= q && net >= q && !surplusNear && !answered(sp, k)) corrCands.push({ cp: sp, k, q, recId: sp.recId });
   }));
+  corrCands.forEach(c => { c.list = ledgerCorrectionCandidates(c.k, c.cp, c.q, pairCtx); });
+  const slotUses = {};
+  corrCands.forEach(c => c.list.forEach(m => { slotUses[m.slot] = (slotUses[m.slot] || 0) + 1; }));
+  corrCands.forEach(c => {
+    if (c.list.length !== 1 || slotUses[c.list[0].slot] !== 1) return;
+    const pair = c.list[0], id = 'auto_corr_' + c.cp.id + '_' + c.k;
+    if (autoDeclared.some(d => d.id === id)) return;
+    const d = { schema: 1, id, kind: 'declared', declare: 'correction', auto: true, state: 'accepted', docDay: String(c.cp.docDay),
+      rows: [{ line: 1, productId: c.k, itemCode: (meta[c.k] && meta[c.k].code) || '', qty: pair.units }],
+      standsFor: { returnId: pair.returnId, chargePaperId: c.cp.id, creditPaperId: pair.creditPaperId, other: pair.other, ...(c.recId ? { receiptId: c.recId } : {}) } };
+    autoDeclared.push(d); declared.push(d); states[id] = 'counted';
+  });
   // "כן, זה תיקון": זיכוי שלא צולם — עד שהנייר הראשי של אותה החזרה צולם, וכל עוד נייר החיוב שבגללו נשאל עדיין נספר
   declared.forEach(p => {
     if (p.declare !== 'correction') return;
@@ -13313,9 +13321,9 @@ function ledgerClassify(k, x, units, sign, c) {
       if (x.paperMode) {
         const main = (c.mainOf[x.id] || [])[0];
         const complete = (c.papers || []).some(p => p.kind === 'declared' && p.declare === 'complete' && p.returnId === x.id);
-        // שורה שהאישור הרשום כלל וחסרה בניירות — אולי בנייר שעוד לא צולם; רק "זה הכל" הופך אותה לבעיה
-        const late = !(x.approved > 0) && main && ledgerDeliveriesSince(c.recs, String(main.docDay), c.asOf) >= LEDGER_PENDING_DELIVERIES;
-        // v130: בלי שאלה — ממתין (אולי יגיע עוד נייר), ואחרי 3 משלוחים — לבקש מהנהג
+        // v130: בלי שאלה — שורה שחסרה בניירות ממתינה (אולי בנייר שעוד לא צולם), ואחרי 3 משלוחים — לבקש מהנהג,
+        // גם כשהאישור הרשום כלל אותה (אחרת זיכוי חסר נשאר "ממתין" לעולם; נייר שמגיע אחר כך — סוגר)
+        const late = main && ledgerDeliveriesSince(c.recs, String(main.docDay), c.asOf) >= LEDGER_PENDING_DELIVERIES;
         return { ...base, kind: 'returnedNotCredited', state: complete || late ? 'problem' : 'pending', askMore: !complete && !late, mainPaperId: main && main.id };
       }
       if (x.verifiedShort) return { ...base, kind: 'returnedNotCredited', state: 'problem' };
@@ -13323,9 +13331,7 @@ function ledgerClassify(k, x, units, sign, c) {
       return { ...base, kind: 'returnNotCreditedYet', state: late ? 'problem' : 'pending' };
     }
     if (x.type === 'paper') {
-      const pair = ledgerCorrectionPair(k, x, units, c);
-      if (pair) return { ...base, units: pair.units, kind: 'correctionPair', state: 'question', pair };
-      // חיוב בלי קליטה מתאימה: עד המשלוח הבא — שאלה (אולי יש נייר זיכוי מאותו יום שלא צולם)
+      // חיוב בלי קליטה מתאימה (ובלי תיקון חד-משמעי): עד המשלוח הבא — ממתין (אולי יש נייר זיכוי מאותו יום שלא צולם)
       const early = ledgerDeliveriesSince(c.recs, x.day, c.asOf) < 1;
       return { ...base, kind: 'paperChargeNotReceived', state: early ? 'pending' : 'problem' }; // v130: בלי שאלה
     }
@@ -13339,22 +13345,29 @@ function ledgerClassify(k, x, units, sign, c) {
 }
 // חיוב קטן שמבטל זיכוי שנרשם על מוצר אחר: חיוב n על X בלי קליטה מתאימה, ובאותו יום
 // נייר זיכוי סמוך (נומרטור ±3) מזכה n על Y — מוצר שנשלח בהחזרה שאושרה בלי נייר.
-function ledgerCorrectionPair(k, x, units, c) {
-  const charge = (c.placed || []).find(p => p.id === x.id); if (!charge) return null;
-  const row = (charge.rows || []).find(r => paperRowKey(r).key === k);
-  const q = row ? Number(row.qty) || 0 : units;
+// v130: כל זוגות התיקון האפשריים לשורת חיוב X ×q בנייר chargeP: שורה בנייר זיכוי מאותו יום (שני הנומרטורים
+// מודפסים, הפרש ≤3) על מוצר אחר Y באותה כמות, בהחזרה שזוכתה ברישום על Y לפחות בכמות הזו, ושאין לה נייר ראשי.
+// slot — שורת הזיכוי (נייר + מספר שורה), כדי ששורת זיכוי אחת לא תסביר שני חיובים.
+function ledgerCorrectionCandidates(k, chargeP, q, c) {
+  const out = [], nc = paperNumerator(chargeP);
+  if (!chargeP || !nc || !(q > 0)) return out;
   for (const p of c.placed || []) {
-    if (p.kind !== 'credit' || String(p.docDay) !== String(charge.docDay)) continue;
-    if (paperNumerator(p) && paperNumerator(charge) && Math.abs(paperNumerator(p) - paperNumerator(charge)) > 3) continue;
-    for (const r of p.rows || []) {
+    if (p.kind !== 'credit' || String(p.docDay) !== String(chargeP.docDay)) continue;
+    const np = paperNumerator(p);
+    if (!np || Math.abs(np - nc) > 3) continue;
+    const retId = p.attach && p.attach.type === 'return' ? p.attach.id : null;
+    const R = retId && c.docOf('return', retId);
+    if (!R || (c.mainOf[retId] || []).length || !R.credited) continue;
+    (Array.isArray(p.rows) ? p.rows : []).forEach((r, i) => {
+      if (!r) return;
       const y = paperRowKey(r).key;
-      if (y === k || (Number(r.qty) || 0) !== q) continue;
-      const retId = p.attach && p.attach.type === 'return' ? p.attach.id : null;
-      const R = retId && c.docOf('return', retId);
-      if (R && !(c.mainOf[retId] || []).length && R.credited && R.rows[y] && R.rows[y].cred >= q) return { returnId: retId, creditPaperId: p.id, other: y, units: q };
-    }
+      if (y === k || (Number(r.qty) || 0) !== q) return;
+      const t = (p.attach.rowTargets || []).find(z => z && z.line === i);
+      if (!t || t.type !== 'return') return;
+      if (R.rows[y] && R.rows[y].cred >= q) out.push({ returnId: retId, creditPaperId: p.id, other: y, units: q, slot: p.id + '#' + i });
+    });
   }
-  return null;
+  return out;
 }
 function ledgerDayShort(d) { const s = String(d || ''); return /^\d{4}-\d{2}-\d{2}/.test(s) ? (+s.slice(8, 10)) + '.' + (+s.slice(5, 7)) : (s || 'בלי תאריך'); }
 function ledgerRowsText(n) { n = Number(n) || 0; return n === 1 ? 'שורה אחת' : n + ' שורות'; }
@@ -14199,8 +14212,10 @@ function receivingDeliveryRoute(scan, paper, item, opts) {
   const day = String(paper.docDay || '');
   const recvDay = receiptDocDate || todayStr();
   const sameDay = /^\d{4}-\d{2}-\d{2}$/.test(day) && Math.abs(receivingDayGap(day, recvDay)) <= 1;
-  // v130: נייר "ת.משלוח" קטן מהשבוע האחרון — נכנס לקליטה הפתוחה (או פותח קליטה) בלי לשאול על התאריך
-  const small = !!paper.small && /^\d{4}-\d{2}-\d{2}$/.test(day) && receivingDayGap(todayStr(), day) >= 0 && receivingDayGap(todayStr(), day) <= 7;
+  // v130: נייר "ת.משלוח" קטן מהשבוע האחרון — נכנס לקליטה הפתוחה (או פותח קליטה) בלי לשאול על התאריך.
+  // רק באותו חודש של הקליטה: ברמן מחייבת אותו בחודש שהודפס, והמרכזת סופרת את הקליטה בחודש שלה
+  const small = !!paper.small && /^\d{4}-\d{2}-\d{2}$/.test(day) && receivingDayGap(todayStr(), day) >= 0 && receivingDayGap(todayStr(), day) <= 7
+    && Math.abs(receivingDayGap(recvDay, day)) <= 7 && day.slice(0, 7) === String(recvDay).slice(0, 7);
   const typed = receiptNotes.length > 0 && receiptAnchorSource !== 'paper';
   const resp = aiScanResponse;
   const docs = resp && resp.scan && Array.isArray(resp.scan.documents) ? resp.scan.documents : [];
