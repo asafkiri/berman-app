@@ -14435,7 +14435,7 @@ function paperIntakeItemHtml(item) {
         (!ok && p.review && p.review.notes && p.review.notes.length ? '<div class="text-[11px] text-amber-700 font-bold mt-0.5">' + (p.review.notes.length === 1 ? 'דבר אחד' : p.review.notes.length + ' דברים') + ' לבדוק מול הנייר — לחץ "לבדיקה"</div>' : '') +
         (p.otherPapersVisible ? '<div class="text-[11px] text-amber-700 font-bold mt-0.5"><i class="fa-solid fa-circle-exclamation"></i> נראה שיש בתמונה עוד נייר — צלם אותו בנפרד.</div>' : '');
       tone = good ? 'border-emerald-200 bg-emerald-50' : ok ? 'border-slate-200 bg-slate-50' : 'border-amber-200 bg-amber-50';
-      actions = btn('paper-open', ok ? 'פרטים / שנה' : 'לבדיקה', ' data-id="' + htmlEscape(p.id) + '"' + capAttr);
+      actions = again && ok ? '' : btn('paper-open', ok ? 'פרטים / שנה' : 'לבדיקה', ' data-id="' + htmlEscape(p.id) + '"' + capAttr);
     }
   }
   return '<div class="rounded-2xl border ' + tone + ' p-2.5 flex gap-2.5 items-start">' + img + '<div class="flex-1 min-w-0">' + body + (actions ? '<div class="flex gap-1.5 mt-2 flex-wrap">' + actions + '</div>' : '') + '</div></div>';
@@ -14460,8 +14460,7 @@ function renderPaperIntake() {
     (it.progress ? '<div class="bg-slate-900 text-white rounded-full px-4 py-2.5 text-sm font-black text-center mb-3" role="status" aria-live="polite"><i class="fa-solid fa-spinner fa-spin"></i> ' + htmlEscape(it.progress) + '</div>' : '') +
     count +
     (it.items.length ? '' : '<div class="rounded-xl bg-blue-50 border border-blue-200 p-3 mb-3 text-xs font-black text-blue-800"><i class="fa-solid fa-arrow-up" aria-hidden="true"></i> צלם נייר בכפתור "צלם נייר מהנהג" למעלה.</div>') +
-    '<div id="paperIntakeList" class="space-y-2 mb-3">' + it.items.map(paperIntakeItemHtml).join('') + '</div>' +
-    (open ? '' : '<button data-role="paper-done" class="btn-tap w-full min-h-[48px] bg-white border-2 border-slate-200 text-slate-700 rounded-2xl py-3 font-black mb-24">סיום</button>');
+    '<div id="paperIntakeList" class="space-y-2 mb-24">' + it.items.map(paperIntakeItemHtml).join('') + '</div>';
 }
 function refreshPaperIntake() { if (currentView === 'paperIntake') renderPaperIntake(); }
 
