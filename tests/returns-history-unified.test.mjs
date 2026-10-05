@@ -121,8 +121,9 @@ test('the unified screen carries a card for every return — pending, verified a
   assert.match(page, /<i class="fa-solid fa-hourglass-half"><\/i> ממתינה לאימות זיכוי/);
   assert.doesNotMatch(page, /לא אומתה/, 'old pending wording is gone');
   assert.doesNotMatch(page, /ממתין לאימות זיכוי(?!<)/, 'old screen wording is gone');
-  ['ret-resend', 'rv-verify-inline', 'rv-approve', 'ret-edit-items', 'ret-edit-date', 'ret-unsend', 'ret-delete'].forEach(role =>
+  ['ret-resend', 'rv-verify-inline', 'ret-edit-items', 'ret-edit-date', 'ret-unsend', 'ret-delete'].forEach(role =>
     assert.ok(page.includes(roleFor(role, 'ret_pending')), 'pending card offers ' + role));
+  assert.ok(!page.includes(roleFor('rv-approve', 'ret_pending')), 'v128: no blind approve on the card — it lives in the manual check');
   assert.match(pendingCard, /<i class="fa-brands fa-whatsapp"><\/i> שלח שוב בוואטסאפ/);
   assert.equal(roleCount(page, 'del-return'), 0, 'berman has one delete button: ret-delete');
   assert.equal(roleCount(page, 'ret-merge'), 0, 'merge is offered only with two pending documents');
@@ -268,7 +269,7 @@ test('every "returns history" entry point lands on the unified screen', async ()
   assert.match(html(red), /<button data-role="ret-history"[^>]*bg-rose-600[^>]*>.*יש תעודת חזרות פתוחה לאימות.*לאימות ←/);
   await red.click('ret-history');
   assert.equal(red.run('currentView'), 'receiptsHistory');
-  assert.ok(html(red).includes(roleFor('rv-approve', 'ret_pending')));
+  assert.ok(html(red).includes(roleFor('rv-verify-inline', 'ret_pending')));
 
   // כפתור ההיסטוריה בסרגל העליון: חזרות / קליטה / ניהול — למסך המאוחד; הזמנה — להיסטוריית ההזמנות
   const bar = open([pendingReturn()]);
@@ -447,7 +448,7 @@ test('the flows that used to go back to the returns screen — a saved verificat
   saved.context.testNewDoc = structuredClone(write.data);
   saved.run("returns = [{ id: '" + newId + "', ...testNewDoc }]; renderReceiptsHistory();");
   assert.match(html(saved), /תעודת חזרה אחת ממתינה לאימות זיכוי/);
-  ['ret-resend', 'rv-verify-inline', 'rv-approve', 'ret-edit-items', 'ret-delete'].forEach(role =>
+  ['ret-resend', 'rv-verify-inline', 'ret-edit-items', 'ret-delete'].forEach(role =>
     assert.ok(html(saved).includes(roleFor(role, newId)), 'new pending card offers ' + role));
 
   // שליחה בוואטסאפ לנהג: אותה נחיתה, והקישור נפתח
@@ -465,17 +466,18 @@ test('the flows that used to go back to the returns screen — a saved verificat
 });
 
 test('approving, checking and un-verifying on the unified screen redraw it in place — the chains that used to redraw the old screen', async () => {
-  // אישור מהיר (rv-approve → חלון אישור → markReturnVerified): נשארים במסך, הכרטיס ירוק, שורת ההמתנה נעלמת, המאזן מאוזן
+  // v128: "הכל זוכה במלואו" בבדיקה הידנית (rv-all-credited → חלון אישור → markReturnVerified): חוזרים למסך, הכרטיס ירוק, שורת ההמתנה נעלמת
   const rt = open([pendingReturn(), openGapReturn()]);
   rt.run("currentView = 'receiptsHistory'; renderReceiptsHistory();");
   assert.match(html(rt), /תעודת חזרה אחת ממתינה לאימות זיכוי/);
-  await rt.click('rv-approve', 'ret_pending');
+  await rt.click('rv-verify-inline', 'ret_pending');
+  await rt.click('rv-all-credited');
   assert.equal(rt.node('confirmTitle').textContent, 'אישור תעודת זיכוי');
   assert.match(rt.node('confirmMsg').textContent, /לאשר שהספק זיכה על כל 3 היחידות/);
   assert.equal(rt.run('returns[0].credited'), false, 'nothing changes before the confirmation');
   await rt.events.get('confirmOk:click')();
-  await rt.run('Promise.resolve()');
-  assert.equal(rt.run('currentView'), 'receiptsHistory', 'still on the unified screen');
+  for (let i = 0; i < 10; i++) await new Promise(res => setImmediate(res));
+  assert.equal(rt.run('currentView'), 'receiptsHistory', 'back on the unified screen');
   assert.equal(rt.run('returns[0].credited'), true);
   assert.equal(rt.run('returns[0].creditNoteTotal'), undefined, 'no computed amount is stored');
   let page = html(rt);
@@ -501,7 +503,7 @@ test('approving, checking and un-verifying on the unified screen redraw it in pl
   page = html(rt);
   assert.match(cardOf(page, 'ret_pending'), /^border-amber-300 /);
   assert.match(page, /תעודת חזרה אחת ממתינה לאימות זיכוי/);
-  ['ret-resend', 'rv-verify-inline', 'rv-approve', 'ret-edit-items', 'ret-delete'].forEach(role =>
+  ['ret-resend', 'rv-verify-inline', 'ret-edit-items', 'ret-delete'].forEach(role =>
     assert.ok(page.includes(roleFor(role, 'ret_pending')), 'reopened card offers ' + role));
   assert.deepEqual([rt.writes[rt.writes.length - 1].data.credited, rt.writes[rt.writes.length - 1].data.creditNoteTotal], [false, null]);
 
@@ -542,7 +544,7 @@ test('a filter chip chosen earlier never hides the returns the entry points prom
   rt.run("receiptHistoryFilter = 'done'; currentView = 'returns'; mainMode = 'returns'");
   await rt.events.get('btnHistory:click')();
   assert.equal(rt.run('receiptHistoryFilter'), 'all', 'the history button from the returns tab resets too');
-  assert.ok(html(rt).includes(roleFor('rv-approve', 'ret_pending')));
+  assert.ok(html(rt).includes(roleFor('rv-verify-inline', 'ret_pending')));
   rt.run("receiptHistoryFilter = 'open'; currentView = 'receiving'; mainMode = 'receiving'");
   await rt.events.get('btnHistory:click')();
   assert.equal(rt.run('currentView'), 'receiptsHistory');

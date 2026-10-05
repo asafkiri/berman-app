@@ -68,17 +68,17 @@ function openDoc(extra) {
 }
 const openEx = r2(pitaUnit * 4 + loafUnit);
 
-head('[1] אישור מהיר — כל היחידות שהוחזרו זוכו');
+head('[1] v128: בלי "אישור" עיוור בכרטיס — בדיקה ידנית (ושם "הכל זוכה במלואו")');
 {
   const r = openDoc();
   ok('5 יחידות הוחזרו', returnSentUnits(r) === 5);
   const html = retVerifyRowHtml(r);
-  ok('שורת האימות מציעה גם בדיקה וגם אישור', html.indexOf('data-role="rv-verify-inline"') > -1 && html.indexOf('data-role="rv-approve"') > -1);
-  ok('ושתיהן נושאות את מזהה התעודה; את תעודת הזיכוי מצלמים בכפתור האחד שבפס העליון (v126 — בלי מצלמה בכרטיס)', (html.match(/data-id="ret_open"/g) || []).length === 2 && html.indexOf('data-role="paper-photo"') === -1 && html.indexOf('צלם נייר מהנהג') > -1);
-  ok('האישור נאמר ביחידות', html.indexOf('כל 5 היחידות') > -1);
+  ok('שורת האימות מציעה בדיקה ידנית — בלי אישור עיוור', html.indexOf('data-role="rv-verify-inline"') > -1 && html.indexOf('data-role="rv-approve"') === -1);
+  ok('הבדיקה נושאת את מזהה התעודה; את תעודת הזיכוי מצלמים בכפתור האחד שבפס העליון (v126 — בלי מצלמה בכרטיס)', (html.match(/data-id="ret_open"/g) || []).length === 1 && html.indexOf('data-role="paper-photo"') === -1 && html.indexOf('צלם נייר מהנהג') > -1);
+  ok('ואומרת איפה "הכל זוכה"', html.indexOf('הכל זוכה במלואו') > -1);
   ok('בלי ₪ ובלי סכום מחושב', html.indexOf('₪') === -1 && html.indexOf(api.fmtMoney(openEx)) === -1);
   ok('הסכום — רשות, לזיהוי בלבד', html.indexOf('לזיהוי בלבד') > -1 && html.indexOf('(רשות)') > -1);
-  ok('שדה ההקלדה מצטמצם ואינו דוחף את הכפתורים', html.indexOf('flex-1 min-w-0') > -1 && (html.match(/shrink-0/g) || []).length === 2);
+  ok('שדה ההקלדה מצטמצם ואינו דוחף את הכפתורים', html.indexOf('flex-1 min-w-0') > -1 && (html.match(/shrink-0/g) || []).length === 1);
 }
 
 head('[2] שורת פיקדון אינה נספרת ביחידות; חתימת השורות מזהה שינוי');
@@ -186,14 +186,14 @@ head('[6] שורה ידנית ושורה שהוחזרה מפער — הסימו�
 head('[7] החיווט — כל תפקיד שנפלט חייב מטפל, ובכרטיס החזרה שבמסך התעודות המאוחד');
 {
   const src = fs.readFileSync(APP_PATH, 'utf8');
-  ['rv-approve', 'ret-unsend'].forEach(role => {
+  ['rv-all-credited', 'ret-unsend'].forEach(role => {
     ok('נפלט data-role="' + role + '"', src.indexOf('data-role="' + role + '"') > -1);
     ok('ול-' + role + ' יש מטפל בקוד', new RegExp("role === '" + role + "'").test(src));
   });
   // הקריאה נספרת בשרשור בלבד — ההגדרה עצמה נראית זהה ואינה קריאה.
   // v114: מסך היסטוריית החזרות אוחד לתוך מסך התעודות — נשאר כרטיס חזרה אחד, והוא חייב לשאת את שניהם.
   ok('שורת האימות יושבת בכרטיס החזרה המאוחד (ורק בו)', (src.match(/retVerifyRowHtml\(r\) \+/g) || []).length === 1);
-  ok('וכפתור ההחזרה יושב בו גם', (src.match(/retUnsendBtnHtml\(r\) \+/g) || []).length === 1);
+  ok('וכפתור ההחזרה יושב בו גם (v128: רק כשהתעודה עוד פתוחה)', (src.match(/\(stillOpen \? retUnsendBtnHtml\(r\) : ''\) \+/g) || []).length === 1);
   ok('אין יותר שתי העתקות של שדה סכום הזיכוי', (src.match(/id="rvNote_/g) || []).length === 1);
   ok('המחיקה קודמת להוספה לרשימה', src.indexOf('const deleted = await hardDeleteDocWithBackup') < src.indexOf('const applied = applyReturnUnsend(plan)'));
   ok('שיוך זיכוי פתוח חוסם את ההחזרה', /returnHasCreditAllocations\(id\)\) return;\n  const plan = retUnsendPlan/.test(src));
@@ -212,16 +212,18 @@ function stubbedRuntime() {
   return rt;
 }
 
-head('[8] מקצה לקצה — "אישור" סוגר את התעודה בלי הקלדה');
+head('[8] מקצה לקצה — בדיקה ידנית → "הכל זוכה במלואו" סוגר את התעודה בלי הקלדה');
 {
   const rt = stubbedRuntime();
   rt.context.testDoc = JSON.parse(JSON.stringify(openDoc()));
   rt.run(`returns = [testDoc]; returnsList = []; returnsSlots = { weekly: returnsList, daily: [] };
     returnsSlot = 'weekly'; receipts = []; receiptHistoryFilter = 'all'; currentView = 'receiptsHistory'; renderReceiptsHistory();`);
   const card = rt.node('app').innerHTML;
-  ok('הכרטיס מציע אישור לצד ההקלדה', card.indexOf('data-role="rv-approve" data-id="ret_open"') > -1 && card.indexOf('data-role="rv-verify-inline" data-id="ret_open"') > -1);
+  ok('בכרטיס — בדיקה ידנית, בלי אישור', card.indexOf('data-role="rv-approve"') === -1 && card.indexOf('data-role="rv-verify-inline" data-id="ret_open"') > -1);
 
-  rt.click('rv-approve', 'ret_open');
+  rt.click('rv-verify-inline', 'ret_open');
+  ok('בבדיקה הידנית — "הכל זוכה במלואו"', rt.node('app').innerHTML.indexOf('data-role="rv-all-credited"') > -1);
+  rt.click('rv-all-credited');
   ok('נפתח אישור ביחידות', rt.node('confirmMsg').textContent.indexOf('כל 5 היחידות') > -1);
   ok('בלי סכום מחושב', rt.node('confirmMsg').textContent.indexOf('₪') === -1);
 
@@ -231,6 +233,8 @@ head('[8] מקצה לקצה — "אישור" סוגר את התעודה בלי �
   ok('בלי סכום שהאפליקציה "יודעת"', !('creditNoteTotal' in write.data), JSON.stringify(write.data.creditNoteTotal));
   ok('האישור הוא טרנזקציה על התעודה הטרייה, עם חתימת השורות שאושרו', write.op === 'return-approve' && write.returnsId === 'ret_open' && typeof write.signature === 'string' && write.signature.length > 2);
   ok('בתעודה בלי כמויות זיכוי ישנות — השורות כלל אינן נכתבות', !('items' in write.data));
+  for (let i = 0; i < 10; i++) await new Promise(res => setImmediate(res));
+  ok('חזרה להיסטוריה', rt.run('currentView') === 'receiptsHistory');
   ok('הכרטיס הפך ירוק', rt.run('renderReceiptsHistory(); document.getElementById("app").innerHTML').indexOf('<i class="fa-solid fa-circle-check"></i> אומתה') > -1);
   ok('ואין יותר פער פתוח', rt.run('JSON.stringify(returnsDiscrepancyInfo(returns[0]).open)') === 'false');
 }
@@ -309,7 +313,7 @@ head('[11] v103 — כפתור "מחק תעודה" אחד בכל כרטיס, ל�
   ok('ומוחקת עם גיבוי לסל המחזור', del.length === 1 && del[0].name === 'returns' && del[0].id === 'ret_open' && (del[0].data.items || []).length === 2);
 }
 
-head('[12] "אישור" עם סכום שהוקלד, "בדוק", ותעודה שהשתנתה בזמן החלון');
+head('[12] "הכל זוכה במלואו" עם סכום שהוקלד, "בדיקה ידנית", ותעודה שהשתנתה בזמן החלון');
 {
   // v123: הסכום שהוקלד הוא לזיהוי בלבד. "אישור" = כל היחידות זוכו, והסכום נשמר איתו;
   // "בדוק" פותח את מסך האימות עם אותו סכום.
@@ -323,7 +327,7 @@ head('[12] "אישור" עם סכום שהוקלד, "בדוק", ותעודה ש�
   const short = r2(openEx - 5);
   const a = fresh();
   a.node('rvNote_ret_open').value = String(short);
-  a.click('rv-approve', 'ret_open');
+  a.click('rv-verify-inline', 'ret_open'); a.click('rv-all-credited');
   ok('האישור מזכיר את הסכום שהוקלד כזיהוי', a.node('confirmMsg').textContent.indexOf('לזיהוי') > -1);
   await a.events.get('confirmOk:click')();
   const aw = a.writes[a.writes.length - 1];
@@ -339,7 +343,7 @@ head('[12] "אישור" עם סכום שהוקלד, "בדוק", ותעודה ש�
   // התעודה נערכה ממכשיר אחר בזמן שחלון האישור היה פתוח — היא כבר אינה "כל מה
   // שהוחזר", ולכן אינה נסגרת בשמו.
   const c = fresh();
-  c.click('rv-approve', 'ret_open');
+  c.click('rv-verify-inline', 'ret_open'); c.click('rv-all-credited');
   const cw = c.writes.length;
   c.run('returns[0].items[0].qty = 7;');
   await c.events.get('confirmOk:click')();

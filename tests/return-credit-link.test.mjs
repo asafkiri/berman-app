@@ -323,7 +323,7 @@ test('approve is a transaction: it closes the fresh document, and refuses one th
   const pending = { id: 'p1', date: '2026-09-20', docDate: '2026-09-20', timestamp: 3, credited: false, schemaVersion: 2,
     items: [{ name: 'א', productId: 'p_a', qty: 3 }, { name: 'ב', productId: 'p_b', qty: 2, noteQty: 1 }] };
   const rt = setup([pending]);
-  await rt.click('rv-approve', 'p1');
+  await rt.click('rv-verify-inline', 'p1'); await rt.click('rv-all-credited');
   await rt.events.get('confirmOk:click')(); await flush();
   const d = rt.get('p1');
   assert.equal(d.credited, true);
@@ -332,7 +332,7 @@ test('approve is a transaction: it closes the fresh document, and refuses one th
   assert.equal(rt.commits.length, 1);
   // מכשיר אחר הוסיף שורה בזמן שחלון האישור היה פתוח
   const rt2 = setup([{ ...pending, id: 'p2' }]);
-  await rt2.click('rv-approve', 'p2');
+  await rt2.click('rv-verify-inline', 'p2'); await rt2.click('rv-all-credited');
   rt2.db.get('returns/p2').items.push({ name: 'ג', productId: 'p_c', qty: 4 });
   await rt2.events.get('confirmOk:click')(); await flush();
   assert.equal(rt2.commits.length, 0);
@@ -343,7 +343,7 @@ test('approve is a transaction: it closes the fresh document, and refuses one th
   // אישור שנכשל ברשת ונכנס לתור — ובינתיים נערך במכשיר אחר: הניסיון החוזר נדחה
   const rt3 = setup([{ ...pending, id: 'p3' }]);
   rt3.fail(true);
-  await rt3.click('rv-approve', 'p3');
+  await rt3.click('rv-verify-inline', 'p3'); await rt3.click('rv-all-credited');
   await rt3.events.get('confirmOk:click')(); await flush();
   assert.equal(rt3.run('cloudFailedWrites.length'), 1);
   assert.equal(rt3.run("returns.find(x => x.id === 'p3').credited"), false, 'nothing changes locally before the write');
@@ -380,7 +380,7 @@ test('an approve whose reply was lost, or a double tap while offline, is a succe
   const orig = rt.context.runTransaction;
   let lose = true;
   rt.context.runTransaction = async (db, fn) => { const out = await orig(db, fn); if (lose) { lose = false; throw new Error('deadline-exceeded'); } return out; };
-  await rt.click('rv-approve', 'p1');
+  await rt.click('rv-verify-inline', 'p1'); await rt.click('rv-all-credited');
   await rt.events.get('confirmOk:click')(); await flush2();
   assert.equal(rt.db.get('returns/p1').credited, true, 'the server has it');
   assert.equal(rt.run('cloudFailedWrites.length'), 1, 'the device does not know yet');
@@ -393,7 +393,7 @@ test('an approve whose reply was lost, or a double tap while offline, is a succe
   // (ב) שתי הקשות על "אישור" בלי רשת — שתיהן בתור; בחזרת הרשת הכל נשמר
   const rt2 = setup([{ ...pending, id: 'p2', carriedNotes: [] }]);
   rt2.run('navigator.onLine = false');
-  for (let i = 0; i < 2; i++) { await rt2.click('rv-approve', 'p2'); await rt2.events.get('confirmOk:click')(); await flush2(); }
+  for (let i = 0; i < 2; i++) { await rt2.click('rv-verify-inline', 'p2'); await rt2.click('rv-all-credited'); await rt2.events.get('confirmOk:click')(); await flush2(); }
   assert.equal(rt2.run('cloudFailedWrites.length'), 2);
   rt2.run('navigator.onLine = true');
   await rt2.run('retryCloudFailedWrites()'); await flush2();
