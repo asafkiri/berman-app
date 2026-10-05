@@ -29,6 +29,8 @@ const byCode = c => productList.find(p => String(p.code) === String(c));
 // htmlEscape נכתב כאן ולא נשלף: הוא בנוי סביב ליטרל רגולרי שמכיל גם גרש וגם
 // מרכאות, ושולף הפונקציות (extract.mjs) סופר מחרוזות ולא מבין ליטרל כזה.
 let products = productList, returns = [], VAT = 0.18;
+// v127: בלי מאזן (אין ניירות) — הבאנרים כמו קודם
+const ledgerDocStatus = () => null, receiptLedgerStatus = () => null;
 const htmlEscape = v => String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[ch]));
 
 const FNS = ['r2', 'lineTotalFromUnit', 'dDisp', 'fmtMoney', 'vatRateForDoc',

@@ -125,6 +125,12 @@ try {
   await page.evaluate(() => window.t.history());
   const hist = await page.locator('#app').evaluate(el => el.textContent); // הכרטיסים מקופלים (details)
   assert.ok((hist.match(/במאזן: \d+ לטיפול|מוסבר במאזן/g) || []).length >= 2, 'שורת המאזן בכרטיסי 4.10 ו-5.10');
+  // v127: הניירות עצמם — כרטיסים בהיסטוריה, והסטטוס מהמאזן
+  assert.match(hist, /נייר זיכוי מהנהג/); assert.match(hist, /נייר חיוב מהנהג/);
+  assert.match(hist, /אומתה — ניירות 95141, 95142/);
+  await page.locator('#app details', { hasText: 'נייר זיכוי מהנהג' }).locator('summary').click();
+  const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  assert.ok(over <= 1, 'היסטוריה: גלילה לצדדים ' + over);
   assert.deepEqual(errors, []);
   console.log('✓ מאזן מול ברמן בדפדפן: 2 לטיפול → "כן, זה תיקון" → 1 → ביטול → 2; מסך הצילום וכרטיסי התעודות');
 } finally {

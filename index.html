@@ -816,7 +816,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '126'; // v126: כפתור אחד לכל נייר מהנהג — תעודת משלוח נכנסת לקליטה כשהיא כבר קרואה, בלי קריאה שנייה
+const APP_VERSION = '127'; // v127: הניירות מהנהג בהיסטוריה כתעודות לכל דבר, והסטטוס של כל תעודה שנייר נוגע בה — מהמאזן
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -2568,7 +2568,7 @@ function buildSystemHealth() {
   const drafts = healthDraftCounts();
   // v63: קליטה בלי תעודה פתוחה — אבל לא בגלל הפרש. היא נספרת בשורה משלה
   const noDocReceipts = receipts.filter(receiptAwaitingDoc);
-  const openReceipts = receipts.filter(rc => receiptDiscrepancyInfo(rc).open && !receiptAwaitingDoc(rc));
+  const openReceipts = receipts.filter(rc => !receiptAwaitingDoc(rc) && receiptOpenNow(rc)); // v127: לפי המאזן כשיש נייר
   const now = new Date();
   const cloudOk = !!(db && auth && auth.currentUser && navigator.onLine);
   const items = [];
@@ -2936,7 +2936,8 @@ function buildReturnRow(it) {
 // קליטה, ניהול), כדי שאי אפשר לשכוח אותה גם כשלא נמצאים בחזרות.
 function pendingReturnsBannerHtml() {
   // v125: החזרה שתעודת הזיכוי שלה צולמה והמאזן סגור עליה — כבר לא "פתוחה לאימות"
-  const pendingRet = returns.filter(r => { if (r.credited) return false; const lv = retLedgerView(r.id); return !(lv && lv.main && !lv.open.length); }).length;
+  // v127: גם כשניירות משלימים סגרו אותה (returnStateNow)
+  const pendingRet = returns.filter(r => !r.credited && returnStateNow(r) !== 'done').length;
   if (!pendingRet) return '';
   return '<div class="flex gap-2 mb-3"><button data-role="ret-history" class="btn-tap flex-1 min-w-0 bg-rose-600 text-white rounded-xl py-3.5 px-3 font-black text-base flex items-center justify-between gap-2 shadow-md"><span class="min-w-0 truncate"><i class="fa-solid fa-triangle-exclamation"></i> ' + (pendingRet === 1 ? 'יש תעודת חזרות פתוחה לאימות' : 'יש ' + pendingRet + ' תעודות חזרות פתוחות לאימות') + '</span><span class="text-xs font-black bg-white/20 px-2 py-1 rounded-lg shrink-0">לאימות ←</span></button>' +
     '</div>'; // v126: צילום — רק בכפתור "צלם נייר מהנהג" שבפס העליון
@@ -3228,6 +3229,9 @@ function returnsBalance() {
     n++;
     const di = returnsDiscrepancyInfo(r);
     if (!di.open) return;
+    // v127: נייר זיכוי מהנהג נוגע בתעודה — מה שעוד פתוח בה לפי המאזן (מה שהניירות זיכו כבר לא חסר)
+    const ls = ledgerDocStatus(r.id);
+    if (ls && ls.byPapers) { const u = ledgerDocOpenUnits(ls, r.id); if (!u.short && !u.over) return; openDocs++; shortUnits += u.short; overUnits += u.over; return; }
     openDocs++; shortUnits += di.shortUnits; overUnits += di.overUnits;
   });
   return { shortUnits, overUnits, openDocs, n };
@@ -3347,8 +3351,6 @@ function returnItemsSignature(r) {
 function returnSentUnits(r) {
   return ((r && r.items) || []).filter(l => l && !(l.isDeposit || String(l.productId || '').indexOf('deposit-') === 0)).reduce((a, l) => a + (Number(l.qty) || 0), 0);
 }
-// v125: תעודה שהניירות מסבירים את כל מה שפתוח בה — לא מעבירים את הפער להחזרה הבאה (זה היה מבקש זיכוי פעמיים)
-function retExplainedByPapers(id) { const lv = retLedgerView(id); return !!(lv && lv.papers.length && !lv.open.length); }
 // v125: תעודת זיכוי שכבר צולמה ושויכה לתעודה הזו — במקום כפתור הצילום (צילום נוסף הוא קריאה נוספת בתשלום)
 function retLedgerView(id) { try { return currentLedger().docViews[id] || null; } catch (e) { return null; } }
 // נייר זיכוי של ההחזרה הזו שמחכה לבדיקה (או לשיוך) — במקום להזמין צילום נוסף בתשלום
@@ -3366,7 +3368,11 @@ function retVerifyRowHtml(r) {
   const lv = retLedgerView(r.id);
   const mainPaper = lv && lv.main ? (lv.mainIds || []).map(pid => paperFind(pid)).filter(Boolean).map(f => f.paper)[0] || null : null;
   const waiting = mainPaper ? null : retWaitingPaper(r.id);
-  const photo = waiting
+  // v127: ניירות משלימים זיכו את כל מה שהוחזר (בלי נייר ראשי)
+  const sideDone = mainPaper || waiting ? null : (s => s && s.byPapers && !s.open.length && !s.pending.length ? s : null)(ledgerDocStatus(r.id));
+  const photo = sideDone
+    ? '<div class="w-full rounded-xl px-3 py-2.5 mb-2 text-sm font-black bg-emerald-50 border border-emerald-200 text-emerald-800">✓ ' + htmlEscape(ledgerPapersShort(sideDone.papers)) + ' מהנהג זיכו את כל מה שהוחזר — לסגירת התעודה: <b>אישור</b></div>'
+    : waiting
     ? '<div class="w-full rounded-xl px-3 py-2.5 mb-2 text-sm font-black bg-amber-50 border border-amber-200 text-amber-800">' + htmlEscape(paperLabel(waiting.paper)) + (waiting.attach ? ' צולם — לא ברור לאיזו החזרה הוא שייך' : ' צולם — מחכה לבדיקה שלך') + '</div>' +
       '<div class="flex gap-1.5 mb-2">' + (waiting.attach ? '<button data-role="ledger-open" class="btn-tap flex-1 min-h-[44px] bg-amber-500 text-white rounded-xl py-2 font-black text-sm">לענות במאזן</button>'
         : '<button data-role="ledger-paper-open" data-paper="' + htmlEscape(waiting.paper.id) + '" class="btn-tap flex-1 min-h-[44px] bg-amber-500 text-white rounded-xl py-2 font-black text-sm">לבדיקה</button>') +
@@ -5783,7 +5789,7 @@ function commitQty(again) {
 function renderManage() {
   const btn = (role, icon, label, extra) =>
     '<button data-role="' + role + '" class="btn-tap ' + (extra || 'border-slate-200') + ' bg-white border rounded-2xl py-4 px-3 font-black text-slate-700 text-sm flex flex-col items-center justify-center gap-2 shadow-sm"><i class="fa-solid ' + icon + ' text-2xl"></i><span>' + label + '</span></button>';
-  const openRecs = receipts.filter(r => receiptDiscrepancyInfo(r).open);
+  const openRecs = receipts.filter(r => receiptOpenNow(r)); // v127: לפי המאזן כשיש נייר
   const banner = openRecs.length ? '<button data-role="rc-history" class="btn-tap w-full bg-rose-50 border border-rose-200 text-rose-700 rounded-xl py-2.5 px-3 font-bold text-sm flex items-center justify-between gap-2 mb-3"><span><i class="fa-solid fa-clipboard-question"></i> ' + openRecs.length + ' תעודות עם הפרש פתוח</span><span class="text-xs font-black bg-rose-100 px-2 py-0.5 rounded-lg">לטיפול ←</span></button>' : '';
   app.innerHTML = banner + pendingReturnsBannerHtml() +
     '<div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">' +
@@ -6125,7 +6131,7 @@ function renderReceivingScreen() {
   // v107: גם אחרי "צלם את התעודה" מתוך קליטה שכבר נספרה — השורות נשמרות,
   // ושלב הצילום מוצג שוב עד שהנייר נפתח.
   const opened = receiptAttachTarget ? receiptOpened : (receiptOpened || (receiptList.length > 0 && !receiptPhotoStepPending()));
-  const allOpenRecs = receipts.filter(r => receiptDiscrepancyInfo(r).open);
+  const allOpenRecs = receipts.filter(r => receiptOpenNow(r)); // v127: לפי המאזן כשיש נייר
   const noDocRecs = allOpenRecs.filter(receiptAwaitingDoc);
   const openRecs = allOpenRecs.filter(r => !receiptAwaitingDoc(r));
   const noDocBanner = noDocRecs.length ? '<button data-role="rc-history" class="btn-tap w-full bg-amber-50 border border-amber-300 text-amber-800 rounded-xl py-2.5 px-3 font-bold text-sm flex items-center justify-between gap-2 mb-3"><span><i class="fa-solid fa-file-circle-xmark"></i> ' + (noDocRecs.length === 1 ? 'קליטה אחת בלי תעודה — ממתינה לנייר' : noDocRecs.length + ' קליטות בלי תעודה — ממתינות לנייר') + '</span><span class="text-xs font-black bg-amber-100 px-2 py-0.5 rounded-lg">לצירוף ←</span></button>' : '';
@@ -12274,10 +12280,15 @@ function returnCardInReceipts(r) {
     (r.returnKind === 'daily' ? ' <span class="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 rounded px-1">יומית</span>' : ''); // v114: תג "יומית" כמו במסך היסטוריית החזרות שאוחד לכאן
   const credited = !!r.credited;
   const di = returnsDiscrepancyInfo(r);
-  const openGap = credited && di.open; // v78: פער שהוחזר לרשימת החזרות כבר לא פתוח כאן
-  const barCls = !credited ? 'bg-amber-400 text-amber-900' : (openGap ? 'bg-rose-500 text-white' : 'bg-emerald-500 text-white');
-  const borderCls = !credited ? 'border-amber-300' : (openGap ? 'border-rose-300' : 'border-emerald-300');
-  const statusTxt = !credited
+  // v127: נייר זיכוי מהנהג נוגע בתעודה — הסטטוס מהמאזן; ledgerDone: הניירות סגרו את כל מה שהוחזר בה
+  const ls = ledgerDocStatus(r.id);
+  const byLedger = !!(ls && ls.byPapers);
+  const ledgerDone = byLedger && !ls.open.length && !ls.pending.length;
+  const openGap = credited && di.open && !ledgerDone; // v78: פער שהוחזר לרשימת החזרות כבר לא פתוח כאן
+  const lsBar = byLedger ? ledgerStatusBar(ls, 'return') : null;
+  const barCls = lsBar ? lsBar.bar : !credited ? 'bg-amber-400 text-amber-900' : (openGap ? 'bg-rose-500 text-white' : 'bg-emerald-500 text-white');
+  const borderCls = lsBar ? lsBar.border : !credited ? 'border-amber-300' : (openGap ? 'border-rose-300' : 'border-emerald-300');
+  const statusTxt = lsBar ? lsBar.text : !credited
     ? '<i class="fa-solid fa-hourglass-half"></i> ממתינה לאימות זיכוי'
     : (openGap
       ? '<i class="fa-solid fa-triangle-exclamation"></i> ' + (di.shortItems.length ? 'פתוח — חסר זיכוי' : 'פתוח — זוכה ביתר')
@@ -12298,7 +12309,10 @@ function returnCardInReceipts(r) {
       '<div class="text-left shrink-0"><div class="text-sm font-black text-slate-600">' + (it.qty != null ? it.qty + ' יח׳' : '') + '</div>' + credTxt + '</div>' +
     '</div>';
   }).join('');
-  const breakdown = (openGap && (di.shortItems.length || di.overItems.length)) ?
+  // v127: כשהמאזן מחזיק את התעודה — בלי פירוט הפער הישן ובלי "העבר להחזרה הבאה": הם לא יודעים מה הניירות
+  // כבר זיכו (ההעברה הייתה תובעת מהנהג שוב זיכוי שכבר ניתן). מה שפתוח — במשפט של המאזן ובשורת "במאזן"
+  const gapShown = openGap && !byLedger;
+  const breakdown = (gapShown && (di.shortItems.length || di.overItems.length)) ?
     '<div class="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs mb-2">' +
       '<div class="font-black text-rose-700 mb-1">פירוט הפער</div>' +
       di.shortItems.map(s => '<div class="flex justify-between gap-2 text-rose-600"><span>חסר זיכוי: ' + htmlEscape(s.name) + '</span><span class="shrink-0">' + s.n + ' יח׳</span></div>').join('') +
@@ -12308,8 +12322,7 @@ function returnCardInReceipts(r) {
   const actionArea = !credited
     ? '<div class="mt-2">' + creditAllocationsHtml(r) + '</div>' +
       retVerifyRowHtml(r) + '<button data-role="ret-resend" data-id="' + rid + '" class="btn-tap w-full mt-2 bg-white border border-amber-300 text-amber-800 rounded-xl py-2 font-black text-[11px]"><i class="fa-brands fa-whatsapp"></i> שלח שוב בוואטסאפ</button>' + '<button data-role="ret-edit-items" data-id="' + rid + '" class="btn-tap w-full mt-2 bg-white border border-indigo-200 text-indigo-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-pen-to-square"></i> ערוך פריטים בתעודה</button>' + '<button data-role="ret-edit-date" data-id="' + rid + '" class="btn-tap w-full mt-2 bg-white border border-blue-200 text-blue-700 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-calendar-days"></i> ערוך תאריך תעודה</button>' + retUnsendBtnHtml(r) + (returns.filter(x => !x.credited).length >= 2 ? retMergeBtnHtml(rid) : '') + '<button data-role="ret-delete" data-id="' + rid + '" class="btn-tap w-full mt-2 bg-white border border-red-200 text-red-600 rounded-xl py-2 font-black text-[11px]"><i class="fa-solid fa-trash-can"></i> מחק תעודה</button>'
-    : '<div class="mt-2">' + breakdown + retCarryBoxHtml(r) + creditAllocationsHtml(r) + creditPartsInfoHtml(r) + (openGap ? creditAddNoteHtml(r) : '') +
-      (openGap ? (retExplainedByPapers(r.id) ? '<button data-role="ledger-open" class="btn-tap w-full min-h-[44px] mt-2 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl py-2 font-black text-xs"><i class="fa-solid fa-scale-balanced"></i> הפער כבר מוסבר בניירות מברמן — ראה מאזן</button>' : retCarryBtnHtml(r)) : '') +
+    : '<div class="mt-2">' + breakdown + retCarryBoxHtml(r) + creditAllocationsHtml(r) + creditPartsInfoHtml(r) + (gapShown ? creditAddNoteHtml(r) + retCarryBtnHtml(r) : '') +
       '</div>' +
       // v115: פעולת האימות הראשית ברוחב מלא, ומתחתיה כפתור "בטל אימות" אחד עם טקסט — האייקון הבודד שישב לצידה ירד
       '<button data-role="rv-open" data-id="' + rid + '" class="btn-tap w-full font-black py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 ' + (openGap ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700') + '"><i class="fa-solid ' + (openGap ? 'fa-wrench' : 'fa-pen') + '"></i> ' + (openGap ? 'תקן פער' : 'ערוך אימות') + '</button>' +
@@ -12323,7 +12336,8 @@ function returnCardInReceipts(r) {
         '<span><i class="fa-solid fa-rotate-left"></i> תעודת חזרות / זיכוי</span><span class="shrink-0">' + statusTxt + '</span>' +
       '</div>' +
       '<div class="p-4 flex items-center justify-between gap-2">' +
-        '<div class="min-w-0"><div class="font-black text-slate-800 text-sm">' + dateStr + '</div><div class="text-xs text-slate-400 mt-0.5">נשלח אל ' + htmlEscape(r.sentTo || '') + '</div>' + paperId + '</div>' +
+        '<div class="min-w-0"><div class="font-black text-slate-800 text-sm">' + dateStr + '</div><div class="text-xs text-slate-400 mt-0.5">נשלח אל ' + htmlEscape(r.sentTo || '') + '</div>' + paperId +
+          (ls ? ledgerSentencesHtml(byLedger ? ls.open.concat(ls.pending) : ls.open, ls.lg, ls.all) : '') + '</div>' +
         '<div class="flex items-center gap-2 shrink-0"><div class="text-left"><div class="text-[11px] text-slate-400">הוחזרו</div><div class="font-black text-emerald-700">' + units + ' יח׳ · ' + live.length + ' שורות</div></div><i class="fa-solid fa-chevron-down hist-chevron text-slate-400 transition-transform"></i></div>' +
       '</div>' +
     '</summary>' +
@@ -13039,7 +13053,8 @@ function paperLedger(opts) {
   const docOf = (type, id) => byId.get(type + ':' + id);
   const ackOffsets = new Set(declared.filter(p => p.declare === 'ack-offset').map(p => p.offsetId));
   Object.keys(gaps).forEach(k => {
-    const parts = gaps[k], net = parts.reduce((a, x) => a + x.gap, 0);
+    // כמויות משקל: 0.3−0.1 אינו בדיוק 0.2 — שארית נקודה צפה אינה פער
+    const parts = gaps[k], net = Math.round(parts.reduce((a, x) => a + x.gap, 0) * 1000) / 1000;
     productsOut[k] = { key: k, name: meta[k].name, code: meta[k].code, net, parts };
     const overs = parts.filter(x => x.type === 'receipt' && x.gap < 0), shorts = parts.filter(x => x.type === 'receipt' && x.gap > 0);
     overs.forEach(o => shorts.forEach(s => {
@@ -13088,22 +13103,35 @@ function paperLedger(opts) {
   orphans.forEach(p => out.push({ id: 'orphan|' + p.id, kind: 'orphan', state: 'info', paper: p }));
   const rank = { problem: 0, question: 1, pending: 2, info: 3 };
   out.sort((a, b) => rank[a.state] - rank[b.state]);
+  // v127: gap — כמה יחידות התעודה רחוקה מאיזון (אחרי הניירות שלה); 0 — הניירות סגרו אותה בדיוק,
+  // ויותר מ-0 בלי פריט פתוח — התקזז מול תעודה אחרת
   const docViews = {};
   Object.keys(gaps).forEach(k => gaps[k].forEach(x => {
     if (x.type !== 'receipt' && x.type !== 'return') return;
-    const v = docViews[x.id] || (docViews[x.id] = { papers: [], open: [], main: !!(x.type === 'return' && mainOf[x.id] && mainOf[x.id].length), mainIds: x.type === 'return' ? (mainOf[x.id] || []).map(m => m.id) : [] });
+    const v = docViews[x.id] || (docViews[x.id] = { papers: [], open: [], pending: [], gap: 0, main: !!(x.type === 'return' && mainOf[x.id] && mainOf[x.id].length), mainIds: x.type === 'return' ? (mainOf[x.id] || []).map(m => m.id) : [] });
+    v.gap += Math.abs(Number(x.gap) || 0);
     (x.papers || []).forEach(id => { if (v.papers.indexOf(id) === -1) v.papers.push(id); });
   }));
-  // פריט פתוח שייך לתעודה שלו — וגם החלפה ושאלת תיקון שייכות להחזרה שהן מדברות עליה
+  // פריט פתוח שייך לתעודה שלו — וגם החלפה ושאלת תיקון שייכות להחזרה שהן מדברות עליה.
+  // v127: וגם לנייר שהוא מדבר עליו (paperViews) — כדי שכרטיס הנייר בהיסטוריה יגיד מה פתוח בו
+  const paperViews = {};
+  const pv = id => paperViews[id] || (paperViews[id] = { open: [], pending: [] });
   out.forEach(it => {
-    if (it.state !== 'problem' && it.state !== 'question') return;
-    [it.part && it.part.id, it.short && it.short.id, it.swap && it.swap.returnId, it.pair && it.pair.returnId].forEach(id => {
-      if (id && docViews[id] && docViews[id].open.indexOf(it.id) === -1) docViews[id].open.push(it.id);
+    const open = it.state === 'problem' || it.state === 'question';
+    if (!open && it.state !== 'pending') return;
+    const docIds = open ? [it.part && it.part.id, it.short && it.short.id, it.swap && it.swap.returnId, it.pair && it.pair.returnId] : [it.part && it.part.id];
+    docIds.forEach(id => {
+      const list = id && docViews[id] && (open ? docViews[id].open : docViews[id].pending);
+      if (list && list.indexOf(it.id) === -1) list.push(it.id);
+    });
+    [it.part && it.part.type === 'paper' && it.part.id, it.paper && it.paper.id, it.swap && it.swap.paperId].forEach(id => {
+      const list = id && (open ? pv(id).open : pv(id).pending);
+      if (list && list.indexOf(it.id) === -1) list.push(it.id);
     });
   });
   const count = out.filter(it => it.state === 'problem' || it.state === 'question').length;
   const docDays = {}; baseWide.forEach(d => { docDays[d.id] = d.day; });
-  return { start, asOf, items: out, products: productsOut, states, placed, docViews, docDays, count };
+  return { start, asOf, items: out, products: productsOut, states, placed, docViews, paperViews, docDays, count };
 }
 function ledgerClassify(k, x, units, sign, c) {
   const base = { id: k + '|' + x.type + '|' + x.id, key: k, units, part: x };
@@ -14475,6 +14503,8 @@ async function openPaperReview(id, cap) {
   let st = ''; try { st = currentLedger().states[p.id] || ''; } catch (e) {}
   paperReview = { id: p.id, cap: (found.local && found.local.captureId) || p.captureId || '', paper: p, local, conflict: !!(found.local && found.local.conflict),
     st, wasAccepted: p.state === 'accepted', attachPick: false, checked: false, query: '', pickLine: null, orig: JSON.stringify(p),
+    from: currentView === 'receiptsHistory' ? 'receiptsHistory' : null, // v127: נפתח מכרטיס בהיסטוריה — חוזרים לשם
+
     units: p.anchors && p.anchors.units != null ? p.anchors.units : '', lines: p.anchors && p.anchors.lines != null ? p.anchors.lines : '', img: null };
   setView('paperReview');
   const key = (found.local && found.local.captureId) || p.captureId;
@@ -14539,7 +14569,7 @@ function renderPaperReview() {
       (st.mustCheck ? '<button data-role="review-checked" aria-pressed="' + (r.checked ? 'true' : 'false') + '" class="btn-tap w-full min-h-[44px] mt-2 rounded-xl border-2 px-3 py-2 text-sm font-black flex items-center gap-2 ' + (r.checked ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-amber-300 bg-amber-50 text-amber-800') + '"><i class="fa-regular ' + (r.checked ? 'fa-square-check' : 'fa-square') + ' text-lg"></i> ' + ((p.rows || []).some(x => x.flag) ? 'בדקתי את השורות המסומנות מול הנייר' : 'בדקתי את כל השורות מול הנייר') + '</button>' : '') + '</div>' +
     '<div class="fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 p-3 flex gap-2 z-40">' +
       '<button data-role="review-delete" aria-label="מחק את הנייר" class="btn-tap px-4 py-3 rounded-xl font-black bg-white border-2 border-rose-200 text-rose-600"><i class="fa-solid fa-trash-can"></i></button>' +
-      '<button data-role="ledger-open" class="btn-tap flex-1 py-3 rounded-xl font-black bg-slate-100 text-slate-600">חזרה</button>' +
+      '<button data-role="review-back" class="btn-tap flex-1 py-3 rounded-xl font-black bg-slate-100 text-slate-600">חזרה</button>' +
       '<button id="reviewSave" data-role="review-save" class="btn-tap flex-1 py-3 rounded-xl font-black text-white ' + (st.ok ? 'bg-blue-600' : 'bg-slate-300') + '"' + (st.ok ? '' : ' disabled') + '>אשר את הנייר</button>' +
     '</div><div class="h-24"></div>';
   if (r.pickLine != null) refreshReviewSearch();
@@ -14599,7 +14629,7 @@ async function savePaperReview() {
   // שיוך שהמשתמש בחר נשמר — אבל מחושב מחדש לשורות שתוקנו (אותה החזרה, או "לא שייך")
   p.attach = (p.attach && p.attach.by === 'user') ? paperUserAttach(p, p.attach.type === 'return' ? p.attach.id : null) : paperAttachNow(p);
   const ok = await paperWrite(p, r);
-  if (ok) { paperReview = null; showToast(ok === 'kept-number' ? 'הנייר אושר ✓ — המספר כבר נשמר בענן, ולכן לא שונה' : 'הנייר אושר ✓', null, null, ok === 'kept-number' ? 4000 : 2200); setView('ledger'); }
+  if (ok) { paperReview = null; showToast(ok === 'kept-number' ? 'הנייר אושר ✓ — המספר כבר נשמר בענן, ולכן לא שונה' : 'הנייר אושר ✓', null, null, ok === 'kept-number' ? 4000 : 2200); setView(r.from || 'ledger'); }
 }
 // עדכון נייר: אם עוד לא הגיע לענן — ברשומה שלו במכשיר (ונשלח), אחרת עדכון במקום בענן.
 // ctx: { local, cap } — הרשומה במכשיר שממנה נפתח הנייר. כל עדכון מעלה את rev, כדי שעותק
@@ -14659,7 +14689,7 @@ async function deletePaperFromReview() {
       // התמונה נשארת עד הגיזום: אם הנייר ישוחזר מהסל, היא עוד שם לבדיקה)
       if (target.captureId) paperPatchLocal(target.captureId, cur => cur && (cur.ackedAt || !cur.paper || cur.paper.id === target.id) ? { ...cur, discarded: true, discardedAt: cur.discardedAt || Date.now() } : cur);
     }
-    paperReview = null; ledgerInvalidate(); refreshLedgerBar(); setView('ledger');
+    paperReview = null; ledgerInvalidate(); refreshLedgerBar(); setView(r.from || 'ledger');
   });
 }
 // שיוך שהמשתמש בחר, לשורות הנוכחיות של הנייר. userPick: ההחזרה שנבחרה מקבלת את השורות שנשלחו
@@ -14814,6 +14844,144 @@ function ledgerDocLineHtml(id) {
   return '<button data-role="ledger-open" class="btn-tap w-full min-h-[44px] text-right mt-2 rounded-lg px-2.5 py-1.5 text-[11px] font-black ' + (v.open.length ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-emerald-50 text-emerald-800 border border-emerald-200') + '">' +
     (v.open.length ? '⚖️ במאזן: ' + v.open.length + ' לטיפול' : '✓ מוסבר במאזן') + (labels.length ? ' · ' + htmlEscape(labels.join(', ')) : '') + '</button>';
 }
+// ===== v127: ההיסטוריה מהמאזן =====
+// תעודה שנייר מהנהג נוגע בה (byPapers) — הסטטוס, המסננים והבאנרים באים מהמאזן. תעודה בלי נייר נשארת
+// כמו קודם, ורק מקבלת את המשפט של המאזן כשיש בה משהו פתוח. תצוגה בלבד: שום תעודה שמורה לא נכתבת.
+let ledgerPapersMemo = null;
+function ledgerAllPapers(lg) {
+  if (!ledgerPapersMemo || ledgerPapersMemo.lg !== lg) ledgerPapersMemo = { lg, list: papers.filter(p => p && !p.deleted).concat(paperPendingLocal()) };
+  return ledgerPapersMemo.list;
+}
+function ledgerDocStatus(id) {
+  let lg; try { lg = currentLedger(); } catch (e) { return null; }
+  const v = lg.docViews && lg.docViews[id];
+  if (!v || (!v.papers.length && !v.open.length && !(v.pending || []).length)) return null;
+  const pick = ids => (ids || []).map(x => lg.items.find(i => i.id === x)).filter(Boolean);
+  const all = ledgerAllPapers(lg);
+  const open = pick(v.open), pending = pick(v.pending);
+  // byPapers: המאזן "מחזיק" את התעודה — נייר נגע בה, או שהוא אומר עליה "חויבת פעמיים" (נייר חיוב על קליטה אחרת)
+  return { lg, all, open, pending, byPapers: v.papers.length > 0 || open.some(i => i.kind === 'chargedTwice'),
+    papers: v.papers.map(pid => all.find(p => p.id === pid)).filter(p => p && p.kind !== 'declared'),
+    closed: !open.length && !pending.length && !(v.gap > 0) };
+}
+// קליטה שממתינה לנייר, או שהשורות שלה לא נסגרות מול הסכום שבתחתית — את זה המאזן לא רואה: כמו קודם
+function receiptLedgerStatus(rc, di) {
+  di = di || receiptDiscrepancyInfo(rc);
+  if (di.awaitingDoc || di.unresolvedUnitsGap) return null;
+  return ledgerDocStatus(rc.id);
+}
+function receiptOpenNow(rc, di) {
+  di = di || receiptDiscrepancyInfo(rc);
+  const ls = receiptLedgerStatus(rc, di);
+  return ls && ls.byPapers ? !!(ls.open.length || ls.pending.length) : di.open;
+}
+// תעודת חזרות: 'open' — פער לטיפול; 'credit' — ממתינה לזיכוי; 'done'
+function returnStateNow(r) {
+  const ls = ledgerDocStatus(r.id);
+  if (ls && ls.byPapers) return ls.open.length ? 'open' : ls.pending.length ? 'credit' : 'done';
+  if (!r.credited) return 'credit';
+  return returnsDiscrepancyInfo(r).open ? 'open' : 'done';
+}
+// היחידות הפתוחות של תעודה לפי המאזן — לבאנרים: חסר (חויב או הוחזר, ולא התקבל או זוכה) ועודף
+function ledgerDocOpenUnits(ls, id) {
+  let short = 0, over = 0;
+  ls.open.concat(ls.pending).forEach(it => {
+    if (!it.part || it.part.id !== id) return;
+    const u = it.keys ? it.keys.reduce((a, z) => a + (Number(z.units) || 0), 0) : (Number(it.units) || 0);
+    if (['chargedNotReceived', 'chargedTwice', 'returnedNotCredited', 'returnNotCreditedYet'].indexOf(it.kind) !== -1) short += u;
+    else if (it.kind === 'receivedNotCharged' || it.kind === 'creditedNotReturned') over += u;
+  });
+  return { short, over };
+}
+function ledgerPapersShort(list) {
+  if (!list.length) return 'התשובה שלך';
+  const nums = list.map(paperNumerator).filter(Boolean).sort((a, b) => a - b);
+  return (list.length === 1 ? 'נייר' : 'ניירות') + (nums.length ? ' ' + nums.join(', ') : '');
+}
+function ledgerStatusBar(ls, type) {
+  if (ls.open.length) return ls.open.some(i => i.state === 'problem')
+    ? { bar: 'bg-rose-500 text-white', border: 'border-rose-300', text: '<i class="fa-solid fa-triangle-exclamation"></i> ' + (ls.open.length === 1 ? 'לטיפול במאזן' : ls.open.length + ' לטיפול במאזן'), meta: ' · <span class="text-rose-600 font-black">לטיפול</span>' }
+    : { bar: 'bg-amber-500 text-white', border: 'border-amber-300', text: '<i class="fa-solid fa-circle-question"></i> שאלה במאזן', meta: ' · <span class="text-amber-700 font-black">שאלה במאזן</span>' };
+  if (ls.pending.length) return { bar: 'bg-amber-400 text-amber-900', border: 'border-amber-300', text: '<i class="fa-solid fa-hourglass-half"></i> ' + (type === 'return' ? 'ממתינה לתעודת זיכוי' : 'ממתינה לנייר'), meta: ' · <span class="text-amber-700 font-black">ממתינה לנייר</span>' };
+  const what = type === 'return' ? 'זוכתה' : 'אומתה';
+  return { bar: 'bg-emerald-500 text-white', border: 'border-emerald-300', text: '<i class="fa-solid fa-circle-check"></i> ' + what + (ls.closed ? ' — ' + htmlEscape(ledgerPapersShort(ls.papers)) : ' · מאוזנת במאזן'),
+    meta: ' · <span class="text-emerald-700 font-black">' + (ls.closed ? 'נסגרה בנייר' : 'מאוזנת במאזן') + '</span>' };
+}
+// המשפט של המאזן — מתחת לתאריך בכרטיס, בלי לפתוח אותו
+function ledgerSentencesHtml(items, lg, all) {
+  if (!items || !items.length) return '';
+  const line = it => {
+    let t = ''; try { t = ledgerItemText(it, lg, all).text; } catch (e) { return ''; }
+    const cls = it.state === 'problem' ? 'text-rose-700' : it.state === 'question' ? 'text-amber-700' : 'text-slate-500';
+    const icon = it.state === 'problem' ? 'fa-circle-exclamation' : it.state === 'question' ? 'fa-circle-question' : 'fa-hourglass-half';
+    return '<div class="text-xs font-black leading-snug mt-1 ' + cls + '"><i class="fa-solid ' + icon + '" aria-hidden="true"></i> ' + htmlEscape(t) + '</div>';
+  };
+  return items.slice(0, 2).map(line).join('') + (items.length > 2 ? '<div class="text-[11px] font-bold text-slate-400 mt-0.5">ועוד ' + (items.length - 2) + ' במאזן</div>' : '');
+}
+// הניירות מהנהג בהיסטוריה — כל נייר כתעודה לכל דבר. תעודת משלוח — רק עד שנקלטה (אחר כך היא חלק
+// מכרטיס הקליטה); צילום נוסף של אותו נייר, ותשובות שלך — רק במאזן.
+function paperHistoryList() {
+  let lg; try { lg = currentLedger(); } catch (e) { return []; }
+  return ledgerAllPapers(lg).filter(p => {
+    const st = lg.states[p.id] || '';
+    if (p.kind === 'declared' || p.state === 'void' || ['duplicate', 'in-receipt', 'void', 'superseded'].indexOf(st) !== -1) return false;
+    return p.kind !== 'delivery' || st === 'awaiting-receipt';
+  });
+}
+function paperHistoryView(p, lg) {
+  const st = lg.states[p.id] || '';
+  const v = (lg.paperViews || {})[p.id] || { open: [], pending: [] };
+  const pick = ids => ids.map(x => lg.items.find(i => i.id === x)).filter(Boolean);
+  const open = pick(v.open), pending = pick(v.pending);
+  return { st, open, pending, isOpen: ['unproven', 'needs-attach', 'awaiting-receipt'].indexOf(st) !== -1 || open.length > 0 || pending.length > 0 };
+}
+function paperCardInHistory(p, lg, all, isOpenCard) {
+  const pv = paperHistoryView(p, lg), st = pv.st;
+  // תעודת משלוח שעוד לא נקלטה — בלי כמויות (הספירה בקליטה עיוורת)
+  const blind = p.kind === 'delivery' || p.kind == null || p.kindKnown === false;
+  const tones = { rose: ['bg-rose-500 text-white', 'border-rose-300'], amber: ['bg-amber-500 text-white', 'border-amber-300'], slate: ['bg-slate-400 text-white', 'border-slate-200'], emerald: ['bg-emerald-500 text-white', 'border-emerald-300'] };
+  let tone = 'emerald', status = '<i class="fa-solid fa-circle-check"></i> נספר במאזן';
+  if (st === 'unproven') { tone = 'amber'; status = '<i class="fa-solid fa-magnifying-glass"></i> לבדיקה — עוד לא נספר'; }
+  else if (st === 'needs-attach') { tone = 'amber'; status = '<i class="fa-solid fa-circle-question"></i> לאיזו החזרה?'; }
+  else if (st === 'awaiting-receipt') { tone = 'amber'; status = '<i class="fa-solid fa-hourglass-half"></i> ממתינה לקליטה'; }
+  else if (st === 'outside') { tone = 'slate'; status = 'מחוץ לתקופת המאזן'; }
+  else if (st === 'unsupported') { tone = 'slate'; status = 'רענן את האפליקציה'; }
+  else if (pv.open.length) { const pr = pv.open.some(i => i.state === 'problem'); tone = pr ? 'rose' : 'amber'; status = pr ? '<i class="fa-solid fa-triangle-exclamation"></i> ' + (pv.open.length === 1 ? 'לטיפול במאזן' : pv.open.length + ' לטיפול במאזן') : '<i class="fa-solid fa-circle-question"></i> שאלה במאזן'; }
+  else if (pv.pending.length) { tone = 'amber'; status = '<i class="fa-solid fa-hourglass-half"></i> ממתין'; }
+  const head = p.kind === 'credit' ? '<i class="fa-solid fa-file-circle-minus"></i> נייר זיכוי מהנהג' : p.kind === 'charge' ? '<i class="fa-solid fa-file-circle-plus"></i> נייר חיוב מהנהג'
+    : p.kind === 'delivery' ? '<i class="fa-solid fa-truck"></i> תעודת משלוח מהנהג' : '<i class="fa-solid fa-receipt"></i> נייר מהנהג';
+  const day = p.docDay ? dDisp(p.docDay) + (p.printedTime ? ' · ' + htmlEscape(p.printedTime) : '') : 'בלי תאריך';
+  const local = !papers.some(x => x && x.id === p.id && !x.deleted);
+  const attach = st === 'counted' ? paperAttachShown(p, lg) : '';
+  const rows = (p.rows || []).filter(Boolean);
+  const units = paperUnits(p);
+  const rowsHtml = blind ? '' : '<div class="bg-slate-50 rounded-xl p-3 border border-slate-100">' + rows.map(x => {
+    const prod = x.productId && products.find(q => q.id === x.productId);
+    return '<div class="flex items-center justify-between gap-2 py-1 border-b border-slate-100 last:border-0"><div class="min-w-0"><div class="text-sm font-bold text-slate-700 truncate">' + htmlEscape(prod ? prod.name : (x.description || 'לא זוהה')) + '</div>' +
+      '<div class="text-[11px] text-slate-400">' + (x.itemCode ? 'קוד ' + htmlEscape(x.itemCode) : '') + (x.barcode ? (x.itemCode ? ' · ' : '') + '<i class="fa-solid fa-barcode"></i> ' + htmlEscape(x.barcode) : '') + '</div></div>' +
+      '<div class="text-sm font-black text-slate-600 shrink-0">' + mtxQty(x.qty) + ' יח׳</div></div>';
+  }).join('') + '</div>';
+  const btn = (role, label, extra, strong) => '<button data-role="' + role + '"' + (extra || '') + ' class="btn-tap w-full min-h-[44px] mt-2 rounded-xl py-2.5 font-black text-sm ' + (strong ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700') + '">' + label + '</button>';
+  const pid = ' data-id="' + htmlEscape(p.id) + '"';
+  const actions = st === 'unproven' ? btn('paper-open', '<i class="fa-solid fa-magnifying-glass"></i> לבדיקה מול הנייר', pid, true)
+    : st === 'awaiting-receipt' ? btn('ledger-start-receiving', '<i class="fa-solid fa-truck-ramp-box"></i> לקליטה', ' data-paper="' + htmlEscape(p.id) + '"', true)
+    : (st === 'needs-attach' || pv.open.length ? btn('ledger-open', '<i class="fa-solid fa-scale-balanced"></i> לענות במאזן', '', true) : '') + btn('paper-open', 'פרטים / שנה', pid);
+  return '<details data-rc-card="paper:' + htmlEscape(p.id) + '"' + (isOpenCard ? ' open' : '') + ' class="bg-white rounded-2xl border-2 ' + tones[tone][1] + ' shadow-sm overflow-hidden">' +
+    '<summary class="cursor-pointer">' +
+      '<div class="' + tones[tone][0] + ' px-4 py-2 flex items-center justify-between gap-2 font-black text-[13px]"><span>' + head + '</span><span class="shrink-0">' + status + '</span></div>' +
+      '<div class="p-4 flex items-center justify-between gap-2">' +
+        '<div class="min-w-0"><div class="font-black text-slate-800 text-sm">' + day + (p.number ? ' · <span class="text-slate-500" dir="ltr">' + htmlEscape(p.number) + '</span>' : '') + '</div>' +
+          (attach ? '<div class="text-xs text-slate-500 font-bold mt-0.5">' + htmlEscape(attach) + '</div>' : '') +
+          (local ? '<div class="text-[11px] text-amber-600 font-bold mt-0.5">ממתין לשמירה בענן</div>' : '') +
+          ledgerSentencesHtml(pv.open.concat(pv.pending), lg, all) + '</div>' +
+        '<div class="flex items-center gap-2 shrink-0"><div class="text-left">' + (blind ? '<div class="text-[11px] text-slate-400">צולמה</div>'
+          : '<div class="text-[11px] text-slate-400">' + (p.kind === 'credit' ? 'זוכו' : p.kind === 'charge' ? 'חויבו' : 'בנייר') + '</div><div class="font-black ' + (p.kind === 'credit' ? 'text-emerald-700' : 'text-slate-800') + '">' + mtxQty(units) + ' יח׳ · ' + rows.length + ' שורות</div>') +
+        '</div><i class="fa-solid fa-chevron-down hist-chevron text-slate-400 transition-transform"></i></div>' +
+      '</div>' +
+    '</summary>' +
+    '<div class="px-4 pb-4">' + rowsHtml + actions + '</div>' +
+  '</details>';
+}
 // הפס שמתחת לכותרת: צילום נייר ומצב המאזן, בכל מסכי העבודה
 function refreshLedgerBar() {
   const el = document.getElementById('ledgerBar'); if (!el) return;
@@ -14876,7 +15044,8 @@ function paperUiClick(t) {
   if (role === 'review-kind') { r.paper.kind = t.dataset.kind; r.paper.kindKnown = true; renderPaperReview(); return true; }
   if (role === 'review-checked') { r.checked = !r.checked; renderPaperReview(); return true; }
   if (role === 'review-attach-toggle') { r.attachPick = !r.attachPick; renderPaperReview(); return true; }
-  if (role === 'review-attach') { if (paperReviewDirty(r) || r.conflict) { renderPaperReview(); return true; } const id = r.id; setPaperAttach(id, t.dataset.return || '').then(ok => { if (ok && paperReview && paperReview.id === id) { paperReview = null; showToast('השיוך נשמר ✓', null, null, 2200); setView('ledger'); } }); return true; }
+  if (role === 'review-attach') { if (paperReviewDirty(r) || r.conflict) { renderPaperReview(); return true; } const id = r.id; setPaperAttach(id, t.dataset.return || '').then(ok => { if (ok && paperReview && paperReview.id === id) { const from = paperReview.from; paperReview = null; showToast('השיוך נשמר ✓', null, null, 2200); setView(from || 'ledger'); } }); return true; }
+  if (role === 'review-back') { setView(r.from || 'ledger'); return true; }
   if (role === 'review-pick') { const i = parseInt(id, 10); r.pickLine = r.pickLine === i ? null : i; r.query = ''; renderPaperReview(); const s = $('reviewSearch'); if (s) s.focus(); return true; }
   if (role === 'review-pick-product') { const p = products.find(x => x.id === id); const row = r.paper.rows[r.pickLine]; if (p && row) { row.productId = p.id; row.matchedBy = 'user'; if (!row.itemCode) row.itemCode = productCode(p); } r.pickLine = null; r.query = ''; renderPaperReview(); return true; }
   if (role === 'review-row-del') { r.paper.rows.splice(parseInt(id, 10), 1); r.pickLine = null; renderPaperReview(); return true; }
@@ -15242,6 +15411,14 @@ function receiptsBalance() {
   receipts.forEach(rc => {
     const di = receiptDiscrepancyInfo(rc);
     if (!di.open) return;
+    // v127: נייר מהנהג נוגע בתעודה — מה שעוד פתוח בה לפי המאזן (מה שהניירות הסבירו כבר לא חסר)
+    const ls = receiptLedgerStatus(rc, di);
+    if (ls && ls.byPapers) {
+      const lu = ledgerDocOpenUnits(ls, rc.id);
+      if (!lu.short && !lu.over) return;
+      n++; shortUnits += lu.short; overUnits += lu.over; if (lu.short > 0) shortDocs++;
+      return;
+    }
     n++;
     const s = di.shortFullyCredited ? 0 : u(di.shortUnits);
     shortUnits += s; overUnits += u(di.overUnits); if (s > 0) shortDocs++;
@@ -15465,8 +15642,20 @@ function receiptDiffRowHtml(rc, item, dir, di) {
       : '<span class="shrink-0 text-[10px] font-black text-slate-400">' + (products.some(p => p.id === item.productId) ? 'אין מחיר למוצר — קבע בכרטיס המוצר' : 'המוצר אינו במאגר — אין מחיר לקיזוז; השווה מול החשבונית') + '</span>') +
   '</div>';
 }
+// v127: חוסר או עודף של מוצר בקליטה שנייר מהנהג כבר נגע בו, או שהמאזן אומר עליו "חויבת פעמיים" — לא
+// מציעים ולא מקזזים לבד מול תעודה אחרת: עודף שכבר חויב בנייר אינו מכסה חוסר (זה חיוב כפול)
+function ledgerHoldsOffset(rcId, productId) {
+  let lg; try { lg = currentLedger(); } catch (e) { return false; }
+  const pr = lg.products && lg.products[productId]; if (!pr) return false;
+  const part = pr.parts.find(x => x.type === 'receipt' && x.id === rcId);
+  if (!part) return false;
+  if ((part.papers || []).length) return true;
+  return lg.items.some(i => i.kind === 'chargedTwice' && i.key === productId && i.part && i.part.type === 'receipt' && i.part.id === rcId);
+}
 function findOffsetMatch(rc, preferredOtherId, preferredProductId, preferredOtherProductId) {
   if (!rc) return null;
+  // הצעה (בלי בחירה מפורשת) — בלי מה שהמאזן מחזיק
+  const held = (id, pid) => !preferredOtherId && ledgerHoldsOffset(id, pid);
   const mine = receiptOffsets(rc);
   if (!mine.length) return null;
   // מעבר 1: אותו מוצר בדיוק, בכמות הפוכה מדויקת (ההתאמה החזקה ביותר)
@@ -15477,7 +15666,7 @@ function findOffsetMatch(rc, preferredOtherId, preferredProductId, preferredOthe
       if (preferredProductId && a.productId !== preferredProductId) continue;
       for (const b of theirs) {
         if (preferredOtherProductId && b.productId !== preferredOtherProductId) continue;
-        if (a.productId === b.productId && sameOffsetQty(a.d, -b.d) && a.d !== 0) {
+        if (a.productId === b.productId && sameOffsetQty(a.d, -b.d) && a.d !== 0 && !held(rc.id, a.productId) && !held(other.id, b.productId)) {
           return { other: other, productId: a.productId, name: a.name,
                    otherProductId: b.productId, otherName: b.name, byPrice: false,
                    price: Number(a.price) || 0, qty: Math.abs(a.d),
@@ -15500,7 +15689,7 @@ function findOffsetMatch(rc, preferredOtherId, preferredProductId, preferredOthe
       if (aCents <= 0) continue;
       for (const b of theirs) {
         if (preferredOtherProductId && b.productId !== preferredOtherProductId) continue;
-        if (offsetListKey(b.productId) === aCents && sameOffsetQty(a.d, -b.d) && a.d !== 0) {
+        if (offsetListKey(b.productId) === aCents && sameOffsetQty(a.d, -b.d) && a.d !== 0 && !held(rc.id, a.productId) && !held(other.id, b.productId)) {
           return { other: other, productId: a.productId, name: a.name,
                    otherProductId: b.productId, otherName: b.name, byPrice: true,
                    price: Number(a.price) || 0, qty: Math.abs(a.d),
@@ -15557,6 +15746,7 @@ function findAutoOffsetPair() {
         // v120: אותו מוצר ואותה כמות — המחיר שחויב אינו תנאי
         for (const b of theirs) {
           if (b.productId !== a.productId || !sameOffsetQty(b.d, -a.d)) continue;
+          if (ledgerHoldsOffset(rc.id, a.productId) || ledgerHoldsOffset(other.id, b.productId)) continue; // v127
           const oid = crossOffsetId(rc.id, other.id, a.productId);
           if (autoOffsetDismissed(rc, other, oid)) continue;
           return { rc, other, oid, productId: a.productId, name: a.name, otherName: b.name,
@@ -16253,11 +16443,13 @@ function renderReceiptsHistory() {
   // ומחק מה שהוקלד בו — גם מיד אחרי "שמור הנחה", כך שהשמירה נראתה כאילו לא
   // קרתה. כרטיס שהיה פתוח נשאר פתוח, ואחוז שהוקלד ועוד לא נשמר נשאר בשדה.
   const openCards = new Set(Array.from(app.querySelectorAll('details[data-rc-card][open]')).map(d => d.dataset.rcCard));
-  const head ='<div class="px-1 py-1 mb-2"><h2 class="font-black text-2xl text-slate-800">היסטוריית תעודות</h2><div class="text-xs text-slate-500 font-bold">קליטות וחזרות יחד · פתח קודם את מה שדורש טיפול</div></div>';
+  const head ='<div class="px-1 py-1 mb-2"><h2 class="font-black text-2xl text-slate-800">היסטוריית תעודות</h2><div class="text-xs text-slate-500 font-bold">קליטות, חזרות והניירות מהנהג יחד · פתח קודם את מה שדורש טיפול</div></div>';
   const filterBtn = (key, label) => '<button data-role="rc-history-filter" data-filter="' + key + '" class="btn-tap px-3 py-2 rounded-lg text-xs font-black whitespace-nowrap ' + (receiptHistoryFilter === key ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 border border-slate-200') + '">' + label + '</button>';
   // v114: המסך הזה הוא עכשיו גם היסטוריית החזרות — שורות המצב שהמסך הנפרד הראה בראשו
-  const pendingRet = returns.filter(r => !r.credited).length;
-  const openCredits = returns.filter(r => r.credited && returnsDiscrepancyInfo(r).open).length;
+  // v127: מהמאזן כשנייר זיכוי נוגע בתעודה (returnStateNow)
+  const retState = new Map(returns.map(r => [r.id, returnStateNow(r)]));
+  const pendingRet = returns.filter(r => retState.get(r.id) === 'credit').length;
+  const openCredits = returns.filter(r => retState.get(r.id) === 'open').length;
   const returnsStatus =
     (pendingRet ? '<div class="px-1 mb-2 text-sm font-bold text-amber-600"><i class="fa-solid fa-hourglass-half"></i> ' + (pendingRet === 1 ? 'תעודת חזרה אחת ממתינה לאימות זיכוי' : pendingRet + ' תעודות חזרה ממתינות לאימות זיכוי') + '</div>' : '') +
     (openCredits ? '<div class="px-1 mb-2 text-sm font-bold text-rose-700"><i class="fa-solid fa-triangle-exclamation"></i> ' + (openCredits === 1 ? 'תעודת חזרה אחת עם פער פתוח בזיכוי' : openCredits + ' תעודות חזרה עם פער פתוח בזיכוי') + '</div>' : '');
@@ -16270,7 +16462,10 @@ function renderReceiptsHistory() {
     : '';
   const filterBar = '<div class="flex gap-2 overflow-x-auto pb-2 mb-2">' + filterBtn('open', 'פתוחות') + filterBtn('credit', 'ממתינות לזיכוי') + filterBtn('done', 'הושלמו') + filterBtn('all', 'הכול') + '</div>' +
     returnsStatus + manageBlock;
-  if (!receipts.length && !returns.length) { app.innerHTML = head + filterBar + receiptsRangeHtml() + '<div class="text-center text-slate-400 py-10">אין תעודות עדיין</div>'; return; }
+  // v127: הניירות מהנהג — תעודות לכל דבר ברשימה
+  let paperLg = null, paperAll = [], paperList = [];
+  try { paperLg = currentLedger(); paperAll = ledgerAllPapers(paperLg); paperList = paperHistoryList(); } catch (e) { console.error('ledger failed', e); }
+  if (!receipts.length && !returns.length && !paperList.length) { app.innerHTML = head + filterBar + receiptsRangeHtml() + '<div class="text-center text-slate-400 py-10">אין תעודות עדיין</div>'; return; }
   const receiptCard = (rc) => {
     const d = new Date(rc.timestamp);
     const effD = rc.docDate || rc.date;
@@ -16279,7 +16474,10 @@ function renderReceiptsHistory() {
       ? dDisp(effD) + ' · <span class="text-slate-400">הוקלד ' + d.toLocaleDateString('he-IL') + ' ' + d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }) + '</span>'
       : d.toLocaleDateString('he-IL') + ' · ' + d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
     const di = receiptDiscrepancyInfo(rc);
-    const effectiveOpen = di.open;
+    // v127: נייר מהנהג נוגע בתעודה (או "חויבת פעמיים") — המאזן מחזיק אותה: הסטטוס ממנו
+    const ls = receiptLedgerStatus(rc, di);
+    const byLedger = !!(ls && ls.byPapers);
+    const effectiveOpen = byLedger ? !!(ls.open.length || ls.pending.length) : di.open;
     // v120: הכרטיס מדבר כמויות. הכסף שנשאר הוא תצוגה: שווי לפי מחירי התעודות
     // והסכום שהודפס בנייר, לזיהוי בלבד.
     const unitsCounted = (rc.items || []).reduce((a, l) => a + (l && !l.isDeposit && String(l.productId || '').indexOf('deposit-') !== 0 ? (Number(l.qty) || 0) : 0), 0);
@@ -16292,7 +16490,9 @@ function renderReceiptsHistory() {
     const paperNumbers = (Array.isArray(rc.noteParts) ? rc.noteParts : []).map(n => n && n.number).filter(Boolean);
     // v63: תעודה שממתינה לנייר פתוחה — אבל לא בגלל הפרש. אין לה הפרשים
     // לתקן, יש לה נייר לצרף.
-    const fixOpen = effectiveOpen && !di.awaitingDoc;
+    // v127: כשהמאזן מחזיק את התעודה — בלי תיבת ההפרשים הישנה ובלי כפתורי הקיזוז והזיכוי שלה (הם לא יודעים
+    // מה הניירות כבר סגרו); מה שפתוח — במשפט של המאזן מתחת לתאריך, ובשורת "במאזן"
+    const fixOpen = di.open && !di.awaitingDoc && !byLedger;
     const legacyRecovering = !!(rc.offsetClosed && Number(rc.offsetSchemaVersion || 0) < 2);
     const rows = (rc.items || []).map(l => {
       const billed = l.noteQty != null ? Number(l.noteQty) || 0 : Number(l.qty) || 0, got = Number(l.qty) || 0;
@@ -16318,6 +16518,9 @@ function renderReceiptsHistory() {
       borderCls = 'border-amber-300';
       statusTxt = '<i class="fa-solid fa-file-circle-xmark"></i> אין תעודה — ממתינה לנייר';
       metaStatus = ' · <span class="text-amber-700 font-black">נקלטה לפי ספירה</span>';
+    } else if (byLedger) {
+      const s = ledgerStatusBar(ls, 'receipt');
+      barCls = s.bar; borderCls = s.border; statusTxt = s.text; metaStatus = s.meta;
     } else if (effectiveOpen) {
       barCls = 'bg-rose-500 text-white';
       borderCls = 'border-rose-300';
@@ -16339,7 +16542,8 @@ function renderReceiptsHistory() {
           '<span><i class="fa-solid fa-file-invoice"></i> תעודת קליטה</span><span class="shrink-0">' + statusTxt + '</span>' +
         '</div>' +
         '<div class="p-4 flex items-center justify-between gap-2">' +
-        '<div class="min-w-0"><div class="font-black text-slate-800 text-sm">' + dateStr + '</div><div class="text-xs text-slate-400 mt-0.5">' + (rc.count || (rc.items || []).length) + ' פריטים' + (rc.noteParts && rc.noteParts.length > 1 ? ' · <span class="text-blue-600 font-black">' + rc.noteParts.length + ' תעודות ספק</span>' : '') + metaStatus + (rc.quantityCheck && rc.quantityCheck.method === 'manual' ? ' · <span class="text-slate-600 font-bold">הכמויות אושרו ידנית</span>' : '') + '</div></div>' +
+        '<div class="min-w-0"><div class="font-black text-slate-800 text-sm">' + dateStr + '</div><div class="text-xs text-slate-400 mt-0.5">' + (rc.count || (rc.items || []).length) + ' פריטים' + (rc.noteParts && rc.noteParts.length > 1 ? ' · <span class="text-blue-600 font-black">' + rc.noteParts.length + ' תעודות ספק</span>' : '') + metaStatus + (rc.quantityCheck && rc.quantityCheck.method === 'manual' ? ' · <span class="text-slate-600 font-bold">הכמויות אושרו ידנית</span>' : '') + '</div>' +
+          (ls ? ledgerSentencesHtml(byLedger ? ls.open.concat(ls.pending) : ls.open, ls.lg, ls.all) : '') + '</div>' +
         '<div class="flex items-center gap-2 shrink-0"><div class="text-left"><div class="text-[11px] text-slate-400">נספר / חויב</div><div class="font-black text-slate-800" dir="ltr">' + mtxQty(unitsCounted) + (unitsBilled !== unitsCounted ? ' / ' + mtxQty(unitsBilled) : '') + ' <span class="text-[11px] font-bold text-slate-500">יח׳</span></div><div class="text-[10px] font-bold text-slate-400">' + linesCount + ' שורות</div></div><i class="fa-solid fa-chevron-down hist-chevron text-slate-400 transition-transform"></i></div>' +
         '</div>' +
       '</summary>' +
@@ -16393,7 +16597,7 @@ function renderReceiptsHistory() {
         // חוסר ועודף מוצגים בנפרד: חוסר מופחת מהתשלום; עודף אינו מכסה אותו
         // ואינו מתווסף לתשלום בלי חשבונית. קיזוז קורה רק באישור מפורש.
         (() => {
-          if (!(di.shortItems || []).length || di.shortFullyCredited) return '';
+          if (!(di.shortItems || []).length || di.shortFullyCredited || byLedger) return '';
           const balanceLine = (di.overUnits || 0) > 0
             ? '<div class="mt-2 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-black text-slate-700"><i class="fa-solid fa-scale-balanced"></i> חוסר ' + di.shortUnits + ' יח׳ · עודף ' + di.overUnits + ' יח׳ — עודף אינו מקזז חוסר בלי אישור</div>'
             : '';
@@ -16414,6 +16618,7 @@ function renderReceiptsHistory() {
           return '<div class="mt-2 bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-xs text-emerald-800"><div class="font-black mb-1"><i class="fa-solid fa-scale-balanced"></i> ' + (hasAuto ? 'קיזוזים פעילים — כולל קיזוז אוטומטי' : 'קיזוזים שאושרו במודע') + '</div>' + groups.map(o => '<div class="flex items-center justify-between gap-2 py-1 border-b border-emerald-100 last:border-0"><div class="font-bold min-w-0">' + (o.source === 'manual-value' ? manualOffsetSummary(o) : ((Number(o.qty) || 0) + ' × ' + htmlEscape(o.name || '') + (o.source === 'auto' ? ' — קוזז אוטומטית (מוצר, מחיר וכמות זהים)' : ' — קוזז'))) + '</div><button data-role="rc-offset-cancel" data-id="' + htmlEscape(rc.id) + '" data-group="' + htmlEscape(o.groupId || o.id) + '" class="btn-tap shrink-0 bg-white border border-emerald-300 text-rose-600 rounded-lg px-2 py-1 text-[10px] font-black">בטל</button></div>').join('') + (effectiveOpen ? '<div class="mt-1 pt-1 border-t border-emerald-200 text-rose-700 font-black"><i class="fa-solid fa-triangle-exclamation"></i> נשארו הפרשים נוספים — התעודה עדיין פתוחה</div>' : '<div class="mt-1 font-black">כל ההפרשים בתעודה הזאת טופלו ✓</div>') + '</div>';
         })() : '') +
         (legacyRecovering ? '<div class="mt-2 bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-xs font-black text-amber-800"><i class="fa-solid fa-rotate"></i> משחזר קיזוז ישן ובודק מחדש את שאר החוסרים…</div>' : '') +
+        // v127: findOffsetMatch לא מציע מה שנייר מהנהג נגע בו (עודף שכבר חויב בנייר אינו מקזז חוסר)
         (legacyRecovering ? '' : (function () { const m = findOffsetMatch(rc); if (!m) return ''; const od = new Date(m.other.timestamp).toLocaleDateString('he-IL');
             return '<div class="mt-2 bg-indigo-50 border-2 border-indigo-200 rounded-xl p-3">' +
               '<div class="text-xs font-black text-indigo-900 mb-1.5"><i class="fa-solid fa-lightbulb"></i> קיזוז מזוהה</div>' +
@@ -16429,17 +16634,23 @@ function renderReceiptsHistory() {
   };
   const receiptMatchesFilter = rc => {
     // v124: "ממתינות לזיכוי" הן תעודות חזרות שטרם אומתו; לקליטה אין יותר תביעת זיכוי ספק
-    const open = receiptDiscrepancyInfo(rc).open;
+    const open = receiptOpenNow(rc);
     return receiptHistoryFilter === 'all' || (receiptHistoryFilter === 'open' && open) || (receiptHistoryFilter === 'done' && !open);
   };
   // v123: תעודת חזרות שאומתה ונשאר בה פער ביחידות היא "פתוחה", לא "הושלמה"
   const returnMatchesFilter = r => {
-    const open = !!r.credited && returnsDiscrepancyInfo(r).open;
-    return receiptHistoryFilter === 'all' || (receiptHistoryFilter === 'open' && open) || (receiptHistoryFilter === 'credit' && !r.credited) || (receiptHistoryFilter === 'done' && !!r.credited && !open);
+    const st = retState.get(r.id);
+    return receiptHistoryFilter === 'all' || receiptHistoryFilter === st;
+  };
+  // נייר מהנהג: "פתוחות" — לבדיקה, לשיוך, לקליטה, או שיש בו משהו פתוח במאזן; אחרת "הושלמו"
+  const paperMatchesFilter = p => {
+    const open = paperHistoryView(p, paperLg).isOpen;
+    return receiptHistoryFilter === 'all' || (receiptHistoryFilter === 'open' && open) || (receiptHistoryFilter === 'done' && !open);
   };
   const combined = [
     ...receipts.filter(receiptMatchesFilter).map(rc => ({ ts: rc.timestamp || 0, html: receiptCard(rc) })),
-    ...returns.filter(returnMatchesFilter).map(r => ({ ts: r.timestamp || 0, html: returnCardInReceipts(r) }))
+    ...returns.filter(returnMatchesFilter).map(r => ({ ts: r.timestamp || 0, html: returnCardInReceipts(r) })),
+    ...paperList.filter(paperMatchesFilter).map(p => ({ ts: Number(p.timestamp) || Date.parse(String(p.docDay || '') + 'T12:00:00') || 0, html: paperCardInHistory(p, paperLg, paperAll, openCards.has('paper:' + p.id)) }))
   ].sort((a, b) => b.ts - a.ts);
   const items = combined.map(x => x.html).join('');
   const recBalBanner = receiptsBalanceBannerHtml();
