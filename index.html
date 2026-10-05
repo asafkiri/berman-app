@@ -816,7 +816,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '129'; // v129: בלי כפתור "מאזן" בפס — מה שפתוח מול ברמן מוסבר במשפטים במסך הקליטה ובניהול
+const APP_VERSION = '130'; // v130: הכל בקליטה — "הגיעה סחורה עם הנייר הזה?", והתשובות למאזן בתוך המשפט
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -14554,9 +14554,15 @@ function paperIntakeItemHtml(item) {
     actions = j.inDraft ? btn('paper-goto-receiving', 'לספירה ←') : j.done || j.waiting ? '' : btn('ledger-start-receiving', 'לקליטה', ' data-paper="' + htmlEscape(p.id) + '"' + capAttr) +
       (item.join && item.join.reason === 'bare' ? btn('ledger-start-receiving', 'קליטה חדשה לתעודה הזאת', ' data-paper="' + htmlEscape(p.id) + '" data-new="1"' + capAttr) : '');
   } else if (p && (item.status === 'saved' || item.status === 'review')) {
-    let st = ''; try { st = currentLedger().states[p.id] || ''; } catch (e) {}
+    let st = '', lgNow = null; try { lgNow = currentLedger(); st = lgNow.states[p.id] || ''; } catch (e) {}
     const head = htmlEscape(paperLabel(p)) + ' · ' + ledgerRowsText((p.rows || []).length) + ' · ' + mtxQty(paperUnits(p)) + ' יח׳';
-    if (rec && rec.conflict) {
+    if (!(rec && rec.conflict) && paperGoodsPending(p, lgNow)) {
+      // v130: נייר חיוב שלא כל שורותיו הן עודף שכבר נספר — הגיעה איתו סחורה, או שהוא רק לאיזון?
+      body = '<div class="font-black text-sm text-amber-900">' + head + '</div><div class="text-sm text-amber-900 font-black mt-1">' + htmlEscape(paperGoodsText(p, lgNow)) + '</div>' +
+        '<div class="text-[11px] text-amber-800 font-bold mt-0.5">כן — סופרים אותה בקליטה. לא — הנייר רק לאיזון (חיוב על מה שלא הגיע, או תיקון).</div>';
+      tone = 'border-amber-300 bg-amber-50';
+      actions = paperGoodsActions(p).map(a => btn(a.role, a.label, ' data-paper="' + htmlEscape(p.id) + '"' + capAttr)).join('');
+    } else if (rec && rec.conflict) {
       body = '<div class="font-black text-sm text-amber-800">' + head + '</div><div class="text-[11px] text-amber-800 font-bold mt-0.5">נייר אחר כבר שמור עם המספר הזה, עם שורות אחרות. מה נכון?</div>';
       tone = 'border-amber-300 bg-amber-50';
       actions = btn('paper-conflict-keep', 'החלף בצילום החדש', capAttr) + btn('paper-conflict-drop', 'מחק את הצילום החדש', capAttr) + btn('paper-open', 'פרטים', ' data-id="' + htmlEscape(p.id) + '"' + capAttr);
@@ -14618,7 +14624,7 @@ async function openPaperReview(id, cap) {
   let st = ''; try { st = currentLedger().states[p.id] || ''; } catch (e) {}
   paperReview = { id: p.id, cap: (found.local && found.local.captureId) || p.captureId || '', paper: p, local, conflict: !!(found.local && found.local.conflict),
     st, wasAccepted: p.state === 'accepted', attachPick: false, checked: false, query: '', pickLine: null, orig: JSON.stringify(p),
-    from: currentView === 'receiptsHistory' ? 'receiptsHistory' : null, // v127: נפתח מכרטיס בהיסטוריה — חוזרים לשם
+    from: ['receiptsHistory', 'receiving', 'manage'].indexOf(currentView) !== -1 ? currentView : null, // v127/v130: חוזרים למסך שממנו נפתח (היסטוריה, קליטה, ניהול)
 
     units: p.anchors && p.anchors.units != null ? p.anchors.units : '', lines: p.anchors && p.anchors.lines != null ? p.anchors.lines : '', img: null };
   setView('paperReview');
@@ -14952,6 +14958,7 @@ async function ledgerAnswer(role, itemId, returnId, paperId) {
   }
   ledgerInvalidate(); refreshLedgerBar();
   if (currentView === 'ledger') renderLedger();
+  else if (currentView === 'receiving' || currentView === 'manage') rerender(); // v130: תשובה מהמשפט שבקליטה
 }
 // שורה על כרטיס תעודה בהיסטוריה: אילו ניירות הסבירו אותה, ומה עוד פתוח במאזן
 function ledgerDocLineHtml(id) {
@@ -15134,6 +15141,47 @@ function receiptGapSentence(rc, di) {
   if (g) parts.push(g > 0 ? mtxQty(g) + ' יח׳ בנייר שלא שויכו לשורות' : mtxQty(-g) + ' יח׳ נספרו מעבר לנייר');
   return 'בקליטה של ' + ledgerDayShort(storedReceiptDate(rc)) + ': ' + (parts.join(' · ') || 'הפרש פתוח');
 }
+// ===== v130: "הגיעה סחורה עם הנייר הזה?" =====
+// נייר חיוב קטן ("ת.משלוח" עם מספר 2900) נכנס לאיזון לבד. כששורה בו לא מתאימה לעודף שכבר נספר בקליטה —
+// אולי הנהג הביא איתו סחורה (לספור), ואולי הוא רק לאיזון (חיוב על מה שלא הגיע, או תיקון). שואלים פעם
+// אחת. רק ניירות שנקראו מ-v130 (נייר ישן — כמו קודם, בלי שאלה חדשה).
+function paperGoodsPending(p, lg) {
+  if (!p || p.kind !== 'charge' || p.goods || p.deleted || p.state === 'void' || !(Number(p.writtenBy) >= 130)) return false;
+  if (!lg || lg.states[p.id] !== 'counted') return false;
+  const pl = (lg.placed || []).find(x => x.id === p.id);
+  return !!(pl && (pl.attach.rowTargets || []).some(t => t && !t.type && !t.outside));
+}
+function paperGoodsText(p, lg) {
+  const pl = (lg && lg.placed || []).find(x => x.id === p.id) || p;
+  const loose = ((pl.attach && pl.attach.rowTargets) || []).filter(t => t && !t.type).map(t => (p.rows || [])[t.line]).filter(Boolean);
+  return 'הגיעה סחורה עם ' + paperLabel(p) + (loose.length ? ' (' + loose.map(paperRowName).join(', ') + ')' : '') + '?';
+}
+function paperGoodsActions(p) {
+  return [{ role: 'paper-goods-yes', label: 'כן — לספור בקליטה', paperId: p.id }, { role: 'paper-goods-no', label: 'לא — רק לאיזון', paperId: p.id }];
+}
+// התשובה: "כן" — הנייר הוא תעודת משלוח קטנה: נכנס לקליטה כפי שנקרא (בלי קריאה נוספת) וסופרים. "לא" — נשאר לאיזון.
+async function setPaperGoods(paperId, yes) {
+  const found = paperFind(paperId); if (!found) { showToast('הנייר לא נמצא', null, null, 2500); return false; }
+  const p = cloneSafe(found.paper);
+  const onDevice = !!(found.local && !found.local.ackedAt);
+  const cap = (found.local && found.local.captureId) || p.captureId || null;
+  const rev = (Number(p.rev) || 1) + 1;
+  p.goods = yes ? 'yes' : 'no';
+  if (yes) { p.kind = 'delivery'; p.attach = null; }
+  const data = yes ? { goods: 'yes', kind: 'delivery', kindKnown: true, attach: null, rev } : { goods: 'no', rev };
+  const ok = onDevice ? await paperWrite(p, { local: true, cap })
+    : await runCloudTask('paper goods', { op: 'update', path: dataPath('papers', p.id), data, operationId: makeOperationId('paper_goods') });
+  if (!ok) return false;
+  if (!onDevice) { const i = papers.findIndex(x => x.id === p.id); if (i !== -1) papers[i] = { ...papers[i], ...data }; }
+  ledgerInvalidate(); refreshLedgerBar();
+  if (yes) {
+    try { await receivingJoinDelivery({ paperId: p.id, cap, explicit: true }); }
+    catch (e) { console.error('paper join failed', e); showToast('לא הצלחתי להכניס את הנייר לקליטה — נסה שוב', null, null, 3000); }
+  } else showToast('נשאר לאיזון ✓', null, null, 2000);
+  if (currentView === 'paperIntake') refreshPaperIntake();
+  else if (currentView === 'receiving' || currentView === 'manage' || currentView === 'ledger') rerender();
+  return true;
+}
 function openIssuesList() {
   const out = [];
   let lg = null;
@@ -15141,9 +15189,14 @@ function openIssuesList() {
   try { paperLocalConflicts().forEach(rec => out.push({ state: 'question', text: 'צילום חדש של ' + paperLabel(rec.paper) + ' נקרא אחרת מהנייר עם אותו מספר — מה נכון?', role: 'ledger-open' })); } catch (e) {}
   if (lg) {
     const all = ledgerAllPapers(lg);
+    // v130: נייר חיוב שעוד לא ענו עליו "הגיעה סחורה?" — השאלה הזו קודמת לכל מה שהמאזן אומר עליו
+    const asked = new Set();
+    all.filter(p => paperGoodsPending(p, lg)).forEach(p => { asked.add(p.id); out.push({ state: 'question', text: paperGoodsText(p, lg), role: 'ledger-open', actions: paperGoodsActions(p) }); });
     lg.items.filter(it => it.state === 'problem' || it.state === 'question').forEach(it => {
-      let t = ''; try { t = ledgerItemText(it, lg, all).text; } catch (e) {}
-      if (t) out.push({ state: it.state, text: t, role: 'ledger-open' });
+      if (it.part && it.part.type === 'paper' && asked.has(it.part.id)) return;
+      let t = null; try { t = ledgerItemText(it, lg, all); } catch (e) {}
+      // v130: התשובה בתוך המשפט — בלי לעבור למסך המאזן ("פרטים" נשאר במאזן)
+      if (t && t.text) out.push({ state: it.state, text: t.text, role: 'ledger-open', itemId: it.id, actions: (t.actions || []).filter(a => a.label !== 'פרטים') });
     });
   }
   // קליטה פתוחה שהמאזן לא מכסה: לפני תחילת המאזן, או פער בין השורות לסכום שבתחתית הנייר
@@ -15168,9 +15221,14 @@ function openIssuesBannerHtml(opts) {
   // בזמן ספירה — שורה אחת, כדי לא לדחוף את הספירה למטה
   if (opts.compact) return '<button data-role="' + list[0].role + '" class="btn-tap w-full ' + tone + ' border rounded-xl py-2.5 px-3 font-bold text-sm flex items-center justify-between gap-2 mb-3"><span class="min-w-0 truncate"><i class="fa-solid fa-triangle-exclamation"></i> ' + head + '</span><span class="text-xs font-black shrink-0">←</span></button>';
   const max = 3;
-  const line = x => '<button data-role="' + x.role + '" class="btn-tap w-full min-h-[44px] text-right px-3 py-2 border-t ' + (problem ? 'border-rose-100' : 'border-amber-100') + ' flex items-center justify-between gap-2">' +
+  const act = (x, a) => '<button data-role="' + a.role + '"' + (x.itemId ? ' data-item="' + htmlEscape(x.itemId) + '"' : '') + (a.returnId != null ? ' data-return="' + htmlEscape(a.returnId) + '"' : '') +
+    (a.paperId ? ' data-paper="' + htmlEscape(a.paperId) + '" data-id="' + htmlEscape(a.paperId) + '"' : '') +
+    ' class="btn-tap min-h-[44px] px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 text-xs font-black">' + htmlEscape(a.label) + '</button>';
+  const line = x => '<div class="border-t ' + (problem ? 'border-rose-100' : 'border-amber-100') + '">' +
+    '<button data-role="' + x.role + '" class="btn-tap w-full min-h-[44px] text-right px-3 py-2 flex items-center justify-between gap-2">' +
     '<span class="min-w-0 text-sm font-bold leading-snug ' + (x.state === 'problem' ? 'text-rose-800' : 'text-amber-900') + '"><i class="fa-solid ' + (x.state === 'problem' ? 'fa-circle-exclamation' : 'fa-circle-question') + '" aria-hidden="true"></i> ' + htmlEscape(x.text) + '</span>' +
-    '<span class="text-xs font-black shrink-0 opacity-70">←</span></button>';
+    '<span class="text-xs font-black shrink-0 opacity-70">←</span></button>' +
+    ((x.actions || []).length ? '<div class="flex gap-1.5 flex-wrap px-3 pb-2.5">' + x.actions.map(a => act(x, a)).join('') + '</div>' : '') + '</div>';
   return '<div class="' + tone + ' border rounded-xl mb-3 overflow-hidden" role="region" aria-label="' + head + '">' +
     '<div class="px-3 py-2 text-xs font-black"><i class="fa-solid fa-triangle-exclamation"></i> ' + head + '</div>' +
     list.slice(0, max).map(line).join('') +
@@ -15218,6 +15276,7 @@ function paperUiClick(t) {
     return true;
   }
   if (role === 'paper-goto-receiving') { setView('receiving'); return true; }
+  if (role === 'paper-goods-yes' || role === 'paper-goods-no') { setPaperGoods(t.dataset.paper || id, role === 'paper-goods-yes'); return true; } // v130
   if (role.indexOf('ledger-') === 0) { ledgerAnswer(role, t.dataset.item, t.dataset.return, t.dataset.paper); return true; }
   if (!paperReview) return false;
   const r = paperReview;
