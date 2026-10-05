@@ -573,3 +573,82 @@ test('צילום חוזר של תעודת משלוח (אותה תמונה) — �
   c.click('rc-cancel'); c.run('testConfirms[testConfirms.length - 1].cb()');
   assert.equal(c.run(`paperJoinPending.size`), 0);
 });
+
+// ===== ממצאי הסקירה =====
+test('סקירה: קריאה מהכרטיס הישן (עמוד אחרי עמוד) שאישרה את עצמה — תעודה נוספת מתווספת אליה, בלי קריאה ובלי לגעת בצילומים', async () => {
+  const r = app(delivery('77001234'));
+  // קריאה של הקליטה עצמה (צילומים בכרטיס הישן) — כמו runtime().scan()
+  await r.scan();
+  r.run(`receiptDocDate = null; saveReceiptDraft();`);
+  assert.equal(r.run('receiptPaperScanState'), 'ok'); assert.equal(r.run('aiTotalPages()'), 1);
+  r.serve(delivery('77001235', { rows: delivery().scan.documents[0].rows.slice(0, 4), totalUnits: 27, printedLines: 4 }));
+  await readPapers(r, 1, 1);
+  const s = state(r);
+  assert.equal(s.st, 'ok'); assert.equal(s.docs.length, 2);
+  assert.equal(r.run('aiScanDocuments[0].pages.length'), 1, 'הצילום הישן נשאר');
+  assert.deepEqual(s.docs.map(d => d.pages.length), [1, 0]);
+  assert.equal(r.requests.length, 2, 'קריאה אחת לכל נייר');
+});
+
+test('סקירה: "כן" עונה רק על השאלה שנשאלה — אם המצב השתנה, נשאלת השאלה החדשה', async () => {
+  const r = app(delivery('77001234', { docDate: printed(days(-1)) }));
+  await readPapers(r);
+  await join(r, 'paper_77001234');
+  assert.match(r.run('testConfirms[0].title'), /לפתוח קליטה/);
+  // בינתיים נפתחה קליטה בלי נייר מלפני שבוע (שאלה אחרת: 'nodoc')
+  r.run(`receiptNoDoc = true; receiptOpened = true; receiptEntryMode = 'manual'; receiptDocDate = '${days(-7).toLocaleDateString('en-CA')}'; receiptList = [{ productId: 'code_101', name: 'x', barcode: '', qty: 2 }]; saveReceiptDraft();`);
+  await confirmLast(r);
+  assert.equal(r.run('receiptNoDoc'), true, 'לא נכנסה בלי לשאול');
+  assert.match(r.run('testConfirms[testConfirms.length - 1].title'), /בלי תעודה/);
+});
+
+test('סקירה: "בדוק וסיים" מחכה גם לתעודה שבדיוק נכנסת (בין הקריאה להכנסה)', async () => {
+  const r = app(delivery());
+  await receive(r);
+  r.run(`paperJoinActive = 1; currentView = 'receiving'; receiptList = [{ productId: 'code_101', name: 'x', barcode: '', qty: 1 }]; finishReceipt();`);
+  assert.ok(r.toasts.some(t => /עוד נייר מהנהג נקרא עכשיו/.test(t)));
+  assert.equal(r.run('pendingReceipt'), null);
+  r.run('paperJoinActive = 0');
+});
+
+test('סקירה: טלפון שקורא ניירות כשיש קליטה פתוחה מחזיק את המנעול — בטלפון השני "בדוק וסיים" מחכה', async () => {
+  const a = app(delivery());
+  a.run(`receiptOpened = true; receiptEntryMode = 'photo'; receiptList = [{ productId: 'code_101', name: 'x', barcode: '', qty: 1 }]; saveReceiptDraft();
+    globalThis.__acq = []; globalThis.__rel = [];
+    sharedReceiving = { ready: true, canEdit: true, payload: null, save: async () => ({}), flush: async () => {},
+      acquireScan: async () => { __acq.push(1); sharedReceiptStatus = { ...sharedReceiptStatus, scan: { id: 'mine1', expiresAt: Date.now() + 180000 } }; return { id: 'mine1' }; },
+      releaseScan: async t => { __rel.push(t.id); sharedReceiptStatus = { ...sharedReceiptStatus, scan: null }; } };
+    canEditSharedReceipt = () => true; sharedReceiptStatus = { ready: true, scan: null };`);
+  a.serve(credit());
+  await readPapers(a);
+  assert.equal(a.run('__acq.length'), 1, 'נלקח מנעול לזמן הקריאה (טלפון אחר רואה אותו ומחכה)');
+  assert.deepEqual(plain(a.run('__rel')), ['mine1'], 'ושוחרר בסוף הסבב');
+});
+
+test('סקירה: תעודה מיום אחר לא נכנסת לבד גם לסבב של "התחל לספור" כשכבר יש בו תעודה; תעודה של אתמול כשיש לאתמול קליטה בלי נייר — שאלה', async () => {
+  const r = app(delivery('77001234'));
+  await receive(r);
+  r.serve(delivery('77001240', { docDate: printed(days(-3)) }));
+  r.run(`paperIntake.bind = null;`);
+  await receive(r, 1, 1);
+  assert.equal(state(r).docs.length, 1, 'מיום אחר — לא נכנסה לבד');
+  const y = days(-1).toLocaleDateString('en-CA');
+  const bare = { id: 'rc_y', date: y, noDoc: true, noteParts: [], items: [{ productId: 'code_101', name: 'x', qty: 3 }], timestamp: 1 };
+  const b = app(delivery('77001234', { docDate: printed(days(-1)) }), { receipts: [bare] });
+  b.run(`receiptNoDoc = true; receiptOpened = true; receiptEntryMode = 'manual'; receiptList = [{ productId: 'code_101', name: 'x', barcode: '', qty: 7 }]; saveReceiptDraft();`);
+  await readPapers(b);
+  assert.equal(b.run('receiptNoDoc'), true, 'לא נכנסה לבד לקליטה של היום');
+  assert.equal(b.run('receiptDocDate'), null, 'והקליטה של היום לא קיבלה תאריך אחר');
+});
+
+test('סקירה: ספירה עיוורת גם ביום שיש בו קליטה שנשמרה בלי נייר — במאזן ובבדיקת הנייר אין כמויות של תעודת המשלוח', async () => {
+  const bare = { id: 'rc_bare', date: TODAY, noDoc: true, noteParts: [], items: [{ productId: 'code_101', name: 'x', qty: 3 }], timestamp: 1 };
+  const r = app(delivery(), { receipts: [bare] });
+  await readPapers(r);
+  r.run(`setView('ledger')`);
+  const html = r.node('app').innerHTML;
+  assert.match(html, /תעודת המשלוח 77001234/);
+  assert.doesNotMatch(html, /5 שורות · 30 יח׳/, 'בלי כמויות לפני שנקלטה');
+  await r.run(`openPaperReview('paper_77001234')`);
+  assert.doesNotMatch(r.node('app').innerHTML, /data-role="review-qty"/);
+});
