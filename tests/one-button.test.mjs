@@ -17,7 +17,9 @@ test('מקום אחד: "צלם נייר מהנהג" בפס העליון → "ק�
   assert.doesNotMatch(html, /type="file"|data-role="rc-open-photo"|data-role="paper-photo"/, 'במסך הקליטה אין מצלמה — רק בפס העליון');
   assert.match(r.node('ledgerBar').innerHTML, /data-role="paper-photo"/); assert.match(r.node('ledgerBar').innerHTML, /צלם נייר מהנהג/);
   assert.match(html, /קבלת סחורה בלי נייר/);
-  assert.match(html, /רק "סה״כ כללי" ו"סה״כ שורות"/);
+  // מה שלא צריך כדי להתחיל — מקופל: הקלדה, תאריך אחר, תעודה ארוכה; בלי שורת שלבים
+  assert.match(html, /<details[^>]*>.*עוד אפשרויות.*rc-entry-manual.*rcDocDate.*rc-entry-photo-multi.*<\/details>/s);
+  assert.doesNotMatch(html, /1 · /);
   await receive(r);
   assert.equal(r.requests.length, 1);
   const body = JSON.parse(r.requests[0].body).documents[0];

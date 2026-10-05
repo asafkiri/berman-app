@@ -108,19 +108,19 @@ try{
   assert.ok(await a.evaluate(()=>window.t.scrollOk()),'אין גלילה לצדדים ב-390px');
   await a.screenshot({path:'/tmp/berman-one-button.png',fullPage:true});
   // A מצלם בכפתור שבפס — הצילום נכנס למסך הניירות
+  // הקריאה מתחילה לבד אחרי הצילום (בלי "קרא") — עוצרים אותה כדי לראות את "התחל לספור עכשיו"
+  await a.evaluate(()=>window.t.hold());
   const [chooser]=await Promise.all([a.waitForEvent('filechooser'),a.locator('#ledgerBar [data-role="paper-photo"]').click()]);
   await chooser.setFiles({name:'paper.svg',mimeType:'image/svg+xml',buffer:svg});
-  await role(a,'paper-run').waitFor({state:'visible'});
+  await a.waitForFunction(()=>window.t.state().requests===1);
   assert.match(await a.locator('#app').innerText(),/הניירות מהנהג/);
-  assert.match(await a.locator('#app').innerText(),/הכל ישר — קרא \(1\)/);
+  assert.equal(await a.locator('#app [data-role="paper-run"]').count(),0,'בלי "קרא" — הקריאה כבר רצה');
   await a.screenshot({path:'/tmp/berman-one-button-tray.png',fullPage:true});
-  await a.evaluate(()=>window.t.hold());
-  await role(a,'paper-run').click();
   // בזמן הקריאה: "התחל לספור עכשיו"
   await role(a,'paper-count-now').waitFor({state:'visible'});
   await role(a,'paper-count-now').click();
   // הספירה נפתחת מיד, בשני הטלפונים: "קורא…"
-  await a.waitForFunction(()=>window.t.state().view==='receiving'&&window.t.state().busy&&window.t.state().requests===1);
+  await a.waitForFunction(()=>window.t.state().view==='receiving'&&window.t.state().busy);
   await b.waitForFunction(()=>window.t.state().busy&&window.t.state().opened);
   assert.match(await b.locator('#app').innerText(),/קורא את הניירות מהנהג/);
   // B סופר בזמן שהנייר נקרא

@@ -100,7 +100,7 @@ try {
   assert.equal(await page.locator('#paperGalGlobal').getAttribute('multiple'), '');
   const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.locator('#ledgerBar [data-role="paper-photo"]').click()]);
   await chooser.setFiles({ name: 'paper.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="500"><rect width="300" height="500" fill="white"/><path d="M20 60h260M20 120h200" stroke="black" stroke-width="6"/></svg>') });
-  await page.waitForFunction(() => window.t.view() === 'paperIntake' && document.querySelector('#app [data-role="paper-run"]'));
+  await page.waitForFunction(() => window.t.view() === 'paperIntake' && document.querySelector('#paperIntakeList > div'));
   assert.equal(await page.locator('#app input[type="file"]').count(), 0);
   // צילום חדש שמתנגש עם נייר שמור באותו מספר — שאלה במאזן, ו"מחק את הצילום החדש" משאיר את השמור
   await page.evaluate(p142 => { localStorage.setItem('bm_paper_results_v1', JSON.stringify({ capC: { captureId: 'capC', hash: 'hC', at: 1,
