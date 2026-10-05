@@ -5832,9 +5832,6 @@ function receivingPhotoCardHtml() {
 // v126: כל נייר מהנהג עולה ממקום אחד — "📷 צלם נייר מהנהג" בפס שמתחת לכותרת, באותו מקום בכל
 // מסך. מסך הקליטה לא מצלם בעצמו: הוא מראה לאן ללחוץ ומה כבר נקרא. תעודת המשלוח מגיעה לכאן כשהיא
 // כבר קרואה (רק "סה״כ כללי" ו"סה״כ שורות"), זיכוי וחיוב — למאזן.
-function receivingCameraHintHtml(text) {
-  return '<div class="rounded-xl bg-blue-50 border border-blue-200 p-2.5 mb-3 text-[11px] font-black text-blue-800 flex items-start gap-2"><i class="fa-solid fa-arrow-up mt-0.5" aria-hidden="true"></i><span>' + htmlEscape(text) + '</span></div>';
-}
 function receivingWaitingPhotosHtml() {
   const it = paperIntake;
   const waiting = it ? it.items.filter(x => x.status === 'photo').length : 0;
