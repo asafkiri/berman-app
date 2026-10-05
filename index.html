@@ -813,7 +813,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '125'; // v125: מצלמים כל נייר של הנהג — מאזן לפי מוצר מול ברמן (papers), בלי לשנות אף תעודה שמורה
+const APP_VERSION = '126'; // v126: כפתור אחד לכל נייר מהנהג — תעודת משלוח נכנסת לקליטה כשהיא כבר קרואה, בלי קריאה שנייה
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -6184,7 +6184,7 @@ function renderReceivingScreen() {
     return;
   }
   const progress = receivingProgressHtml(t);
-  app.innerHTML = banner + pendingReturnsBannerHtml() + topButtons + noteBar + receivingMorePapersHtml() + paperScanStatusHtml() + '<div id="rcOcrReview">' + ocrReviewPanelHtml() + '</div>' + '<div id="rcQuantityOptions">' + receiptQuantityButtonsHtml() + '</div>' + progress +
+  app.innerHTML = banner + pendingReturnsBannerHtml() + topButtons + noteBar + receivingMorePapersHtml() + paperScanStatusHtml() + '<div id="rcOcrReview">' + receivingOcrPanelHtml() + '</div>' + '<div id="rcQuantityOptions">' + receiptQuantityButtonsHtml() + '</div>' + progress +
     '<button data-role="rc-scan" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 font-black text-lg flex items-center justify-center gap-3 shadow-lg mb-2"><i class="fa-solid fa-barcode text-2xl"></i> סרוק פריט לתעודה</button>' +
     '<button data-role="rc-crates" class="btn-tap w-full bg-amber-50 border-2 border-amber-300 text-amber-900 rounded-2xl py-3 font-black text-base flex items-center justify-center gap-2 mb-2"><i class="fa-solid fa-basket-shopping"></i> הוסף לחם בתפזורת</button>' +
     '<details class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4"><summary class="cursor-pointer p-3 font-black text-sm text-slate-600"><i class="fa-solid fa-circle-question text-slate-400"></i> לא מצליח לסרוק?</summary><div class="px-3 pb-3">' +
@@ -6310,8 +6310,10 @@ function finishReceipt() {
     return;
   }
   if (bermanOcrPendingDocs().length) {
+    // v126: הספירה נגמרה — עכשיו מוצגים המספרים שהקריאה סימנה
+    rcOcrReviewRevealed = true; rcOcrRevealDraft = receiptDraftId;
     showToast('נשמרה בדיקת הכמויות. לפני הסיום יש לבדוק את המספרים המסומנים באימות הקריאה מול התעודה.', null, null, 5000);
-    saveReceiptDraft();
+    saveReceiptDraft(); refreshOcrReviewViews();
     return;
   }
   if (!receiptList.length) return;
@@ -8915,13 +8917,22 @@ function ocrReviewPanelHtml() {
   const html = bermanOcrReviewHtml();
   return html ? '<section data-ocr-review-panel class="rounded-xl border-2 border-amber-300 bg-white p-3 mb-3 text-sm" dir="rtl" aria-label="אימות הקריאה מול התעודה">' + html + '</section>' : '';
 }
+// v126: במסך הספירה המספרים שהקריאה סימנה (שורה, מוצר, כמות) לא מוצגים — רק כמה יש. הם נפתחים
+// ב"בדוק וסיים", כדי שהספירה תישאר עיוורת. בסיכום ובבדיקה הידנית — כמו תמיד.
+function receivingOcrPanelHtml() {
+  if (receiptUsesManualQuantities() || (rcOcrReviewRevealed && rcOcrRevealDraft != null && rcOcrRevealDraft === receiptDraftId)) return ocrReviewPanelHtml();
+  const docs = bermanOcrPendingDocs(); if (!docs.length) return '';
+  const n = docs.reduce((a, d) => a + Math.max(1, bermanOcrReviewFields(d).length), 0);
+  return '<div data-ocr-deferred class="rounded-xl bg-amber-50 border border-amber-200 p-2.5 mb-3 text-[11px] font-black text-amber-800"><i class="fa-solid fa-magnifying-glass"></i> ' +
+    (n === 1 ? 'הקריאה סימנה מספר אחד לבדיקה מול הנייר' : 'הקריאה סימנה ' + n + ' מספרים לבדיקה מול הנייר') + ' — נבדוק אותם בסוף הספירה, כדי שהספירה תישאר עיוורת.</div>';
+}
 function refreshOcrReviewViews() {
   ['rcOcrReview', 'rsOcrReview'].forEach(id => {
     const host = $(id); if (!host) return;
     const active = document.activeElement;
     // לא מציירים מחדש מתחת לאצבע שמקלידה מספר מהתעודה.
     if (active && active.dataset && active.dataset.ocrDoc != null && host.contains(active)) return;
-    host.innerHTML = ocrReviewPanelHtml();
+    host.innerHTML = id === 'rcOcrReview' ? receivingOcrPanelHtml() : ocrReviewPanelHtml();
   });
 }
 function bermanConfirmOcr(index) {

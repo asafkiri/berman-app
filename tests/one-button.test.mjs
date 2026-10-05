@@ -439,3 +439,27 @@ test('טלפון שני: רואה "קורא…" ולא יכול לסיים; אח
   assert.deepEqual(merged.state.receiptList, counted.state.receiptList);
   assert.equal(merged.state.aiScanResponse.perDocument[0].paperId, 'paper_77001234');
 });
+
+test('ספירה עיוורת: מספר שהקריאה סימנה לא מוצג בזמן הספירה — רק כמה יש; ב"בדוק וסיים" הבדיקה נפתחת', async () => {
+  const flagged = () => { const p = delivery(); p.verification = { ...p.verification, status: 'needs_review', escalationAttempted: true, issues: [{ noteIndex: 0, rowIndex: 1, field: 'quantity' }] }; return p; };
+  const r = app(flagged());
+  await receive(r);
+  assert.equal(r.requests.length, 1, 'בלי קריאה שלישית');
+  assert.equal(r.run('bermanOcrPendingDocs().length'), 1);
+  r.run('renderReceiving()');
+  let html = r.node('app').innerHTML;
+  assert.match(html, /data-ocr-deferred/); assert.match(html, /הקריאה סימנה מספר אחד לבדיקה מול הנייר/);
+  assert.doesNotMatch(html, /data-ocr-key|berman-ocr-confirm/);
+  r.run('aiScanResponse.scan.documents[0].rows').forEach(row => assert.ok(!html.includes(row.description), row.description));
+  countAsPaper(r);
+  r.run('finishReceipt()');
+  assert.equal(r.run('pendingReceipt'), null);
+  assert.match(r.node('rcOcrReview').innerHTML, /data-ocr-key/, 'ב"בדוק וסיים" — המספר לבדיקה');
+  r.run('renderReceiving()');
+  assert.match(r.node('app').innerHTML, /data-ocr-key/);
+  // ספירה ידנית מול הנייר — הבדיקה מוצגת כמו תמיד
+  const m = app(flagged());
+  await receive(m, 1, 0, 'manual');
+  m.run('renderReceiving()');
+  assert.match(m.node('app').innerHTML, /data-ocr-key/);
+});
