@@ -10,6 +10,7 @@
 // הרצה: node --test tests/analytics-money.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs';
 import { runtime } from './receipt-scan-harness.mjs';
 
 const json = (r, expr) => JSON.parse(r.run('JSON.stringify(' + expr + ')'));
@@ -77,4 +78,44 @@ test('שווי כרטיס התעודה בהיסטוריה — אותו כלל', 
       items: [{ productId: 'pA', name: 'מוצר א', qty: 4 }, { productId: 'deposit-recv-pA', name: 'פיקדון', qty: 4, isDeposit: true }] }];
     returns = []; receiptHistoryFilter = 'all'; currentView = 'receiptsHistory'; renderReceiptsHistory();`);
   assert.match(r.node('app').innerHTML, /שווי לפי מחירי האפליקציה[^₪]*₪36\.00/);
+});
+
+test('אריחי החודש (הגיע/חזר החודש ₪, % מהכסף) — בלי כסף על השורות, לפי מחיר החשבונית', () => {
+  const r = setup();
+  const today = r.run('todayStr()'), first = today.slice(0, 8) + '01';
+  r.context.rcs = [{ id: 'm1', schemaVersion: 2, timestamp: 1, date: first, docDate: first, items: [{ productId: 'pB', name: 'מוצר ב', qty: 10 }] }];
+  r.context.rets = [{ id: 'm2', schemaVersion: 2, timestamp: 2, date: first, docDate: first, credited: true, items: [{ productId: 'pB', name: 'מוצר ב', qty: 2 }] }];
+  r.run(`anBuild(rcs, rets, [anThisWeek()], [], null, 'test', false);`);
+  const m = json(r, '{ recvValue: anData.month.recvValue, retValue: anData.month.retValue, retPctMoney: anData.month.retPctMoney }');
+  assert.deepEqual(m, { recvValue: 50, retValue: 10, retPctMoney: 20 });
+});
+
+test('עלות ברירת המחדל בניתוח: מחיר החשבונית שבתוקף היום (לא הבסיס)', () => {
+  const r = setup();
+  r.run(`products.find(p => p.id === 'pB').priceHistory = [{ from: '2000-01-01', price: 6, source: null }];`);
+  const cost = r.run(`(() => { const x = anNewRow({ key: 'p:pB', p: products.find(p => p.id === 'pB'), name: 'מוצר ב', barcode: '' }); anFinishRow(x); return x.cost; })()`);
+  assert.equal(cost, 6);
+});
+
+test('מוצר שנמחק עם ברקוד משותף: לא נרשם על מוצר אחר — נשאר במחיר שנשמר על השורה (גם במרכזת)', () => {
+  const r = setup();
+  const out = rows(r, [{ id: 'd', timestamp: 1, date: '2026-08-10', items: [{ productId: 'code_9999', code: '9999', name: 'מוצר שנמחק', barcode: '777', qty: 3, unitPrice: 9.03, lineTotal: 27.09 }] }], []);
+  const w = Object.values(out)[0];
+  assert.ok(!w.rows['p:pA'] && !w.rows['p:pB'], JSON.stringify(Object.keys(w.rows)));
+  assert.equal(w.recvValue, 27.09);
+  r.context.recs = [{ id: 'd', timestamp: 1, date: '2026-08-10', items: [{ productId: 'code_9999', code: '9999', name: 'מוצר שנמחק', barcode: '777', qty: 3, unitPrice: 9.03 }] }];
+  const m = json(r, `rangeProductMatrixData({ recs, rets: [] }).list.map(x => [x.pid, x.billed])`);
+  assert.deepEqual(m, [['code_9999', 3]]);
+});
+
+test('קוד חלופי אינו מסתיר קוד ראשי של מוצר אחר', () => {
+  const r = setup();
+  r.run(`products.find(p => p.id === 'pA').altCodes = ['9702'];`);
+  const out = rows(r, [{ id: 'k', schemaVersion: 2, timestamp: 1, date: '2026-08-12', docDate: '2026-08-12', items: [{ name: 'x', barcode: '555', code: '9702', qty: 1 }] }], []);
+  assert.ok(Object.values(out)[0].rows['p:pB']);
+});
+
+test('קליטה במבצע: "לפי המחיר הרגיל", לא "לא נספרות"', () => {
+  const src = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /במבצע, לא נספרות|קליטות במבצע לא נספרות|קליטות במחיר מבצע לא נספרות/);
 });

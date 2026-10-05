@@ -14,14 +14,15 @@ test('v118 — אימוץ מחיר חשבונית: רשומת היסטוריה �
   await rt.run(`adoptInvoicePrice('${p.id}', 12, '2026-09-01')`);
   assert.equal(rt.writes.length, 1);
   const w = rt.writes[0];
-  assert.equal(w.op, 'update');
+  // v124: רשומה מתוארכת אחת שממוזגת בטרנזקציה לתוך המוצר בענן — לא מערך מוכן מראש
+  assert.equal(w.op, 'price-entry');
   assert.equal(w.path[w.path.length - 1], p.id);
-  assert.deepEqual(Object.keys(w.data), ['priceHistory']);
-  assert.equal(w.data.priceHistory.length, 1);
-  assert.equal(w.data.priceHistory[0].from, '2026-09-01');
-  assert.equal(w.data.priceHistory[0].price, 12);
-  assert.equal(w.data.priceHistory[0].source.method, 'invoice');
-  assert.equal(w.data.priceHistory[0].source.month, '2026-09');
+  assert.ok(!('data' in w), 'אין שדות מוצר אחרים');
+  assert.equal(w.priceEntry.from, '2026-09-01');
+  assert.equal(w.priceEntry.price, 12);
+  assert.equal(w.priceEntry.source.method, 'invoice');
+  assert.equal(w.priceEntry.source.month, '2026-09');
+  assert.equal(rt.run(`products.find(x => x.id === '${p.id}').priceHistory.length`), 1);
   assert.equal(rt.run(`products.find(x => x.id === '${p.id}').price`), p.price, 'product.price untouched');
   assert.equal(rt.run(`priceAt(products.find(x => x.id === '${p.id}'), '2026-08-31')`), p.price, 'August keeps the old price');
   assert.equal(rt.run(`priceAt(products.find(x => x.id === '${p.id}'), '2026-09-15')`), 12);

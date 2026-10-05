@@ -1129,7 +1129,7 @@ function noteSideSum(kind) { return r2(receiptNotes.reduce((a, x) => { const n =
 function notesAnchor(list, key) {
   const notes = (list || []).filter(Boolean).map(normNote);
   const vals = notes.map(n => n[key]).filter(v => v != null);
-  // עוגן תקף רק כשיש ערך בכל תעודת ספק; סכום חלקי עלול להטעות את הבלש.
+  // עוגן תקף רק כשיש ערך בכל תעודת ספק; סכום חלקי מטעה.
   if (!notes.length || vals.length !== notes.length) return null;
   // v51: עוגן השורות אינו מתקזז ואסור לסכם אותו כשיש זיכוי. חויב 10 וזוכה 3
   // מדפיס שתי שורות על הנייר ומשאיר שורה אחת שנסרקת — לא הסכום (2) ולא
@@ -1275,8 +1275,6 @@ function saveReceiptDraft() {
   if ((receiptOpened || receiptList.length || receiptNotes.length || aiScanDocuments.some(d => d.pages.length)) && !receiptDraftId) receiptDraftId = makeOperationId('receipt');
   const draft = { countingMode: receiptCountingMode, quantityReview: receiptQuantityReview, schemaVersion: 2, draftId: receiptDraftId, items: receiptList, notes: receiptNotes, opened: receiptOpened, docDate: receiptDocDate || null, entryMode: receiptEntryMode, anchorSource: receiptAnchorSource, noDoc: receiptNoDoc, attach: receiptAttachTarget, paperScan: null, sharedReceivingVersion: sharedReceiving ? 1 : null, updatedAt: Date.now() };
   try {
-    // v61: ההכרעה "המבצע ירד כבר בתעודה" שורדת ניתוק וריענון יחד עם התעודה —
-    // בלעדיה תעודה שנפתחה מחדש הייתה מציגה שוב את אותו פער שכבר נסגר.
     draft.paperScan = receiptScanSnapshot();
     localStorage.setItem(RECEIPT_DRAFT_KEY, JSON.stringify(draft));
     return true;
@@ -2568,7 +2566,7 @@ function buildSystemHealth() {
     status: openReceipts.length ? 'warn' : 'ok',
     title: 'תעודות עם הפרש פתוח',
     text: openReceipts.length ? ('יש ' + openReceipts.length + ' תעודות קליטה עם חוסר/עודף שלא נסגר.') : 'אין תעודות קליטה עם הפרש פתוח.',
-    detail: openReceipts.length ? (function () { const b = receiptsBalance(); return 'חוסר ' + b.shortUnits + ' יח׳ · עודף ' + b.overUnits + ' יח׳'; })() : '',
+    detail: openReceipts.length ? (function () { const b = receiptsBalance(); return 'חוסר ' + mtxQty(b.shortUnits) + ' יח׳ · עודף ' + mtxQty(b.overUnits) + ' יח׳'; })() : '',
     actionRole: openReceipts.length ? 'health-go-receipts' : null,
     actionText: 'תעודות'
   });
@@ -4855,7 +4853,13 @@ function clearSupersededProductFailedWrites(productId) {
       return task.writes.length > 0;
     }
     const targetsProduct = task && task.path && task.path[task.path.length - 1] === productId;
-    if (targetsProduct && directActions.has(item.actionName)) { changed = true; return false; }
+    if (targetsProduct && directActions.has(item.actionName)) {
+      changed = true;
+      // v124: השמירה החדשה מחליפה את שדות המוצר, לא את המחיר המתוארך שבתור — הוא נשאר
+      // כפעולה משלו וימוזג לענן בניסיון הבא
+      if (task.priceEntry) { item.task = { op: 'price-entry', path: task.path, priceEntry: task.priceEntry, operationId: task.operationId }; item.actionName = 'save product invoice price'; return true; }
+      return false;
+    }
     return true;
   });
   if (changed) saveCloudFailedWrites();
@@ -4883,6 +4887,7 @@ async function executeCloudTask(task) {
   if (Array.isArray(task.tasks)) { for (const t of task.tasks) await executeCloudTask(t); return; }
   if (task.op === 'return-credit-link') return executeReturnCreditLinkTask(task);
   if (task.op === 'return-approve') return executeReturnApproveTask(task);
+  if (task.priceEntry && (task.op === 'update' || task.op === 'price-entry')) return executePriceEntryTask(task);
   if (task.op === 'batch') {
     const batch = writeBatch(db);
     (task.writes || []).forEach(w => {
@@ -4911,6 +4916,23 @@ async function executeCloudTask(task) {
   if (task.op === 'update') return updateDoc(ref, task.data || {});
   if (task.op === 'delete') return deleteDoc(ref);
   throw new Error('פעולת ענן לא מוכרת: ' + task.op);
+}
+// v124: רשומת מחיר מתוארכת (priceEntry) נכתבת כטרנזקציה שקוראת את המוצר מהענן
+// וממזגת לתוך ה-priceHistory שלו — גם בניסיון חוזר אחרי ניתוק. כך כתיבה שנכשלה
+// ונשלחת שוב אינה דורסת רשומה שנכתבה בינתיים ממכשיר אחר (אימוץ במרכזת, או עריכה
+// בכרטיס המוצר). 'update' עם priceEntry כותב באותה טרנזקציה גם את שאר שדות המוצר.
+async function executePriceEntryTask(task) {
+  const ref = doc(db, ...task.path);
+  const e = task.priceEntry;
+  const history = await runTransaction(db, async tx => {
+    const snap = await tx.get(ref);
+    if (!snap.exists()) throw new Error('המוצר לא נמצא בענן');
+    const h = priceHistoryWith(snap.data(), e.from, e.price, e.source || null);
+    tx.update(ref, { ...(task.op === 'update' ? (task.data || {}) : {}), priceHistory: h });
+    return h;
+  });
+  const p = products.find(x => x.id === task.path[task.path.length - 1]);
+  if (p) p.priceHistory = history;
 }
 function retryTaskWithoutStaleUnitWrites(item) {
   if (!item || !item.task) return null;
@@ -5325,7 +5347,7 @@ function handleReceivingScan(code) {
 }
 function proceedScannedProduct(p, target) {
   // v124: קליטה והחזרה נמדדות ביחידות — מוצר בלי מחיר נכנס בלי לשאול על מחיר.
-  // מחיר חסר מסומן בבריאות המערכת ובמרכזת ("ללא מחיר"), ונקבע בכרטיס המוצר.
+  // מחיר חסר מסומן בבריאות המערכת (מוצר פעיל) ובשורת המוצר במרכזת ("ללא מחיר"), ונקבע בכרטיס המוצר.
   promptQty(p, target);
 }
 // v53: חיפוש לפי שם, לצד הקוד. הסורק שלא קורא הוא רק חצי מהבעיה — החצי
@@ -6235,17 +6257,9 @@ function reconcileScannedUnits() { let u = 0; (reconcileData || []).forEach(l =>
 function reconcileUnitsGap() { if (receiptNoteUnits == null) return null; return receiptNoteUnits - reconcileScannedUnits(); }
 function reconcileUnitsBalanced() { const g = reconcileUnitsGap(); return g == null || g === 0; }
 let reconcileCheckMode = false; // ✓ ויזואלי מופיע רק כשההפרש הוא בכמויות (כל הברקודים תואמים)
-// v206: מחירי מבצע נושאים שברי אגורה (5.47 פחות 18% = 4.4854), ועיגול המחיר
-// לאגורות שלמות לפני הכפל צבר שגיאה (449×10=4,490 מול פער אמיתי 4,485) —
-// הפתרון היחיד האמיתי נפסל בסיבוב המדויק, מרחב הזוגות "המדויקים" הוצף
-// בצירופים אקראיים, והבלש ויתר ושלח לסריקה. לכן כל חשבון הבלש עבר
-// למאיות אגורה: מחיר × 10,000, והסבילויות בהתאם.
-// סדר החיפוש חשוב לא פחות מהמתמטיקה:
-// כשגם הכסף וגם היחידות מצביעים לאותו כיוון, קודם בודקים הסבר "טהור".
-// חוסר+עודף יחד נפתח רק אם לא נמצא הסבר טהור לאותו כיוון.
 function refreshReconcile() { if (currentView === 'reconcile') renderReconcile(); }
 // v62: כרטיס הצילום חי משני מסכים — מסך הקליטה (צילום-תחילה) ומסך ההשוואה
-// (הבלש שלא פתר). כל צעד בצנרת הצילום מרענן דרך כאן, כדי שלא יקרא בכוח
+// (כשהכמויות לא נסגרות). כל צעד בצנרת הצילום מרענן דרך כאן, כדי שלא יקרא בכוח
 // למסך שאינו מוצג ויימחק את מה שהמשתמש רואה.
 function refreshScanHost() {
   if (currentView === 'reconcile') renderReconcile();
@@ -6320,7 +6334,7 @@ function reconcileRowHtml(l) {
     '</div>' +
   '</div>';
 }
-// ===== סריקת AI — מופעלת רק לאחר שההתאמה והבלש הפשוט לא פתרו =====
+// ===== סריקת AI — קריאת הנייר: כמויות, שורות וזהות המוצרים =====
 function aiScanNoteSource() {
   return receiptNotes.length ? receiptNotes.map(normNote) : [{ amount: receiptNoteTotal, units: receiptNoteUnits, lines: null, kind: 'charge' }];
 }
@@ -8914,7 +8928,7 @@ function aiSingleNameCandidateId(row) {
     const ids = Array.from(new Set([hintId].concat(candidateIds)));
     const prices = ids.map(id => {
       const product = (products || []).find(candidate => String(candidate.id) === id);
-      return product ? r2(Number(product.price) || 0) : null;
+      return product ? r2(priceAt(product, activeReceiptDate())) : null; // v124: מחיר החשבונית ביום התעודה
     });
     if (prices.length > 1 && prices.every(price => price != null && price > 0 && price === prices[0])) return hintId;
   }
@@ -9358,7 +9372,7 @@ function aiAutoResolvePendingRow(pending, aggregates) {
       return { product: starAgree[0].product, barcode: starAgree[0].barcode, method: 'auto_local_name_promo' };
     }
     const pool = starAgree.length ? starAgree : priceMatches;
-    const priceList = pool.map(candidate => aiMoneyCents(Number(candidate.product.price) || 0));
+    const priceList = pool.map(candidate => aiMoneyCents(priceAt(candidate.product, activeReceiptDate())));
     if (priceList.every(value => value != null && Math.abs(value - priceList[0]) <= 2)) {
       // מועמדים באותו מחיר ואותו סטטוס מבצע — הבחירה זהה כספית לחלוטין;
       // נבחר השם הקרוב ביותר לנייר במקום הראשון השרירותי (הכרעתו 8.8).
@@ -9382,7 +9396,7 @@ function aiAutoResolvePendingRow(pending, aggregates) {
       return { product: qtyCandidates[0].product, barcode: qtyCandidates[0].barcode, method: 'auto_name_qty_unique' };
     }
     if (priceCandidates.length >= 2) {
-      const priceList = priceCandidates.map(candidate => aiMoneyCents(Number(candidate.product.price) || 0));
+      const priceList = priceCandidates.map(candidate => aiMoneyCents(priceAt(candidate.product, activeReceiptDate())));
       const samePrice = priceList.every(value => value != null && Math.abs(value - priceList[0]) <= 2);
       if (samePrice) {
         // מועמדים זהים במחיר: הבחירה זהה כספית לחלוטין. השרת דירג אותם
@@ -11123,7 +11137,7 @@ function aiInvoiceCaptureHtml() {
   const keptNote = aiTotalPages()
     ? '<div class="rounded-xl bg-slate-50 border border-slate-200 p-2 mb-3 flex items-center justify-between gap-2"><span class="text-[11px] font-black text-slate-600"><i class="fa-solid fa-images"></i> ' + aiTotalPages() + ' צילומים שמורים מהתעודה הזאת</span><button data-role="ai-reset-scan" class="btn-tap text-[11px] font-black text-slate-400 underline shrink-0">צלם הכול מחדש</button></div>'
     : '';
-  return '<div class="bg-white rounded-2xl border-2 border-violet-200 p-4 shadow-sm mb-24"><div class="font-black text-xl text-slate-800"><i class="fa-solid fa-camera-retro text-violet-600"></i> סריקה חכמה של התעודות</div><div class="rounded-xl bg-emerald-50 border-2 border-emerald-300 p-2.5 text-[12px] font-black text-emerald-800 mt-2"><i class="fa-solid fa-circle-check"></i> הסריקה פעילה ומחוברת לשירות הפענוח.</div>' + '<div class="text-xs text-slate-500 font-bold leading-relaxed mt-1 mb-2">הבלש הפשוט לא פתר את הפער. צלם פעם אחת כל עמוד מכל תעודה. התמונות נשלחות לפענוח בלבד ואינן נשמרות באפליקציה.</div><div class="rounded-xl bg-blue-50 border border-blue-200 p-2 text-[11px] font-black text-blue-800 mb-3"><i class="fa-solid fa-expand"></i> כל צילום נפתח בגודל גדול. סובב עד שהכותרת למעלה והכתב ישר, ואז אשר. ללא אישור התמונה לא תישלח.</div>' +
+  return '<div class="bg-white rounded-2xl border-2 border-violet-200 p-4 shadow-sm mb-24"><div class="font-black text-xl text-slate-800"><i class="fa-solid fa-camera-retro text-violet-600"></i> סריקה חכמה של התעודות</div><div class="rounded-xl bg-emerald-50 border-2 border-emerald-300 p-2.5 text-[12px] font-black text-emerald-800 mt-2"><i class="fa-solid fa-circle-check"></i> הסריקה פעילה ומחוברת לשירות הפענוח.</div>' + '<div class="text-xs text-slate-500 font-bold leading-relaxed mt-1 mb-2">צלם פעם אחת כל עמוד מכל תעודה. התמונות נשלחות לפענוח בלבד ואינן נשמרות באפליקציה.</div><div class="rounded-xl bg-blue-50 border border-blue-200 p-2 text-[11px] font-black text-blue-800 mb-3"><i class="fa-solid fa-expand"></i> כל צילום נפתח בגודל גדול. סובב עד שהכותרת למעלה והכתב ישר, ואז אשר. ללא אישור התמונה לא תישלח.</div>' +
     (aiScanError ? '<div class="rounded-xl bg-rose-50 border border-rose-300 p-2.5 text-xs font-black text-rose-700 mb-3">' + htmlEscape(aiScanError) + '</div>' : '') + keptNote + docCards +
     '<button data-role="ai-run" ' + (ready ? '' : 'disabled') + ' class="btn-tap w-full rounded-xl py-3.5 font-black ' + (ready ? 'bg-violet-600 text-white' : 'bg-slate-200 text-slate-400') + '"><i class="fa-solid fa-wand-magic-sparkles"></i> פענח את כל התעודות ב-AI</button>' +
     '<div class="text-[10px] text-slate-400 font-bold text-center mt-2">בדרך כלל מתבצעת קריאת AI אחת. אם הקריאה חסרה או אינה נסגרת מול "סה"כ כללי" ו"סה"כ שורות", המערכת עשויה לנסות עד שתי זוויות נוספות.</div><button data-role="rc-goto-units" class="btn-tap w-full bg-white border border-slate-200 text-slate-500 rounded-xl py-2 font-bold text-xs mt-2">או: בדיקה ידנית בלי סריקה</button><button data-role="rc-goto-units" class="btn-tap w-full text-slate-400 py-2 font-black text-xs underline">המשך בלי AI — בדיקה ידנית</button></div>';
@@ -11264,8 +11278,7 @@ function aiApplyInvoiceResult() {
 // v121: שלושה שלבים בלבד — 'units' (פער יחידות מול הנייר: מקלידים לכל שורה
 // כמה חויב, או מצלמים), 'ai' (הנייר נקרא בסריקה), 'balanced'. הבלש, שלבי
 // המחירים והמבצעים והבדיקה הידנית של הכסף ירדו: בלי כסף אין לפער של יחידה
-// אחת פתרון אריתמטי, והנייר הוא העד היחיד. הפונקציות שלהם נשארות עד הניקוי
-// בשלב 6 ואינן נקראות מכאן.
+// אחת פתרון אריתמטי, והנייר הוא העד היחיד. הקוד שלהם נמחק ב-v124.
 let rcStep = null;
 function aiScanHasMaterial() {
   return !!(AI_SCAN_ENABLED && (aiScanResponse || (aiScanDocuments || []).some(d => d && Array.isArray(d.pages) && d.pages.length)));
@@ -12185,8 +12198,28 @@ function invoiceUnitAt(p, day) {
   const pu = mtxPromoUnit(p && p.id, day, priceAt(p, day));
   return { unit: Math.round(pu.unit * 1000) / 1000, rebate: pu.rebate, promo: pu.promo };
 }
+// v124: קוד הפריט של השורה — מהשדה code, או ממזהה המוצר code_X. שורה שהקוד שלה אינו
+// בקטלוג (מוצר שנמחק) אינה נופלת לברקוד או לשם: בברמן ברקוד משותף לכמה מוצרים, והשורה
+// הייתה נרשמת על מוצר אחר ובמחיר שלו. במרכזת (rowFor) ובניתוח (anMatchProduct) — אותו כלל.
+function lineOwnCode(l) {
+  const c = String((l && l.code) || '');
+  if (c) return c;
+  const id = String((l && l.productId) || '');
+  return id.indexOf('code_') === 0 ? id.slice(5) : '';
+}
 // v124: המחיר שברמן מחייבת היום, וההנחה מהמחירון שנגזרת ממנו (תצוגה בלבד)
 function productPriceNow(p) { return priceAt(p, todayStr()); }
+// מחיר שעוד לא אומת מול חשבונית: נזרע או נשמר "בלי אחוז" (מחירון מלא כממלא מקום),
+// ואין לו רשומה מתוארכת. שמירה בכרטיס המוצר או אימוץ במרכזת מאשרים אותו.
+function productInvoicePriceUnverified(p) {
+  return !!p && p.discountSet === false && !(Array.isArray(p.priceHistory) && p.priceHistory.some(h => h && Number(h.price) > 0));
+}
+// v124: שדות תאימות למכשיר ב-v123, שמחשב בשמירת מוצר price = מחירון × (1 − אחוז):
+// האחוז נגזר מהמחיר הבסיסי, כך שהחישוב שלו מחזיר אותו מחיר. אינם נקראים ב-v124.
+function productCompatDiscount(price, listPrice) {
+  const pr = Number(price) || 0, lp = Number(listPrice) || 0;
+  return pr > 0 && lp > 0 ? { discountPct: Math.round((1 - pr / lp) * 10000) / 100, discountSet: true } : {};
+}
 function productInvoiceDiscountPct(p, day) {
   const list = productListPrice(p), price = priceAt(p, day || todayStr());
   return list > 0 && price > 0 ? Math.round((1 - price / list) * 10000) / 100 : null;
@@ -12262,9 +12295,10 @@ function rangeProductMatrixData(d) {
   // v123: שורה בלי מוצר קטלוג (מועברת/ישנה) — לפי קוד הפריט לפני ברקוד: בקטלוג של
   // ברמן כמה מוצרים חולקים ברקוד אחד
   const rowFor = (l) => {
+    const own = lineOwnCode(l);
     const p = (l.productId && products.find(x => x.id === l.productId)) ||
-      (l.code && products.find(x => productCode(x) === String(l.code))) ||
-      products.find(x => (l.barcode && x.barcode === l.barcode) || x.name === l.name) || null;
+      (own && products.find(x => productCode(x) === own)) ||
+      (own ? null : products.find(x => (l.barcode && x.barcode === l.barcode) || x.name === l.name)) || null;
     const key = (p && p.id) || l.productId || ('n:' + String(l.name || ''));
     if (!rows[key]) rows[key] = {
       key, pid: (p && p.id) || l.productId || '', product: p,
@@ -12299,6 +12333,7 @@ function rangeProductMatrixData(d) {
       const a = agg(day); a.q += billed; a.r += credited; a.amount += pu.unit * expected; a.fair += pu.unit * received;
       if (expected > 0 && row.prices.indexOf(pu.unit) === -1) row.prices.push(pu.unit);
       if (pu.promo) row.promo = true;
+      if (!(pu.unit > 0) && billed > 0) row.unpriced = true; // v124: גם מוצר בקטלוג בלי מחיר
     });
   });
   (d.rets || []).forEach(rt => {
@@ -12319,7 +12354,7 @@ function rangeProductMatrixData(d) {
       row.creditedEx += pu.unit * cred; row.rebate -= pu.rebate * cred;
       const a = agg(day); a.r += cred; a.amount -= pu.unit * cred; a.fair -= pu.unit * sent;
       if (pu.promo) row.promo = true;
-      if (!row.product && !(pu.unit > 0)) row.unpriced = true;
+      if (!(pu.unit > 0)) row.unpriced = true;
     });
     // v123: תעודת הזיכוי הזאת זיכתה גם חוסר בזיכוי של תעודת חזרות קודמת (קישור v87).
     // היחידות זוכו על הנייר הזה — נספרות כאן, ביום שלו; בתעודה הקודמת השורה נשארה "לא זוכה".
@@ -12332,7 +12367,7 @@ function rangeProductMatrixData(d) {
         const q = Number(it && it.qty) || 0; if (!(q > 0) || isDepositLine(it)) return;
         const row = rowFor(it);
         const pu = unitFor(row, it, day);
-        if (!row.product && !(pu.unit > 0)) row.unpriced = true;
+        if (!(pu.unit > 0)) row.unpriced = true;
         const c = cell(row, day); c.r += q; c.amt -= pu.unit * q;
         row.credited += q; row.amount -= pu.unit * q; row.inc -= pu.unit * q * vat;
         row.creditedEx += pu.unit * q; row.rebate -= pu.rebate * q;
@@ -12373,7 +12408,7 @@ function mtxRowFlags(row) {
     (row.openUnits > 0 ? ' <span class="text-[10px] font-black text-rose-600">חסר ' + mtxQty(row.openUnits) + ' יח׳ שטרם זוכה</span>' : '') +
     (row.openUnits < 0 ? ' <span class="text-[10px] font-black text-amber-600">+' + mtxQty(-row.openUnits) + ' יח׳ מעבר לחיוב</span>' : '') +
     // v123: שורה ידנית בלי מוצר במאגר — הכמות נספרת, אבל אין לה מחיר בחשבון החודש
-    (row.unpriced ? ' <span class="text-[10px] font-black text-amber-600" title="מוצר ידני שאינו במאגר — הכמות נספרת אבל אין לו מחיר; השווה מול החשבונית ידנית">ללא מחיר</span>' : '');
+    (row.unpriced ? ' <span class="text-[10px] font-black text-amber-600" title="אין מחיר למוצר (מוצר ידני שאינו במאגר, או מוצר בלי מחיר בכרטיס) — הכמות נספרת אבל לא הכסף; קבע מחיר בכרטיס המוצר או השווה מול החשבונית ידנית">ללא מחיר</span>' : '');
 }
 // התצוגה הראשית: שורה לכל מוצר על כל רוחב המסך, בלי גלילה לצדדים —
 // אותן שלוש עמודות שמשווים מול הנייר (כמות, מחיר, לתשלום), במחירי החשבונית.
@@ -12700,23 +12735,29 @@ function receiptDiscrepancyInfo(rc, opts) {
 }
 // v120: המאזן ביחידות קודם; הכסף לידו הוא תצוגה לפי מחירי התעודות
 // v124: מאזן הסחורה ביחידות בלבד (כמו returnsBalance) — הכסף במרכזת החודשית
+// שאריות של אלפיות יחידה (קיזוז לפי שווי ישן) אינן חוסר: מתחת ל-0.01 נחשב 0
 function receiptsBalance() {
-  let n = 0, shortUnits = 0, overUnits = 0, shortDocs = 0;
+  let n = 0, shortUnits = 0, overUnits = 0, shortDocs = 0, gapUnits = 0, awaiting = 0;
+  const u = v => { const x = Math.round((Number(v) || 0) * 100) / 100; return x >= 0.01 ? x : 0; };
   receipts.forEach(rc => {
     const di = receiptDiscrepancyInfo(rc);
     if (!di.open) return;
     n++;
-    const s = di.shortFullyCredited ? 0 : di.shortUnits;
-    shortUnits += s; overUnits += di.overUnits; if (s > 0) shortDocs++;
+    const s = di.shortFullyCredited ? 0 : u(di.shortUnits);
+    shortUnits += s; overUnits += u(di.overUnits); if (s > 0) shortDocs++;
+    gapUnits += Math.abs(Number(di.unresolvedUnitsGap) || 0);
+    if (di.awaitingDoc) awaiting++;
   });
-  return { n, shortUnits, overUnits, shortDocs };
+  return { n, shortUnits: Math.round(shortUnits * 100) / 100, overUnits: Math.round(overUnits * 100) / 100, shortDocs, gapUnits, awaiting };
 }
 function receiptsBalanceBannerHtml() {
   const b = receiptsBalance();
   if (!(b.n > 0)) return '';
   const docs = b.shortDocs === 1 ? 'בתעודה אחת' : 'ב-' + b.shortDocs + ' תעודות';
-  if (b.shortUnits > 0) return '<div class="bg-rose-600 text-white rounded-2xl p-4 mb-3 shadow-md"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-scale-unbalanced"></i> חסרות ' + b.shortUnits + ' יח׳ ' + docs + '</div><div class="text-xs text-white/90 mt-1">יחידות שחויבו בתעודה ולא הגיעו, וטרם זוכו או הושלמו' + (b.overUnits > 0 ? ' · ועוד ' + b.overUnits + ' יח׳ בעודף' : '') + '</div></div>';
-  if (b.overUnits > 0) return '<div class="bg-blue-600 text-white rounded-2xl p-4 mb-3 shadow-md"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-scale-unbalanced-flip"></i> התקבלו ' + b.overUnits + ' יח׳ מעבר לתעודות</div><div class="text-xs text-white/90 mt-1">העודף מתועד בלבד — במרכזת החודשית משלמים לפי מה שחויב</div></div>';
+  if (b.shortUnits > 0) return '<div class="bg-rose-600 text-white rounded-2xl p-4 mb-3 shadow-md"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-scale-unbalanced"></i> חסרות ' + mtxQty(b.shortUnits) + ' יח׳ ' + docs + '</div><div class="text-xs text-white/90 mt-1">יחידות שחויבו בתעודה ולא הגיעו, וטרם זוכו או הושלמו' + (b.overUnits > 0 ? ' · ועוד ' + mtxQty(b.overUnits) + ' יח׳ בעודף' : '') + '</div></div>';
+  if (b.overUnits > 0) return '<div class="bg-blue-600 text-white rounded-2xl p-4 mb-3 shadow-md"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-scale-unbalanced-flip"></i> התקבלו ' + mtxQty(b.overUnits) + ' יח׳ מעבר לתעודות</div><div class="text-xs text-white/90 mt-1">העודף מתועד בלבד — במרכזת החודשית משלמים לפי מה שחויב</div></div>';
+  if (b.gapUnits > 0 || b.awaiting > 0) return '<div class="bg-amber-500 text-white rounded-2xl p-4 mb-3 shadow-md"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-hourglass-half"></i> ' + (b.n === 1 ? 'תעודה אחת פתוחה' : b.n + ' תעודות פתוחות') + ' בלי חוסר או עודף בשורות</div><div class="text-xs text-white/90 mt-1">' +
+    [b.gapUnits > 0 ? mtxQty(b.gapUnits) + ' יח׳ בנייר שטרם שויכו לשורות' : '', b.awaiting > 0 ? (b.awaiting === 1 ? 'קליטה אחת ממתינה לנייר' : b.awaiting + ' קליטות ממתינות לנייר') : ''].filter(Boolean).join(' · ') + '</div></div>';
   return '<div class="bg-emerald-500 text-white rounded-2xl p-4 mb-3 shadow-md"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-scale-balanced"></i> מאזן הסחורה מול הספק מאוזן ✓</div><div class="text-xs text-white/90 mt-1">אין יחידות חסרות או עודפות בתעודות הפתוחות</div></div>';
 }
 // ===== v66: בלש הזיכוי המשולב — לאיזה חוסר שייך העודף שעל תעודת החזרות =====
@@ -12918,7 +12959,8 @@ function receiptDiffRowHtml(rc, item, dir, di) {
   const paperText = paper ? 'חויב\u00a0בתעודה\u00a0' + paper.billed + ' · נסרק\u00a0בפועל\u00a0' + paper.scanned + ' · ' : '';
   return '<div class="flex items-center justify-between gap-2 py-1.5 ' + (isShort ? 'text-rose-700' : 'text-amber-700') + '">' +
     '<div class="min-w-0"><div class="font-bold truncate">' + (isShort ? 'חסר: ' : 'עודף: ') + htmlEscape(item.name) + '</div><div class="text-[11px] opacity-80">' + paperText + (paper ? (isShort ? 'חסר\u00a0' : 'עודף\u00a0') : '') + offsetSideQtyText(side) + ' · ₪' + fmtMoney(side.value) + '</div></div>' +
-    '<button data-role="rc-offset-choose" data-id="' + htmlEscape(rc.id) + '" data-product="' + htmlEscape(item.productId) + '" data-dir="' + dir + '" class="btn-tap shrink-0 bg-white border ' + (isShort ? 'border-rose-300 text-rose-700' : 'border-amber-300 text-amber-700') + ' rounded-lg px-2.5 py-2 text-[11px] font-black"><i class="fa-solid fa-scale-balanced"></i> מצא קיזוז</button>' +
+    (side.price > 0 ? '<button data-role="rc-offset-choose" data-id="' + htmlEscape(rc.id) + '" data-product="' + htmlEscape(item.productId) + '" data-dir="' + dir + '" class="btn-tap shrink-0 bg-white border ' + (isShort ? 'border-rose-300 text-rose-700' : 'border-amber-300 text-amber-700') + ' rounded-lg px-2.5 py-2 text-[11px] font-black"><i class="fa-solid fa-scale-balanced"></i> מצא קיזוז</button>'
+      : '<span class="shrink-0 text-[10px] font-black text-slate-400">אין מחיר למוצר — קבע בכרטיס המוצר</span>') +
   '</div>';
 }
 function findOffsetMatch(rc, preferredOtherId, preferredProductId, preferredOtherProductId) {
@@ -13355,7 +13397,7 @@ function renderManualOffsetConfirm(origin, candidate, ov) {
     '<div class="p-4 overflow-y-auto"><div class="grid grid-cols-2 gap-2"><div class="bg-rose-50 border border-rose-200 rounded-2xl p-3"><div class="text-[11px] font-black text-rose-600">חוסר</div><div class="font-black text-slate-900 truncate">' + htmlEscape(shortSide.name) + '</div><div class="text-xs font-bold text-slate-600">₪' + fmtMoney(shortSide.value) + '</div></div><div class="bg-amber-50 border border-amber-200 rounded-2xl p-3"><div class="text-[11px] font-black text-amber-600">עודף</div><div class="font-black text-slate-900 truncate">' + htmlEscape(overSide.name) + '</div><div class="text-xs font-bold text-slate-600">₪' + fmtMoney(overSide.value) + '</div></div></div>' +
     '<div class="mt-3 bg-indigo-50 border-2 border-indigo-200 rounded-2xl p-4"><label class="block text-xs font-black text-indigo-900 mb-1">סכום לקיזוז ללא מע״מ — עד ₪' + fmtMoney(maxAmount) + '</label><div class="flex items-center gap-2 bg-white border-2 border-indigo-200 rounded-xl px-3"><span class="font-black text-slate-400">₪</span><input id="manualOffsetAmount" type="text" inputmode="decimal" value="' + priceFieldVal(maxAmount) + '" class="w-full h-12 text-center text-xl font-black outline-none"></div></div>' +
     '<div id="manualOffsetImpact" class="mt-3"></div>' +
-    '<div class="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs font-bold text-amber-900"><i class="fa-solid fa-triangle-exclamation"></i> העודף לא חויב בתעודה. באישור אתה מחשיב אותו כהשלמה לחוסר, ושני הפערים נסגרים בהיסטוריה. המרכזת החודשית לא משתנה: היא מחשבת לפי מה שחויב ומה שזוכה.</div>' +
+    '<div class="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs font-bold text-amber-900"><i class="fa-solid fa-triangle-exclamation"></i> העודף לא חויב בתעודה. באישור אתה מחשיב אותו כהשלמה לחוסר עד הסכום שבחרת: הפער הקטן נסגר, ומה שנשאר מהגדול נשאר פתוח. המרכזת החודשית לא משתנה: היא מחשבת לפי מה שחויב ומה שזוכה.</div>' +
     '<button data-mo-confirm class="btn-tap mt-3 w-full bg-indigo-600 text-white rounded-2xl py-3.5 font-black text-base"><i class="fa-solid fa-check"></i> אשר קיזוז</button></div>';
   const input = ov.querySelector('#manualOffsetAmount'), impact = ov.querySelector('#manualOffsetImpact'), confirmBtn = ov.querySelector('[data-mo-confirm]');
   const refresh = () => {
@@ -13380,7 +13422,11 @@ async function applyManualValueOffset(shortSide, overSide, requestedAmount) {
   const maxAmount = r2(Math.min(currentShort.value, currentOver.value));
   const amount = r2(Number(requestedAmount) || 0);
   if (!(amount > 0) || amount > maxAmount + 0.01) { showToast('סכום הקיזוז כבר אינו זמין', null, null, 2600); return; }
-  const shortQty = amount / currentShort.price, overQty = amount / currentOver.price;
+  // v124: צד שהסכום מכסה את כל שוויו נצרך בכמות המלאה — amount/price השאיר שאריות של
+  // אלפיות יחידה (5.74/5.7408) שאי אפשר לקזז שוב, והתעודה נשארה פתוחה לנצח
+  const covers = side => amount >= r2(side.value) - 0.005;
+  const shortQty = covers(currentShort) ? currentShort.qty : amount / currentShort.price;
+  const overQty = covers(currentOver) ? currentOver.qty : amount / currentOver.price;
   const groupId = manualOffsetGroupId(currentShort, currentOver);
   const shortEntry = manualOffsetEntry(groupId, currentShort, currentOver, amount, shortQty);
   const overEntry = manualOffsetEntry(groupId, currentOver, currentShort, amount, overQty);
@@ -13395,7 +13441,9 @@ async function applyManualValueOffset(shortSide, overSide, requestedAmount) {
   if (!saved) return;
   shortRc.externalOffsets = shortOffsets; overRc.externalOffsets = overOffsets;
   closeManualOffsetPicker(); buzz(24);
-  showToast('הקיזוז אושר — שני הפערים נסגרו (₪' + fmtMoney(amount) + ' במחירי האפליקציה)', null, null, 3400);
+  const leftShort = findOpenOffsetSide(shortRc.id, currentShort.productId, 'short'), leftOver = findOpenOffsetSide(overRc.id, currentOver.productId, 'over');
+  const left = leftShort || leftOver;
+  showToast(left ? ('הקיזוז אושר (₪' + fmtMoney(amount) + ') — נשאר פתוח: ' + (leftShort ? 'חוסר' : 'עודף') + ' ' + left.name + ' · ' + offsetSideQtyText(left)) : ('הקיזוז אושר — שני הפערים נסגרו (₪' + fmtMoney(amount) + ' במחירי האפליקציה)'), null, null, 3800);
   if (currentView === 'receiptsHistory') renderReceiptsHistory();
 }
 async function cancelReceiptOffset(receiptId, groupId) {
@@ -13949,10 +13997,11 @@ async function adoptInvoicePrice(pid, price, from) {
   const p = products.find(x => x.id === pid); if (!p) return;
   const amount = Number(price); if (!(amount > 0)) return;
   const fromDay = String(from || todayStr()).slice(0, 10);
-  const priceHistory = priceHistoryWith(p, fromDay, amount, { method: 'invoice', month: fromDay.slice(0, 7), adoptedAt: Date.now() });
-  const ok = await runCloudTask('adopt invoice price', { op: 'update', path: dataPath('products', pid), data: { priceHistory }, operationId: makeOperationId('price_hist') });
+  const source = { method: 'invoice', month: fromDay.slice(0, 7), adoptedAt: Date.now() };
+  // v124: טרנזקציה שממזגת לתוך המוצר בענן (executePriceEntryTask) — לא מערך מוכן מראש
+  const ok = await runCloudTask('adopt invoice price', { op: 'price-entry', path: dataPath('products', pid), priceEntry: { from: fromDay, price: amount, source }, operationId: makeOperationId('price_hist') });
   if (!ok) return;
-  p.priceHistory = priceHistory;
+  p.priceHistory = priceHistoryWith(p, fromDay, amount, source);
   showToast(p.name + ': מחיר חשבונית ₪' + fmt3(amount) + ' מ-' + dDisp(fromDay) + ' — המרכזת חושבה מחדש', null, null, 3500);
   calcReceiptRange();
 }
@@ -14118,7 +14167,7 @@ function priceRowHtml(p) {
   const op = promoForProduct(p.id, todayStr());
   const onNow = promoActive(op, todayStr());
   // v124: כל מבצע מחיר-קבוע הוא מבצע מרכזת (monthEndPromoForProduct), גם כשנשמר כ-'receipt'
-  const mop = promos.find(pr => (pr.type === 'monthEnd' || promoFixedPrice(pr) > 0) && Array.isArray(pr.productIds) && pr.productIds.indexOf(p.id) !== -1) || null;
+  const mop = monthEndPromoForProduct(p.id, todayStr()) || promos.find(pr => (pr.type === 'monthEnd' || promoFixedPrice(pr) > 0) && Array.isArray(pr.productIds) && pr.productIds.indexOf(p.id) !== -1) || null;
   const mOn = promoActive(mop, todayStr());
   const cat = pricingCatOf(p);
   const rec = recForProduct(p);
@@ -14135,9 +14184,11 @@ function priceRowHtml(p) {
     : '');
   // v124: מחיר החשבונית שבתוקף היום, וההנחה מהמחירון נגזרת ממנו (תצוגה)
   const priceNow = productPriceNow(p), discNow = productInvoiceDiscountPct(p);
-  const discBadge = discNow != null && discNow > 0
-    ? '<span class="text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full px-2 py-0.5">' + discNow + '%</span>'
-    : '';
+  const discBadge = productInvoicePriceUnverified(p)
+    ? '<span class="text-[10px] font-black bg-amber-50 text-amber-700 border border-amber-300 rounded-full px-2 py-0.5">מחיר חשבונית לא אומת</span>'
+    : (discNow != null && discNow > 0
+      ? '<span class="text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full px-2 py-0.5">' + discNow + '%</span>'
+      : '');
   const nextPrice = (Array.isArray(p.priceHistory) ? p.priceHistory : []).filter(h => h && h.from > todayStr() && Number(h.price) > 0).sort((a, b) => String(a.from).localeCompare(String(b.from)))[0];
   // מחיר הקופה (כולל מע״מ) לצד כל מוצר. שדה ריק מסומן בכתום —
   // תזכורת לבדוק את המחיר בקופה ולעדכן, עד שכל המאגר יתמלא.
@@ -14483,7 +14534,6 @@ function posImportCardHtml() {
     '<button data-role="pos-import-apply" class="btn-tap w-full bg-sky-600 text-white rounded-xl py-3 font-black mt-2"' + (st.busy || !st.updates.length ? ' disabled' : '') + '>' + (st.busy ? '<i class="fa-solid fa-spinner fa-spin"></i> מעדכן…' : (st.updates.length ? '<i class="fa-solid fa-check-double"></i> עדכן ' + st.updates.length + ' מחירי קופה' : 'אין מה לעדכן')) + '</button>' +
     '<button data-role="pos-import-close" class="btn-tap w-full bg-white border border-slate-300 text-slate-600 rounded-xl py-2 font-black text-xs mt-2">בטל</button></div>';
 }
-// עריכת אחוז ההנחה הקבועה משורת המוצר — מעדכן מיידית את המחיר הסופי
 function openPriceScanner() { scanPurpose = 'price'; openScanner(); }
 function handlePriceScan(code) {
   code = (code || '').trim(); if (!code) return;
@@ -14513,6 +14563,8 @@ function refreshProdWholeCartonUi() {
   }
 }
 // v124: ההנחה מהמחירון נגזרת ממחיר החשבונית (תצוגה בלבד), ולצידה המחירים המתוארכים
+// v124: ההנחה מהמחירון נגזרת ממחיר החשבונית (תצוגה בלבד), ולצידה המחירים המתוארכים.
+// הטקסט מתאר בדיוק את מה שהשמירה תכתוב (saveProd).
 function updateProdFinalHint() {
   const out = $('prod_finalHint'); if (!out) return;
   const num = id => parseFloat(((($(id) || {}).value || '') + '').replace(',', '.'));
@@ -14522,10 +14574,16 @@ function updateProdFinalHint() {
   const parts = [];
   if (lp > 0 && inv > 0) parts.push('הנחה מהמחירון: ' + (Math.round((1 - inv / lp) * 10000) / 100) + '%');
   else if (lp > 0 && !p) parts.push('בלי מחיר בחשבונית — מחירון מלא (₪' + fmt3(lp) + ') עד שיוזן');
+  if (p && !(inv > 0)) parts.push('המחיר הקיים נשאר: ₪' + fmt3(productPriceNow(p)));
   if (p && inv > 0) {
-    const cur = priceAt(p, from);
-    if (Math.round(inv * 1000) !== Math.round(cur * 1000)) parts.push('מ-' + dDisp(from) + ': ₪' + fmt3(cur) + ' ← ₪' + fmt3(inv) + (from > todayStr() ? ' (יחול בעתיד)' : ''));
+    const noBase = !(Number(p.price) > 0) && !(Array.isArray(p.priceHistory) && p.priceHistory.length);
+    if (noBase && from <= todayStr()) parts.push('למוצר לא היה מחיר — ₪' + fmt3(inv) + ' יחול על כל התאריכים');
+    else {
+      const cur = priceAt(p, from);
+      if (Math.round(inv * 1000) !== Math.round(cur * 1000)) parts.push('מ-' + dDisp(from) + ': ₪' + fmt3(cur) + ' ← ₪' + fmt3(inv) + (from > todayStr() ? ' (יחול בעתיד)' : ''));
+    }
   }
+  if (p && productInvoicePriceUnverified(p)) parts.push('מחיר החשבונית לא אומת — שמירה עם המחיר הנכון מאשרת אותו');
   const hist = p ? productPriceHistoryText(p) : '';
   if (hist) parts.push(hist);
   out.textContent = parts.join(' · ');
@@ -14535,8 +14593,8 @@ function updateProdRecHint() {
   if (!out) return;
   const cat = pricingCats.find(c => c.id === catId);
   // v124: העלות היא מחיר החשבונית; בלעדיו — המחירון
-  const inv = parseFloat((($('prod_invoicePrice') || {}).value || '').replace(',', '.'));
-  const cost = inv > 0 ? inv : parseFloat((($('prod_price') || {}).value || '').replace(',', '.'));
+  const inv = parseFloat(String(($('prod_invoicePrice') || {}).value || '').replace(',', '.'));
+  const cost = inv > 0 ? inv : parseFloat(String(($('prod_price') || {}).value || '').replace(',', '.'));
   if (!cat) { out.classList.add('hidden'); return; }
   if ((Number(cat.pct) || 0) === 0) {
     out.textContent = cat.name + ' — ללא המלצת מחיר (0%)'; out.classList.remove('hidden'); return;
@@ -14595,6 +14653,7 @@ function openProdModal(p, fromScan, presetCode, afterSaveTarget) {
   $('prod_posPrice').value = (p && p.posPrice != null) ? p.posPrice : '';
   // v124: מחיר החשבונית שבתוקף היום; שינוי נרשם מ"בתוקף מ" (ברירת מחדל: היום)
   $('prod_invoicePrice').value = p && productPriceNow(p) > 0 ? String(Math.round(productPriceNow(p) * 1000) / 1000) : '';
+  $('prod_invoicePrice').placeholder = p ? 'ריק = המחיר הקיים נשאר' : 'ריק = מחירון מלא';
   $('prod_priceFrom').value = todayStr();
   updateProdFinalHint();
   $('prod_creditPrice').value = (p && Number(p.creditPrice) > 0) ? p.creditPrice : '';
@@ -14759,22 +14818,35 @@ async function saveProd(again) {
   // product.price = מחיר החשבונית, ובלעדיו המחירון המלא. מוצר קיים: product.price
   // אינו נכתב — שינוי מחיר נרשם ב-priceHistory מ"בתוקף מ", וחודש שעבר נשאר כמו שהיה.
   // discountPct/discountSet אינם נכתבים יותר (ההנחה נגזרת).
+  // שינוי מחיר במוצר קיים יוצא כרשומה מתוארכת (priceEntry), שנכתבת בטרנזקציה וממוזגת
+  // לתוך המוצר בענן (executePriceEntryTask). מוצר שעוד אין לו מחיר מקבל את המחיר
+  // כבסיס כשהתאריך היום או לפניו. discountPct/discountSet נכתבים רק כתאימות ל-v123.
   if (listPrice != null || !id) data.listPrice = listPrice;
-  if (!id) data.price = invoicePrice != null ? invoicePrice : listPrice;
-  else if (invoicePrice != null) {
+  let priceEntry = null;
+  if (!id) {
+    data.price = invoicePrice != null ? invoicePrice : listPrice;
+    Object.assign(data, productCompatDiscount(data.price, listPrice));
+  } else {
     const cur = existingForPos;
-    if (cur && Math.round(invoicePrice * 1000) !== Math.round(priceAt(cur, priceFrom) * 1000)) {
-      if (!(Number(cur.price) > 0) && !(Array.isArray(cur.priceHistory) && cur.priceHistory.length)) data.price = invoicePrice;
-      else data.priceHistory = priceHistoryWith(cur, priceFrom, invoicePrice, { method: 'editor', at: Date.now() });
+    const noBase = !!cur && !(Number(cur.price) > 0) && !(Array.isArray(cur.priceHistory) && cur.priceHistory.length);
+    if (cur && invoicePrice != null && Math.round(invoicePrice * 1000) !== Math.round(priceAt(cur, priceFrom) * 1000)) {
+      if (noBase && priceFrom <= todayStr()) data.price = invoicePrice;
+      else priceEntry = { from: priceFrom, price: invoicePrice, source: { method: 'editor', at: Date.now() } };
     }
+    const base = data.price != null ? data.price : (Number(cur && cur.price) || 0);
+    const listNow = listPrice != null ? listPrice : (Number(cur && cur.listPrice) || 0);
+    const listChanged = listPrice != null && !!cur && listPrice !== (Number(cur.listPrice) || 0);
+    // מכשיר v123 מחשב מחדש price = מחירון × (1 − אחוז) בכל שמירה: כשהבסיס או המחירון
+    // משתנים, ובמחיר שאושר עכשיו, האחוז נכתב כך שהחישוב שלו מחזיר את אותו בסיס
+    if (data.price != null || listChanged || (invoicePrice != null && productInvoicePriceUnverified(cur))) Object.assign(data, productCompatDiscount(base, listNow));
   }
   clearTimeout(priceTimers[docId]); clearTimeout(avgTimers[docId]); clearTimeout(boxTimers[docId]);
   let savedProduct = null;
   if (id) {
-    const saved = await runCloudTask('save product', { op: 'update', path: dataPath('products', id), data, operationId: makeOperationId('product_save') });
+    const saved = await runCloudTask('save product', { op: 'update', path: dataPath('products', id), data, ...(priceEntry ? { priceEntry } : {}), operationId: makeOperationId('product_save') });
     if (!saved) return;
     const p = products.find(x => x.id === id);
-    if (p) { Object.assign(p, data); savedProduct = p; }
+    if (p) { Object.assign(p, data); if (priceEntry) p.priceHistory = priceHistoryWith(p, priceEntry.from, priceEntry.price, priceEntry.source); savedProduct = p; }
   } else {
     const maxIdx = products.length ? Math.max(...products.map(p => p.orderIndex || 0)) : -1;
     const pendingExisting = products.find(x => x.id === docId);
@@ -16065,17 +16137,20 @@ function anCatalogIndex(catalog) {
   const byId = new Map(), byBc = new Map(), byName = new Map(), byCode = new Map();
   (catalog || products).forEach(p => {
     byId.set(p.id, p);
-    // v124: קוד פריט (וקודים חלופיים) לפני ברקוד — כמו rowFor במרכזת
-    [productCode(p)].concat(Array.isArray(p.altCodes) ? p.altCodes : []).forEach(c => { c = String(c || ''); if (c && !byCode.has(c)) byCode.set(c, p); });
+    // v124: קוד פריט לפני ברקוד — כמו rowFor במרכזת
+    const c = String(productCode(p) || ''); if (c && !byCode.has(c)) byCode.set(c, p);
     const b = normalizeBarcode(p.barcode || ''); if (b && !byBc.has(b)) byBc.set(b, p);
     const n = String(p.name || '').trim(); if (n && !byName.has(n)) byName.set(n, p);
   });
+  // קודים חלופיים (altCodes) — רק אחרי כל הקודים הראשיים, כדי שלא יסתירו מוצר אחר
+  (catalog || products).forEach(p => (Array.isArray(p.altCodes) ? p.altCodes : []).forEach(c => { c = String(c || ''); if (c && !byCode.has(c)) byCode.set(c, p); }));
   return { byId, byBc, byName, byCode };
 }
 function anMatchProduct(idx, l) {
   if (l.productId && idx.byId.has(l.productId)) return idx.byId.get(l.productId);
-  const code = String(l.code || '');
+  const code = lineOwnCode(l);
   if (code && idx.byCode && idx.byCode.has(code)) return idx.byCode.get(code);
+  if (code) return null; // מוצר שנמחק — לא לפי ברקוד משותף; השורה נשארת במחיר שנשמר עליה
   const bc = normalizeBarcode(l.barcode || '');
   if (bc && idx.byBc.has(bc)) return idx.byBc.get(bc);
   const nm = String(l.name || '').trim();
@@ -16703,7 +16778,7 @@ const AN_RANKS = [
   { k: 'money', label: 'הוצאות', title: 'לאן הולך הכסף', icon: 'fa-sack-dollar', color: 'text-amber-600', help: 'על איזה לחמים משלמים הכי הרבה לספק.', empty: 'אין קליטות בשבוע הזה' },
   { k: 'profit', label: 'הכי רווחי', title: 'הכי רווחי', icon: 'fa-coins', color: 'text-emerald-600', help: 'מחיר הקופה בלי מע״מ פחות מחיר הקנייה, על מה שנמכר. רק לחמים עם מחיר קופה.', empty: 'אין לחמים עם מחיר קופה שנמכרו' },
   { k: 'margin', label: 'רווח נמוך', title: 'רווח נמוך', icon: 'fa-triangle-exclamation', color: 'text-amber-600', help: 'הרווח באחוזים על מחיר הקנייה, מהנמוך לגבוה. מוצג כל מה שמתחת ליעד שקבעת. אדום = מוכרים בהפסד.', empty: 'אין לחמים עם מחיר קופה' },
-  { k: 'prices', label: 'מחירים עלו', title: 'המחירים שעלו', icon: 'fa-arrow-trend-up', color: 'text-rose-600', help: 'המחיר הרגיל בקליטה האחרונה גבוה מזה שבקליטה הראשונה. קליטות במחיר מבצע לא נספרות.', empty: 'אף מחיר רגיל לא השתנה' }
+  { k: 'prices', label: 'מחירים עלו', title: 'המחירים שעלו', icon: 'fa-arrow-trend-up', color: 'text-rose-600', help: 'המחיר הרגיל בקליטה האחרונה גבוה מזה שבקליטה הראשונה. קליטה במבצע נספרת במחיר הרגיל של אותו יום.', empty: 'אף מחיר רגיל לא השתנה' }
 ];
 const anByPct = (a, b) => {
   const pa = a.retPctMoney == null ? -1 : a.retPctMoney, pb = b.retPctMoney == null ? -1 : b.retPctMoney;
@@ -16879,7 +16954,7 @@ function anRankParts() {
       (noPos ? noPos + ' לחמים שהגיעו בלי מחיר קופה לא נכללים.' : '');
   } else if (def.k === 'prices') {
     const up = anRankPriceUp(rowsArr), down = anRankPriceDown(rowsArr);
-    body = up.slice(0, 10).map((r, i) => anRankRowHtml(i, r.key, r.name, 'מחיר רגיל: מ-₪' + fmtMoney(r.priceFirst) + ' ל-₪' + fmtMoney(r.priceLast) + ' · ' + r.prices.length + ' קליטות' + (r.promoLines ? ' (' + r.promoLines + ' במבצע, לא נספרות)' : ''), '+' + anPlainPct(r.priceChangePct), 'text-rose-600', 'עלה', 'bg-rose-50 text-rose-600')).join('');
+    body = up.slice(0, 10).map((r, i) => anRankRowHtml(i, r.key, r.name, 'מחיר רגיל: מ-₪' + fmtMoney(r.priceFirst) + ' ל-₪' + fmtMoney(r.priceLast) + ' · ' + r.prices.length + ' קליטות' + (r.promoLines ? ' (' + r.promoLines + ' במבצע — לפי המחיר הרגיל)' : ''), '+' + anPlainPct(r.priceChangePct), 'text-rose-600', 'עלה', 'bg-rose-50 text-rose-600')).join('');
     if (down.length) body += '<div class="font-black text-slate-700 text-sm mt-3 mb-0.5"><i class="fa-solid fa-arrow-trend-down text-emerald-600 ml-1"></i>ירדו במחיר</div>' + down.slice(0, 5).map((r, i) => anRankRowHtml(i, r.key, r.name, 'מחיר רגיל: מ-₪' + fmtMoney(r.priceFirst) + ' ל-₪' + fmtMoney(r.priceLast), anPlainPct(r.priceChangePct), 'text-emerald-600', 'ירד', 'bg-emerald-50 text-emerald-700')).join('');
   } else {
     body = anRankReturns(rowsArr).slice(0, 10).map((r, i) => anRankRowHtml(i, r.key, r.name,
@@ -17037,7 +17112,7 @@ function anSelectedCardHtml() {
       ? anStatTile('bg-amber-50 border border-amber-100 text-amber-800', 'רווח', '₪' + anMoney(r.grossProfit), u != null ? '₪' + fmtMoney(u) + ' על כל יחידה' : '')
       : anStatTile('bg-slate-50 border border-slate-200 text-slate-500', 'רווח', '—', 'אין מחיר קופה');
     const priceLine = (r.priceFirst != null && r.priceLast != null && r.priceFirst !== r.priceLast)
-      ? line('המחיר הרגיל ' + (r.priceChangePct > 0 ? '<span class="text-rose-600">עלה</span>' : '<span class="text-emerald-700">ירד</span>') + ' מ-₪' + fmtMoney(r.priceFirst) + ' ל-₪' + fmtMoney(r.priceLast) + ' <span class="text-xs text-slate-400">(<span dir="ltr">' + (r.priceChangePct > 0 ? '+' : '') + anPlainPct(r.priceChangePct) + '</span>)</span>' + (r.promoLines ? ' <span class="text-xs text-slate-400">· ' + r.promoLines + ' קליטות במבצע לא נספרות</span>' : ''))
+      ? line('המחיר הרגיל ' + (r.priceChangePct > 0 ? '<span class="text-rose-600">עלה</span>' : '<span class="text-emerald-700">ירד</span>') + ' מ-₪' + fmtMoney(r.priceFirst) + ' ל-₪' + fmtMoney(r.priceLast) + ' <span class="text-xs text-slate-400">(<span dir="ltr">' + (r.priceChangePct > 0 ? '+' : '') + anPlainPct(r.priceChangePct) + '</span>)</span>' + (r.promoLines ? ' <span class="text-xs text-slate-400">· ' + r.promoLines + ' קליטות במבצע — לפי המחיר הרגיל</span>' : ''))
       : (r.priceFirst != null ? line('המחיר הרגיל יציב: ₪' + fmtMoney(r.priceFirst) + ' ליחידה' + (r.promoLines ? ' <span class="text-xs text-slate-400">· ' + r.promoLines + ' קליטות במבצע</span>' : '')) : (r.promoLines ? line('<span class="text-slate-400">כל הקליטות היו במבצע</span>') : ''));
     const days = AN_DOW_SHORT.map((nm, g) => r.dayRecv[g] > 0 ? nm + ' ' + anNum(r.dayRecv[g]) : '').filter(Boolean).join(' · ');
     const profitInner = r.posPrice == null
