@@ -765,6 +765,9 @@ let aiScanDocuments = [];        // צילומים מסונכרנים בקליט
 let aiScanBusy = false;
 // v125: העלאה אחת בכל פעם מהטלפון הזה — קריאת קליטה (מקומית בלבד, לא משותפת) או קריאת נייר מברמן
 let receivingUploads = 0, paperUploadBusy = false, aiScanWaitingForPaper = false;
+// v126: תעודת משלוח שנקראה בקליטת הניירות ומחכה להיכנס לקליטה (מקומי בלבד, לא משותף)
+let paperJoinPending = new Map(), paperJoinChain = Promise.resolve(), paperJoinTimer = null;
+let rcMultiPhotoWanted = false, rcOcrReviewRevealed = false, rcOcrRevealDraft = null;
 let aiScanProgressText = '';
 let aiScanResponse = null;
 let aiScanEvaluation = null;
@@ -13118,14 +13121,16 @@ function ledgerItemText(it, lg, papers) {
       return { role: 'ledger-attach', label: 'ההחזרה מ-' + ledgerDayShort(lg.docDays[id]) + ' · ' + ledgerRowsText(lines) + (top ? ' · ' + top.pr.name + ' ×' + mtxQty(top.part.sent) : ''), paperId: it.paper.id, returnId: id };
     }).concat([{ role: 'ledger-attach', label: 'לא שייך להחזרה', paperId: it.paper.id, returnId: '' }]) };
     case 'deliveryNotReceived': {
-      // רק המספרים שמודפסים בתחתית הנייר — סכום השורות שנקראו אינו עוגן
-      const a = it.paper.anchors || {}, typed = a.units != null && a.lines != null;
-      const howTo = typed ? '"הקלד את המספרים" והקלד ' + mtxQty(a.units) + ' יח׳ ו-' + ledgerRowsText(a.lines) : '"הקלד את המספרים" והקלד את שני המספרים מתחתית הנייר';
+      // v126: התעודה כבר נקראה — "לקליטה" מכניס אותה כפי שנקראה (בלי קריאה חדשה, בלי להקליד).
+      // רק המספרים שמודפסים בתחתית הנייר — סכום השורות שנקראו אינו עוגן, והכמויות לא מוצגות.
+      const a = it.paper.anchors || {}, read = a.units != null && a.lines != null;
       // יש קליטה מאותו יום עם מספר אחר — אולי המספר נקרא לא נכון, או שזו תעודה שנייה שעוד לא נקלטה
       if (it.sameDay) return { text: paperLabel(it.paper) + ' לא נמצאה בקליטה של ' + ledgerDayShort(it.paper.docDay) + ' — אם כבר קלטת אותה, פתח ומחק את הצילום',
-        detail: 'אם זו תעודה נוספת מאותו יום — קלוט אותה: בקליטה בחר ' + howTo + '.',
+        detail: 'אם זו תעודה נוספת מאותו יום' + (read ? ' (' + mtxQty(a.units) + ' יח׳ ו-' + ledgerRowsText(a.lines) + ' מהתחתית)' : '') + ' — לחץ "לקליטה" והיא תיכנס לקליטה כפי שנקראה, בלי לצלם שוב.',
         actions: [open(it.paper.id), { role: 'ledger-start-receiving', label: 'לקליטה', paperId: it.paper.id }] };
-      return { text: paperLabel(it.paper) + ' צולמה ועוד לא נקלטה', detail: 'בקליטה בחר ' + howTo + ' — בלי לצלם שוב.',
+      return { text: paperLabel(it.paper) + ' צולמה ועוד לא נקלטה',
+        detail: read ? 'לחץ "לקליטה" — היא כבר נקראה (' + mtxQty(a.units) + ' יח׳ ו-' + ledgerRowsText(a.lines) + ' מהתחתית) ונכנסת לקליטה כפי שנקראה, בלי לצלם שוב ובלי להקליד.'
+          : 'לחץ "לקליטה" — היא כבר נקראה ונכנסת לקליטה; את המספרים מתחתית הנייר תקליד שם.',
         actions: [{ role: 'ledger-start-receiving', label: 'לקליטה', paperId: it.paper.id }] };
     }
     case 'duplicatePaper': { const o = P(it.of); return { text: paperLabel(it.paper) + ' זהה ל' + (o ? paperLabel(o) : 'נייר שכבר נספר') + ' — נספר פעם אחת',
@@ -13547,7 +13552,8 @@ function bermanPaperRecord(result, ctx) {
 }
 function paperScanAudit(result) {
   return cloneSafe({ at: Date.now(), serviceVersion: result.serviceVersion || null, model: result.model || null, requestId: result.requestId || null,
-    usage: result.usage || null, verification: result.verification || null, reads: result.reads || [], warnings: result.warnings || [], attempts: result.attempts || 1, doc: result.doc || null });
+    usage: result.usage || null, verification: result.verification || null, reads: result.reads || [], warnings: result.warnings || [], attempts: result.attempts || 1,
+    retryAudit: result.retryAudit || null, doc: result.doc || null });
 }
 // לאן שייך נייר — לפי מה שקיים עכשיו במאזן. נשמר על הנייר ומוצג עם [שנה].
 function paperAttachNow(paper) {
@@ -13648,6 +13654,7 @@ async function paperIntakeRun() {
     ledgerInvalidate();
     if (currentView === 'paperIntake') refreshPaperIntake();
     refreshLedgerBar();
+    paperJoinRetry();
   }
 }
 // קריאה אחת. התשובה ששולמה נשמרת במכשיר לפני כל שימוש בה — קודם התשובה עצמה ואז הנייר.
@@ -13682,7 +13689,7 @@ async function paperIntakeReadOne(token, item) {
       if (interim) next.interim = true; else delete next.interim;
       return next;
     });
-    return { rec, ok };
+    return { rec, ok, scan };
   };
   let result = null, error = null;
   mark();
@@ -13696,7 +13703,10 @@ async function paperIntakeReadOne(token, item) {
   } catch (e) { error = e; }
   try {
     if (result) {
-      const { rec, ok } = keep(result, false);
+      const { rec, ok, scan } = keep(result, false);
+      // v126: הקריאה עצמה נשארת בזיכרון של הדף — תעודת משלוח נכנסת ממנה לקליטה גם אחרי שהענן אישר
+      // (ואז הרשומה במכשיר כבר בלי התשובה הכבדה). לא נשמר בשום מקום נוסף.
+      item.scan = scan || null;
       if (!ok) showToast('הזיכרון במכשיר מלא — הנייר שמור רק בדף הזה עד שיישמר בענן. אל תרענן עכשיו', null, null, 5000);
       if (rec.rejected) { item.status = 'rejected'; item.page = null; return {}; }
       if (!rec.paper) { item.status = 'error'; item.message = 'הקריאה נשמרה, אבל לא הצלחתי לבנות ממנה נייר — צלם שוב'; return {}; }
@@ -13711,6 +13721,7 @@ async function paperIntakeReadOne(token, item) {
     if (saved && saved.paper) {
       paperPatchLocal(cap, cur => { if (!cur) return cur; const n = { ...cur }; delete n.interim; return n; });
       item.paperId = saved.paper.id;
+      item.scan = saved.scan || null;
       item.status = saved.paper.kind === 'delivery' ? 'delivery' : 'review';
       if (item.page) paperImgPut(cap, item.page.dataUrl);
       return { fatal: !!(error && error.fatal) };
@@ -13732,6 +13743,338 @@ function paperFind(id, cap) {
   const cloud = papers.find(p => p.id === id && !p.deleted); if (cloud) return { paper: cloud, local: null };
   const key = Object.keys(store).find(k => usable(store[k]) && store[k].paper.id === id);
   return key ? { paper: store[key].paper, local: store[key] } : null;
+}
+
+// ===== v126: תעודת משלוח נכנסת לקליטה כשהיא כבר קרואה =====
+// כל נייר מהנהג נקרא פעם אחת — בקליטת הניירות — ונשמר במכשיר ובענן לפני כל שימוש. תעודת
+// משלוח עוברת משם לטיוטת הקליטה בדיוק כאילו הקליטה קראה אותה בעצמה, אבל בלי עמודים
+// (pages:[]): שום "הפעל שוב" — גם בטלפון בגרסה ישנה — לא ישלם עליה שוב. מאיזה נייר היא באה
+// (paperId, captureId) נשמר בתוך הערכים שכבר קיימים בטיוטה המשותפת, כך שטלפון ב-v125 לא מוחק
+// אותו. הספירה נשארת עיוורת: לקליטה נכנסים רק שני המספרים מתחתית הנייר.
+let paperJoinLease = null;
+async function sharedFlush() {
+  if (!sharedReceiving) return;
+  clearTimeout(sharedReceiptSaveTimer); sharedReceiptSaveTimer = null;
+  await sharedReceiving.save(captureSharedReceipt());
+  await sharedReceiving.flush();
+}
+// מנעול הקריאה של הקליטה המשותפת: חי? של מי?
+function scanLeaseLive() { const s = sharedReceiptStatus && sharedReceiptStatus.scan; return !!(s && s.expiresAt > Date.now()); }
+function scanLeaseMine(token) { const s = sharedReceiptStatus && sharedReceiptStatus.scan; return !!(token && s && s.id === token.id); }
+function scanLeaseOther() {
+  if (!scanLeaseLive()) return false;
+  const b = paperIntake && paperIntake.bind;
+  return !scanLeaseMine(b && b.token) && !scanLeaseMine(paperJoinLease);
+}
+// סבב ניירות שהטלפון הזה פתח על הקליטה הזאת, ועדיין מחזיק את מנעול הקריאה שלה
+function receivingOwnRound() {
+  const b = paperIntake && paperIntake.bind;
+  if (!b || !b.owner || b.draftId == null || b.draftId !== receiptDraftId) return false;
+  if (!sharedReceiving) return true;
+  if (!b.token) return false;
+  const s = sharedReceiptStatus && sharedReceiptStatus.scan;
+  return !(s && s.id !== b.token.id && s.expiresAt > Date.now());
+}
+// הקריאה ששולמה, כפי שנשמרה בענן (בלי תמונה) — נפרד, כדי שהבדיקות יחליפו אותו
+async function paperScanFromCloud(id) {
+  if (!db || !id) return null;
+  try { const s = await getDoc(doc(db, ...dataPath('paperScans', id))); return s.exists() ? s.data() : null; } catch (e) { return null; }
+}
+function paperScanUsable(scan) {
+  const d = scan && scan.doc;
+  return !!(d && typeof d === 'object' && Array.isArray(d.rows) && d.rows.every(r => r && typeof r === 'object' && !Array.isArray(r))
+    && Number.isInteger(Number(scan.serviceVersion)) && Number(scan.serviceVersion) >= AI_SCAN_MIN_SERVICE_VERSION);
+}
+// הקריאה של תעודת משלוח: מהזיכרון של הדף, מהמכשיר, ורק אם אין — מהענן. לעולם לא קריאה חדשה.
+async function paperDeliveryScan(paperId, cap, item, cached) {
+  const found = paperFind(paperId, cap);
+  const paper = found && found.paper;
+  if (!paper || paper.kind !== 'delivery' || paper.deleted || paper.state === 'void') return null;
+  const store = paperLocalResults();
+  const local = [cached, item && item.scan, cap && store[cap] && store[cap].scan]
+    .concat(paperIntake ? paperIntake.items.filter(x => x.paperId === paperId && x.scan).map(x => x.scan) : [])
+    .concat(Object.keys(store).map(k => store[k]).filter(r => r && r.scan && r.paper && r.paper.id === paperId).map(r => r.scan));
+  let scan = local.find(paperScanUsable) || null;
+  if (!scan && navigator.onLine) { const c = await paperScanFromCloud(paperId); if (paperScanUsable(c)) scan = c; }
+  return scan ? { scan: cloneSafe(scan), paper } : null;
+}
+function receiptPaperDocNumber(d) { return receiptPaperNumber(d && (d.docNumber ?? d.invoiceNumber)); }
+function receivingDraftEmpty() {
+  return !(receiptOpened || receiptList.length || receiptNotes.length || receiptAttachTarget || aiScanDocuments.some(d => d.pages && d.pages.length)) && !aiScanResponse;
+}
+function receivingDayGap(a, b) { return Math.round((new Date(a + 'T12:00:00') - new Date(b + 'T12:00:00')) / 86400000); }
+// לאן נכנסת תעודת משלוח שנקראה — טהור, בלי שינוי. action: 'already' | 'refuse' | 'wait' | 'ask'
+// (then — מה יקרה אחרי "כן") | 'new' | 'bare' | 'replace' | 'replace-typed' | 'append'.
+// force: המשתמש כבר ענה "כן" — מה שהיה שאלה מתבצע.
+function receivingDeliveryRoute(scan, paper, item, opts) {
+  opts = opts || {};
+  const doc = (scan && scan.doc) || {};
+  const num = receiptPaperNumber(paper.number) || receiptPaperDocNumber(doc);
+  const cap = opts.cap || (item && item.captureId) || null;
+  const mine = !!(item && item.forDraftId != null && item.forDraftId === receiptDraftId);
+  const unbound = !item || item.forDraftId == null;
+  const self = bermanPaperAnchorCheck(doc), selfOk = self.ok;
+  const day = String(paper.docDay || '');
+  const recvDay = receiptDocDate || todayStr();
+  const sameDay = /^\d{4}-\d{2}-\d{2}$/.test(day) && Math.abs(receivingDayGap(day, recvDay)) <= 1;
+  const typed = receiptNotes.length > 0 && receiptAnchorSource !== 'paper';
+  const resp = aiScanResponse;
+  const docs = resp && resp.scan && Array.isArray(resp.scan.documents) ? resp.scan.documents : [];
+  const per = resp && Array.isArray(resp.perDocument) ? resp.perDocument : [];
+  const ask = (reason, then, extra) => opts.force ? { action: then, reason, ...(extra || {}) } : { action: 'ask', reason, then, ...(extra || {}) };
+  // 1. כבר בקליטה הפתוחה. צילום אחר של אותה תעודה, שאישר את עצמו, מחליף קריאה שלא אישרה את עצמה.
+  let better = false;
+  if (per.some(p => p && p.paperId === paper.id) || (num && docs.some(d => receiptPaperDocNumber(d) === num))) {
+    const sameCap = per.some(p => p && p.paperId === paper.id && cap && p.captureId === cap);
+    if (receiptPaperScanState === 'ok' || sameCap || !selfOk || docs.length !== 1) return { action: 'already' };
+    better = true;
+  }
+  // 2. כבר נקלטה בתעודה שמורה
+  if (num) {
+    const rc = receipts.find(r => r && !(receiptAttachTarget && r.id === receiptAttachTarget.id) && storedReceiptPaperNumbers(r).includes(num));
+    if (rc) return { action: 'refuse', reason: 'received', receipt: rc };
+  }
+  // 3–4. אי אפשר לכתוב עכשיו, או שקריאה אחרת רצה בקליטה — מחכים, בלי לגעת בכלום
+  if (!canEditSharedReceipt()) return { action: 'wait', reason: 'readonly' };
+  const own = receivingOwnRound();
+  if (((aiScanBusy || receiptPaperScanState === 'running') && !own) || receivingUploads > 0 || aiScanWaitingForPaper || sharedReceiptFinalizing || scanLeaseOther())
+    return { action: 'wait', reason: 'busy' };
+  // 5–6. הסיכום פתוח, או שיש בקליטה צילום תעודה שעוד לא נקרא (מטלפון בגרסה ישנה)
+  if (pendingReceipt || reconcileData) return { action: 'refuse', reason: 'summary' };
+  if (aiTotalPages() > 0) return { action: 'refuse', reason: 'photos' };
+  // 7. אין קליטה פתוחה
+  if (receivingDraftEmpty()) {
+    const bare = day && receipts.find(r => r && receiptAwaitingDoc(r) && storedReceiptDate(r) === day);
+    if (bare) return ask('bare', 'bare', { receipt: bare });
+    if (unbound && ((item && item.target === 'receiving') || day === todayStr())) return { action: 'new' };
+    return ask('date-new', 'new');
+  }
+  // 8. טיוטה עם סיכום תעודה בלי פירוט הקריאה
+  if (receiptPaperScanState === 'summary-only') return { action: 'refuse', reason: 'summary-only' };
+  // 9. מספרים שהוקלדו (גם ב"סיום" של עריכת התעודות, כשהמקור נשאר ריק)
+  if (typed) {
+    const one = receiptNotes.length === 1 ? normNote(receiptNotes[0]) : null;
+    const same = !!(one && selfOk && one.kind !== 'credit' && Number(one.units) === self.printedUnits && Number(one.lines) === self.printedLines);
+    if (same && (mine || opts.explicit)) return { action: 'replace-typed', reason: 'typed' };
+    return ask('typed', 'replace-typed', { typedUnits: receiptNoteUnits, typedLines: receiptNoteLines, units: self.printedUnits, lines: self.printedLines });
+  }
+  // 10. קריאה שאישרה את עצמה — התעודה מתווספת כתעודה נוספת מאותו משלוח
+  if (resp && receiptPaperScanState === 'ok') {
+    const pages = aiScanDocuments.reduce((a, d) => a + aiScanDocumentPageCount(d), 0);
+    if (aiScanDocuments.length >= 4 || docs.length >= 4 || pages + 1 > 8) return { action: 'refuse', reason: 'full' };
+    if (!selfOk) return ask('selfcheck', 'append');
+    return mine ? { action: 'append' } : ask('other-receiving', 'append');
+  }
+  // 11. קריאה שלא אישרה את עצמה
+  if (resp) return better && (mine || opts.explicit) ? { action: 'replace' } : ask('replace-failed', 'replace');
+  // 12. אין קריאה: ממתינה לנייר, בלי נייר, צירוף, ספירה לפני צילום, או קריאה שנכשלה
+  if (mine) return { action: 'replace' };
+  if (unbound && sameDay && !receiptNoDoc && !receiptAttachTarget) return { action: 'replace' };
+  return ask(receiptAttachTarget ? 'attach' : receiptNoDoc ? 'nodoc' : 'date', 'replace');
+}
+// הכנסת תעודת משלוח שנקראה לטיוטה — אותה צורה בדיוק שהקליטה בונה אחרי קריאה משלה, בלי
+// עמודים (savedPageCount:1). mode: 'replace' — במקום מה שיש; 'append' — תעודה נוספת.
+// לא נייר שאישר את עצמו — כל העוגנים מתאפסים (בקריאה של כמה תעודות: גם של הקודמות), והמצב
+// 'failed', כמו קריאה של הקליטה שנכשלה: מקלידים את המספרים מתחתית הנייר.
+function receivingInstallDelivery(scan, src, mode) {
+  const prev = mode === 'append' ? aiScanResponse : null;
+  const k = prev ? aiScanDocuments.length : 0;
+  const doc = Object.assign(cloneSafe(scan.doc), { noteIndex: k });
+  // מספר שתוקן בבדיקת הנייר — הוא המספר שנשמר בקליטה
+  if (src.number && receiptPaperDocNumber(doc) !== src.number) { doc.docNumber = src.number; if (doc.invoiceNumber != null) doc.invoiceNumber = src.number; }
+  const entry = { docIndex: k, ok: true, attempts: Number(scan.attempts) || 1, requestId: scan.requestId || null, model: scan.model || null,
+    usage: scan.usage || null, barcodeRetry: scan.retryAudit || null, verification: scan.verification || doc.__bermanOcrVerification || null,
+    reads: scan.reads || [], pageCount: 1, serviceVersion: Number(scan.serviceVersion) || 0, warnings: scan.warnings || [],
+    source: 'paper', paperId: src.paperId, captureId: src.captureId || null, readAt: scan.at || null };
+  const docs = (prev ? prev.scan.documents : []).concat([doc]), n = docs.length;
+  const warnings = (prev ? (prev.scan.warnings || []) : []).slice();
+  (scan.warnings || []).forEach(w => { const t = (n > 1 ? 'תעודה ' + n + ': ' : '') + w; if (!warnings.includes(t)) warnings.push(t); });
+  const perDocument = (prev ? (prev.perDocument || []) : []).concat([entry]), ok = perDocument.filter(p => p && p.ok);
+  aiCloseOrientationReview(); aiScanSession++;
+  if (mode !== 'append') {
+    receiptNotes = []; recomputeNoteTotal(); aiScanDocuments = []; aiScanAutoRotationNote = '';
+    reconcileData = null; reconcileAiAudit = null; aiUnknownProductCreateContext = null;
+    aiAnalyzeBusy = false; aiAnalyzeError = ''; aiAnalyzeResult = null; aiDetailsOpen = false;
+    // תעודה של אתמול שנקלטת הבוקר — הקליטה מקבלת את התאריך שלה (רק בשבוע האחרון, ורק אם לא נבחר תאריך)
+    if (!receiptDocDate && !receiptAttachTarget && src.docDay && src.docDay !== todayStr() && src.docDay < todayStr() && src.docDay >= ledgerAddDays(todayStr(), -7)) receiptDocDate = src.docDay;
+  }
+  aiScanDocuments = aiScanDocuments.map(d => Object.assign({}, d)).concat([{ noteIndex: k, amount: null, units: null, lines: null, kind: 'charge',
+    pages: [], savedPageCount: 1, paperId: src.paperId, captureId: src.captureId || null }]);
+  aiScanResponse = { ok: true,
+    serviceVersion: Math.min(prev ? (Number(prev.serviceVersion) || 0) : Number.MAX_SAFE_INTEGER, Number(scan.serviceVersion) || 0),
+    scan: { documents: docs, warnings },
+    model: Array.from(new Set(ok.map(p => p.model).filter(Boolean))).join(' · ') || 'unknown',
+    requestId: ok.map(p => p.requestId).filter(Boolean).join(' · ') || null, usage: null, perDocument };
+  aiScanAttemptCount = Math.max(Number(aiScanAttemptCount) || 0, entry.attempts, 1);
+  aiScanBusy = false; aiScanProgressText = ''; aiScanError = ''; aiScanEvaluation = null;
+  receiptOpened = true; receiptEntryMode = 'photo'; receiptNoDoc = false; editingNotes = false;
+  receiptDupConfirmed = false; receiptLinesConfirmed = false; receiptPaperScanState = ''; receiptPaperScanProblems = [];
+  if (receiptAnchorSource !== 'paper') receiptAnchorSource = null;
+  // הבסיס = החתימה של עכשיו, לפני האימוץ — כדי שגם כשל ישמור את הקריאה (ריענון בלי קריאה חדשה)
+  try { aiRefreshScanEvaluation(); } catch (e) { console.error('scan evaluation failed', e); aiScanBasis = { notes: aiScanNoteSignature(), lines: null }; saveReceiptDraft(); }
+  if (bermanAdoptPaperAnchors()) return { ok: true };
+  const problems = receiptPaperScanProblems.slice();
+  receiptNotes = []; recomputeNoteTotal(); receiptAnchorSource = null;
+  aiScanDocuments = aiScanDocuments.map(d => Object.assign({}, d, { amount: null, units: null, lines: null, kind: 'charge' }));
+  try { aiRefreshScanEvaluation(); } catch (e) { console.error('scan evaluation failed', e); aiScanBasis = { notes: aiScanNoteSignature(), lines: null }; }
+  receiptPaperScanState = 'failed'; receiptPaperScanProblems = problems; saveReceiptDraft();
+  if (currentView === 'receiving') renderReceiving();
+  return { ok: false, problems };
+}
+// מה לומר על תעודה שלא נכנסה (בכרטיס, ובהודעה אחרי "לקליטה")
+function paperJoinReasonText(r, paper) {
+  const d = paper && paper.docDay ? ledgerDayShort(paper.docDay) : '';
+  switch (r && r.reason) {
+    case 'readonly': return 'תיכנס לקליטה לבד כשיחזור החיבור.';
+    case 'busy': return 'ממתינה — קריאה אחרת רצה בקליטה. תיכנס לבד כשתסתיים.';
+    case 'received': return 'כבר נקלטה' + (r.receipt ? ' ב-' + ledgerDayShort(storedReceiptDate(r.receipt)) : '') + ' — לא נקלטת פעמיים.';
+    case 'summary': return 'הקליטה הפתוחה כבר בסיכום — חזור לספירה ואז "לקליטה".';
+    case 'photos': return 'בקליטה הפתוחה יש צילום תעודה שעוד לא נקרא (מטלפון בגרסה ישנה). סיים שם או מחק את הצילום, ואז "לקליטה".';
+    case 'full': return 'בקליטה הפתוחה כבר 4 תעודות — סיים אותה, והתעודה תיכנס לקליטה הבאה.';
+    case 'summary-only': return 'בקליטה הפתוחה יש סיכום תעודה בלי פירוט הקריאה — סיים אותה, והתעודה תיכנס לקליטה הבאה.';
+    case 'bare': return 'יש קליטה מ-' + ledgerDayShort(storedReceiptDate(r.receipt)) + ' שנשמרה בלי תעודה. "לקליטה" מצרף אליה את התעודה.';
+    case 'date-new': return 'התעודה מ-' + d + '. "לקליטה" פותח לה קליטה.';
+    case 'date': return 'יש קליטה פתוחה מ-' + ledgerDayShort(receiptDocDate || todayStr()) + ', והתעודה מ-' + d + '. "לקליטה" מכניס אותה לקליטה הפתוחה.';
+    case 'typed': return 'בקליטה הוקלדו ' + mtxQty(r.typedUnits) + ' יח׳ · ' + ledgerRowsText(r.typedLines) + '; בתעודה: ' + (r.units != null ? mtxQty(r.units) + ' יח׳' : '?') + ' · ' + (r.lines != null ? ledgerRowsText(r.lines) : '?') + '.';
+    case 'selfcheck': return 'התעודה לא אישרה את עצמה מול בלוק הסיכום. "לקליטה" מצרף אותה — ואז מקלידים את המספרים של כל התעודות.';
+    case 'other-receiving': return 'בקליטה הפתוחה כבר יש תעודה. "לקליטה" מוסיף אותה כתעודה נוספת מאותו משלוח.';
+    case 'replace-failed': return 'בקליטה הפתוחה יש קריאה של תעודה שלא אישרה את עצמה. "לקליטה" מחליף אותה בתעודה הזאת.';
+    case 'nodoc': return 'יש קליטה פתוחה בלי תעודה. "לקליטה" מצרף אליה את התעודה הזאת.';
+    case 'attach': return 'מצרפים עכשיו נייר לקליטה מ-' + ((receiptAttachTarget && receiptAttachTarget.label) || '') + '. "לקליטה" מצרף אליה את התעודה הזאת.';
+    case 'missing': return 'הקריאה של התעודה לא נמצאה במכשיר — נסה שוב כשיש חיבור.';
+    case 'conflict': return 'הקליטה השתנתה בשני מכשירים — בחר גרסה בראש מסך הקליטה. התעודה שמורה במאזן; "לקליטה" מכניס אותה שוב.';
+    default: return '';
+  }
+}
+function paperJoinConfirm(r, paper) {
+  const d = paper && paper.docDay ? ledgerDayShort(paper.docDay) : '';
+  const text = paperJoinReasonText(r, paper);
+  switch (r.reason) {
+    case 'bare': return ['לצרף לקליטה שנשמרה בלי תעודה?', 'הקליטה מ-' + ledgerDayShort(storedReceiptDate(r.receipt)) + ' נשמרה בלי נייר. התעודה תצורף אליה, והבדיקה תרוץ מול הספירה שנעשתה אז.', 'צרף'];
+    case 'date-new': return ['לפתוח קליטה לתעודה?', 'התעודה מ-' + d + '. תיפתח לה קליטה, והספירה תיבדק מולה.', 'פתח קליטה'];
+    case 'date': return ['להכניס לקליטה הפתוחה?', 'הקליטה הפתוחה היא מ-' + ledgerDayShort(receiptDocDate || todayStr()) + ', והתעודה מ-' + d + '.', 'הכנס'];
+    case 'typed': return ['להחליף את המספרים שהוקלדו?', text, 'החלף במספרים מהנייר'];
+    case 'selfcheck': return ['לצרף תעודה שלא אישרה את עצמה?', 'התעודה לא נסגרה מול בלוק הסיכום שלה. אחרי הצירוף צריך להקליד את המספרים של כל התעודות בקליטה.', 'צרף'];
+    case 'other-receiving': return ['להוסיף לקליטה הפתוחה?', 'בקליטה הפתוחה כבר יש תעודה. התעודה הזאת תתווסף כתעודה נוספת מאותו משלוח.', 'הוסף'];
+    case 'replace-failed': return ['להחליף את התעודה שבקליטה?', 'הקריאה שבקליטה לא אישרה את עצמה. התעודה הזאת תחליף אותה.', 'החלף'];
+    case 'nodoc': return ['לצרף לקליטה בלי תעודה?', 'הקליטה הפתוחה נספרת בלי נייר. התעודה תצורף אליה, והבדיקה תרוץ מול הספירה.', 'צרף'];
+    case 'attach': return ['לצרף לקליטה הזאת?', text, 'צרף'];
+    default: return ['להכניס לקליטה?', text, 'הכנס'];
+  }
+}
+// תעודת משלוח → הקליטה. אחת בכל פעם בטלפון. הסדר: בדיקה, שמירה של מה שיש, מנעול הקריאה
+// (אלא אם הסבב של הטלפון הזה כבר מחזיק אותו), בדיקה שוב, שינוי אחד, שמירה, ובדיקה שהגיע לענן.
+// כל מה שלא נכנס עכשיו — נשמר בתור וננסה שוב לבד (בלי קריאה בתשלום, בלי לכתוב כלום בינתיים).
+function receivingJoinDelivery(opts) {
+  const run = paperJoinChain.then(() => receivingJoinDeliveryNow(opts || {}));
+  paperJoinChain = run.catch(() => {});
+  return run;
+}
+async function receivingJoinDeliveryNow({ paperId, cap, item, explicit, force }) {
+  item = item || null; cap = cap || (item && item.captureId) || null;
+  const pend = paperJoinPending.get(paperId);
+  const refresh = () => { if (currentView === 'paperIntake') refreshPaperIntake(); };
+  const setJoin = j => { if (item) item.join = j; refresh(); };
+  const said = (state, r, paper) => ({ state, reason: r.reason, text: paperJoinReasonText(r, paper) });
+  const queue = (j, src) => { paperJoinPending.set(paperId, { paperId, cap, item, scan: src ? src.scan : (pend && pend.scan) || null }); setJoin(j); return j.state; };
+  const src = await paperDeliveryScan(paperId, cap, item, pend && pend.scan);
+  if (!src) {
+    if (!paperFind(paperId, cap)) { paperJoinPending.delete(paperId); if (explicit) showToast('התעודה לא נמצאה', null, null, 2500); setJoin({ state: 'missing' }); return 'missing'; }
+    const j = said('missing', { reason: 'missing' });
+    if (explicit) showToast(j.text, null, null, 3500);
+    return navigator.onLine ? (setJoin(j), 'missing') : queue(j);
+  }
+  const lost = () => sharedReceiptStatus.conflict ? said('conflict', { reason: 'conflict' }) : said('wait', { reason: 'readonly' });
+  const s = { paperId, captureId: cap, number: receiptPaperNumber(src.paper.number) || null, docDay: src.paper.docDay || null };
+  const route = () => receivingDeliveryRoute(src.scan, src.paper, item, { explicit, force, cap });
+  const act = r => ['new', 'bare', 'replace', 'replace-typed', 'append'].indexOf(r.action) !== -1;
+  for (let round = 0; round < 3; round++) {
+    let r = route();
+    if (r.action === 'wait') { const j = said('wait', r, src.paper); if (explicit) showToast(j.text, null, null, 3500); return queue(j, src); }
+    if (r.action === 'already') {
+      paperJoinPending.delete(paperId); setJoin({ state: 'joined', draftId: receiptDraftId });
+      if (explicit) { if (currentView !== 'receiving') setView('receiving'); showToast('כבר בקליטה הפתוחה.', null, null, 2500); }
+      return 'already';
+    }
+    if (r.action === 'refuse') { const j = said('refuse', r, src.paper); paperJoinPending.delete(paperId); if (explicit) showToast(j.text, null, null, 4500); setJoin(j); return 'refuse'; }
+    if (r.action === 'ask') {
+      paperJoinPending.delete(paperId); setJoin(said('ask', r, src.paper));
+      if (explicit) { const [title, msg, label] = paperJoinConfirm(r, src.paper); showConfirm(title, msg, label, () => { receivingJoinDelivery({ paperId, cap, item, explicit: true, force: true }); }); }
+      return 'ask';
+    }
+    if (!act(r)) return 'none';
+    // מה שיש בטלפון הזה נשמר קודם, ואז בודקים שוב מול מה שהגיע מהטלפונים האחרים
+    try { await sharedFlush(); } catch (e) { return queue(lost(), src); }
+    if (route().action !== r.action) continue;
+    let token = null, acquired = false;
+    if (sharedReceiving && receiptDraftId && r.action !== 'new' && r.action !== 'bare') {
+      if (receivingOwnRound()) token = paperIntake.bind.token;
+      else {
+        try { token = await sharedReceiving.acquireScan(); acquired = true; paperJoinLease = token; }
+        catch (e) { return queue(said('wait', { reason: e && e.code === 'scan-busy' ? 'busy' : 'readonly' }), src); }
+      }
+    }
+    try {
+      const r2 = route();
+      if (r2.action !== r.action) continue;
+      // שינוי אחד, בלי המתנה באמצע
+      let res;
+      if (r.action === 'bare') {
+        reopenReceiptForDoc(r.receipt.id);
+        if (receiptDraftId !== r.receipt.id) return queue(said('wait', { reason: 'busy' }), src);
+        res = receivingInstallDelivery(src.scan, s, 'replace');
+      } else {
+        if (r.action === 'new') { receiptOpened = true; receiptEntryMode = 'photo'; receiptCountingMode = 'scan'; receiptNoDoc = false; }
+        if (r.action === 'replace-typed') { receiptNotes = []; recomputeNoteTotal(); receiptAnchorSource = null; }
+        res = receivingInstallDelivery(src.scan, s, r.action === 'append' ? 'append' : 'replace');
+      }
+      saveReceiptDraft();
+      try { await sharedFlush(); }
+      catch (e) { return queue(lost(), src); }
+      // הגיע לענן? (בלי מנוע משותף — אין מה לבדוק)
+      const shared = sharedReceiving ? sharedReceiving.payload : null;
+      const per = shared && shared.state && shared.state.aiScanResponse && shared.state.aiScanResponse.perDocument;
+      if (shared && !(Array.isArray(per) && per.some(p => p && p.paperId === paperId))) return queue(said('wait', { reason: 'busy' }), src);
+      paperJoinPending.delete(paperId);
+      setJoin({ state: res.ok ? 'joined' : 'joined-failed', draftId: receiptDraftId });
+      // שאר תעודות המשלוח של אותו סבב — לאותה קליטה
+      if (item && paperIntake && paperIntake.items.indexOf(item) !== -1) paperIntake.items.forEach(x => { if (x !== item && x.target === 'receiving' && x.forDraftId == null) x.forDraftId = receiptDraftId; });
+      if (explicit && currentView !== 'receiving') setView('receiving');
+      else if (currentView === 'receiving') renderReceiving();
+      return res.ok ? 'joined' : 'joined-failed';
+    } finally {
+      if (acquired) {
+        try { await sharedReceiving.releaseScan(token); } catch (e) {}
+        if (paperJoinLease === token) paperJoinLease = null;
+      }
+    }
+  }
+  return queue(said('wait', { reason: 'busy' }), src);
+}
+// התור: תעודות שמחכות שהקליטה תתפנה, שהחיבור יחזור, או שהקריאה בטלפון אחר תסתיים
+function paperJoinRetry() {
+  if (!paperJoinPending.size) return;
+  clearTimeout(paperJoinTimer);
+  paperJoinTimer = setTimeout(() => { paperJoinTimer = null; paperJoinRetryNow(); }, 1000);
+}
+function paperJoinRetryNow() {
+  return Promise.all(Array.from(paperJoinPending.values()).map(j =>
+    receivingJoinDelivery({ paperId: j.paperId, cap: j.cap, item: j.item, explicit: false }).catch(e => console.error('paper join failed', e))));
+}
+// מה מוצג על תעודת משלוח בקליטת הניירות — נגזר עכשיו, לא ממה שנשמר על הצילום
+function paperJoinView(item, p) {
+  let st = ''; try { st = currentLedger().states[p.id] || ''; } catch (e) {}
+  const per = aiScanResponse && Array.isArray(aiScanResponse.perDocument) ? aiScanResponse.perDocument : [];
+  const a = p.anchors || {};
+  const nums = a.units != null && a.lines != null ? ' (' + mtxQty(a.units) + ' יח׳ · ' + ledgerRowsText(a.lines) + ' מתחתית הנייר)' : '';
+  if (st === 'in-receipt') return { text: '✓ נקלטה — לא נקלטת פעמיים.', tone: 'border-emerald-200 bg-emerald-50', cls: 'text-emerald-800', done: true };
+  if (per.some(x => x && x.paperId === p.id)) return receiptPaperScanState === 'ok'
+    ? { text: '✓ נכנסה לקליטה' + nums + '. הכמויות לא מוצגות — סופרים כרגיל.', tone: 'border-emerald-200 bg-emerald-50', cls: 'text-emerald-800', inDraft: true }
+    : { text: 'נכנסה לקליטה, אבל לא אישרה את עצמה מול בלוק הסיכום — בקליטה מקלידים את שני המספרים מתחתית הנייר.', tone: 'border-amber-200 bg-amber-50', cls: 'text-amber-800', inDraft: true };
+  // מה שנאמר כשניסינו להכניס אותה (ממתינה, שאלה, סירוב) — כל עוד היא לא בקליטה
+  const j = item && item.join;
+  if (j && j.text && j.state !== 'joined' && j.state !== 'joined-failed') return { text: j.text, tone: 'border-amber-200 bg-amber-50', cls: 'text-amber-800', waiting: j.state === 'wait' };
+  return { text: 'זו תעודת משלוח — היא כבר נקראה. "לקליטה" מכניס אותה לקליטה כפי שנקראה' + nums + ', בלי לצלם שוב ובלי להקליד. הכמויות לא מוצגות — סופרים כרגיל.', tone: 'border-amber-200 bg-amber-50', cls: 'text-amber-800' };
 }
 function paperAttachText(p) {
   const a = p && p.attach; if (!a) return '';
@@ -13769,17 +14112,18 @@ function paperIntakeItemHtml(item) {
   } else if (item.status === 'reading') { body = '<div class="font-black text-blue-700 text-sm"><i class="fa-solid fa-spinner fa-spin"></i> קורא…</div>'; tone = 'border-blue-200 bg-blue-50'; }
   else if (item.status === 'rejected') { body = '<div class="font-black text-slate-600 text-sm">זה לא נייר של הנהג — לא נשמר</div><div class="text-[11px] text-slate-400 font-bold">חשבונית חודשית ומכתבי מבצעים לא נכנסים למאזן.</div>'; tone = 'border-slate-200 bg-slate-50'; }
   else if (item.status === 'dup-batch') { body = '<div class="font-black text-slate-600 text-sm">התמונה הזו כבר ברשימה — לא תיקרא פעמיים</div>'; tone = 'border-slate-200 bg-slate-50'; }
-  else if (item.status === 'dup') { body = '<div class="font-black text-slate-600 text-sm">הצילום הזה כבר נקרא' + (p ? ' — ' + htmlEscape(paperLabel(p)) : '') + '</div><div class="text-[11px] text-slate-400 font-bold">לא נשלח שוב, ולא שולם שוב.</div>'; tone = 'border-slate-200 bg-slate-50'; }
+  else if (item.status === 'queued') { body = '<div class="font-black text-slate-600 text-sm"><i class="fa-regular fa-clock"></i> ממתין לקריאה</div>'; tone = 'border-slate-200 bg-slate-50'; }
+  else if (item.status === 'dup' && !(p && p.kind === 'delivery')) { body = '<div class="font-black text-slate-600 text-sm">הצילום הזה כבר נקרא' + (p ? ' — ' + htmlEscape(paperLabel(p)) : '') + '</div><div class="text-[11px] text-slate-400 font-bold">לא נשלח שוב, ולא שולם שוב.</div>'; tone = 'border-slate-200 bg-slate-50'; }
   else if (item.status === 'error') { body = '<div class="font-black text-rose-700 text-sm">' + htmlEscape(item.message || 'הקריאה נכשלה') + '</div>'; tone = 'border-rose-200 bg-rose-50';
     if (item.page) actions = btn('paper-retry', 'קרא שוב (בתשלום)', ' data-id="' + item.captureId + '"'); }
-  else if (p && item.status === 'delivery') {
-    // הספירה בקליטה עיוורת: רק מה שמודפס בתחתית הנייר, בלי כמות לכל מוצר
-    const a = p.anchors || {};
+  else if (p && (item.status === 'delivery' || item.status === 'dup')) {
+    // v126: תעודת משלוח נכנסת לקליטה כפי שנקראה. הספירה עיוורת: רק מה שמודפס בתחתית הנייר.
+    const j = paperJoinView(item, p);
     body = '<div class="font-black text-slate-700 text-sm">' + htmlEscape(paperLabel(p)) + '</div>' +
-      '<div class="text-[11px] text-amber-800 font-bold mt-0.5">זו תעודת משלוח — קולטים אותה במסך הקליטה, וסופרים כמו תמיד.' +
-      (a.units != null && a.lines != null ? ' בקליטה בחר "הקלד את המספרים" והקלד ' + htmlEscape(mtxQty(a.units)) + ' יח׳ ו-' + htmlEscape(ledgerRowsText(a.lines)) + ' — בלי לצלם שוב.' : '') + '</div>';
-    tone = 'border-amber-200 bg-amber-50';
-    actions = btn('ledger-start-receiving', 'לקליטה');
+      (item.status === 'dup' ? '<div class="text-[11px] text-slate-400 font-bold">הצילום הזה כבר נקרא — לא נשלח שוב, ולא שולם שוב.</div>' : '') +
+      '<div class="text-[11px] font-bold mt-0.5 ' + j.cls + '">' + htmlEscape(j.text) + '</div>';
+    tone = j.tone;
+    actions = j.inDraft ? btn('paper-goto-receiving', 'לספירה ←') : j.done || j.waiting ? '' : btn('ledger-start-receiving', 'לקליטה', ' data-paper="' + htmlEscape(p.id) + '"' + capAttr);
   } else if (p && (item.status === 'saved' || item.status === 'review')) {
     let st = ''; try { st = currentLedger().states[p.id] || ''; } catch (e) {}
     const head = htmlEscape(paperLabel(p)) + ' · ' + ledgerRowsText((p.rows || []).length) + ' · ' + mtxQty(paperUnits(p)) + ' יח׳';
@@ -14207,7 +14551,16 @@ function paperUiClick(t) {
   if (role === 'paper-conflict-drop') { paperResolveConflict(t.dataset.cap, false); return true; }
   if (role === 'ledger-undo') { undoLedgerDeclaration(id).then(() => { if (currentView === 'ledger') renderLedger(); refreshLedgerBar(); }); return true; }
   if (role === 'ledger-photo') { openPaperIntake({ forReturnId: t.dataset.return || '' }); return true; }
-  if (role === 'ledger-start-receiving') { setView('receiving'); showToast('בקליטה: "הקלד את המספרים" מתחתית התעודה, וספור כמו תמיד', null, null, 3500); return true; }
+  // v126: "לקליטה" — התעודה כבר נקראה; היא נכנסת לקליטה כפי שנקראה, בלי קריאה חדשה ובלי להקליד
+  if (role === 'ledger-start-receiving') {
+    const pid = t.dataset.paper || id;
+    if (!pid) { setView('receiving'); return true; }
+    const cap = t.dataset.cap || null;
+    const item = paperIntake ? paperIntake.items.find(x => x.paperId === pid && (!cap || x.captureId === cap)) || null : null;
+    receivingJoinDelivery({ paperId: pid, cap: cap || (item && item.captureId) || null, item, explicit: true }).catch(e => { console.error('paper join failed', e); showToast('לא הצלחתי להכניס את התעודה לקליטה — נסה שוב', null, null, 3000); });
+    return true;
+  }
+  if (role === 'paper-goto-receiving') { setView('receiving'); return true; }
   if (role.indexOf('ledger-') === 0) { ledgerAnswer(role, t.dataset.item, t.dataset.return, t.dataset.paper); return true; }
   if (!paperReview) return false;
   const r = paperReview;
@@ -19764,6 +20117,7 @@ function sharedReceivingStatusChanged(status) {
   sharedReceiptStatus = status;
   if (!status.error) sharedReceiptLastError = '';
   renderSharedReceivingBanner();
+  paperJoinRetry(); // v126: תעודת משלוח שחיכתה לחיבור או לסיום קריאה בטלפון אחר
 }
 function renderSharedReceivingBanner() {
   const el = $('sharedReceivingBanner'); if (!el) return;
@@ -19883,6 +20237,7 @@ function applySharedReceipt(payload, meta = {}) {
     const input = focusInfo && (focusInfo.id ? $(focusInfo.id) : Array.from(document.querySelectorAll('[data-role]')).find(el => el.dataset.role === focusInfo.role && el.dataset.id === focusInfo.product));
     if (input && !input.disabled) { input.focus(); try { input.setSelectionRange(focusInfo.start, focusInfo.end); } catch (e) {} }
   } finally { sharedReceiptApplying = false; }
+  paperJoinRetry();
 }
 async function startSharedReceiving() {
   if (sharedReceiving || !db || !sharedReceiptHooksReady) return;
@@ -19998,6 +20353,7 @@ aiRunInvoiceScan = async function (...args) {
     if (token) { try { await sharedReceiving.releaseScan(token); } catch (e) {} }
     if (sharedReceiptScanToken === token) sharedReceiptScanToken = null;
     scheduleSharedReceiptSave();
+    paperJoinRetry();
   }
 };
 
@@ -20041,7 +20397,7 @@ window.addEventListener('offline', () => {
   if (scanPurpose === 'receiving') closeScanner();
   renderSharedReceivingBanner();
 });
-window.addEventListener('online', () => { renderSharedReceivingBanner(); scheduleSharedReceiptSave(); });
+window.addEventListener('online', () => { renderSharedReceivingBanner(); scheduleSharedReceiptSave(); paperJoinRetry(); });
 window.addEventListener('beforeunload', event => {
   if (sharedReceiptSaveTimer || sharedReceiptStatus.dirty || sharedReceiptStatus.busy) { event.preventDefault(); event.returnValue = ''; }
 });

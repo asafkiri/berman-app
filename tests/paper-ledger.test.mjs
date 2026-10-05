@@ -287,6 +287,13 @@ test('סוג שלא נקרא — "לבדיקה", לא נספר כחיוב; תע�
   assert.match(t.text, /לא נמצאה בקליטה של 5\.10/);
   assert.deepEqual(t.actions.map(a => a.role), ['ledger-paper-open', 'ledger-start-receiving']);
   assert.match(t.detail, /3 יח׳ ו-שורה אחת/);
+  // v126: התעודה כבר נקראה — "לקליטה" מכניס אותה כפי שנקראה; לא שולחים להקליד
+  assert.doesNotMatch(t.detail, /הקלד את המספרים/);
+  assert.equal(t.actions.find(a => a.role === 'ledger-start-receiving').paperId, 'paper_244799999');
+  const far = ledgerItemText({ ...it, sameDay: false }, lg, [dn]);
+  assert.match(far.text, /צולמה ועוד לא נקלטה/);
+  assert.match(far.detail, /כבר נקראה \(3 יח׳ ו-שורה אחת מהתחתית\)/);
+  assert.doesNotMatch(far.detail, /הקלד את המספרים/);
 });
 
 // ===== סבב סקירה שני =====
