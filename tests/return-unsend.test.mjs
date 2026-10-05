@@ -193,7 +193,7 @@ head('[7] החיווט — כל תפקיד שנפלט חייב מטפל, ובכ�
   // הקריאה נספרת בשרשור בלבד — ההגדרה עצמה נראית זהה ואינה קריאה.
   // v114: מסך היסטוריית החזרות אוחד לתוך מסך התעודות — נשאר כרטיס חזרה אחד, והוא חייב לשאת את שניהם.
   ok('שורת האימות יושבת בכרטיס החזרה המאוחד (ורק בו)', (src.match(/retVerifyRowHtml\(r\) \+/g) || []).length === 1);
-  ok('וכפתור ההחזרה יושב בו גם', (src.match(/retUnsendBtnHtml\(r\) \+/g) || []).length === 1);
+  ok('וכפתור ההחזרה יושב בו גם (v128: רק כשהתעודה עוד פתוחה)', (src.match(/\(stillOpen \? retUnsendBtnHtml\(r\) : ''\) \+/g) || []).length === 1);
   ok('אין יותר שתי העתקות של שדה סכום הזיכוי', (src.match(/id="rvNote_/g) || []).length === 1);
   ok('המחיקה קודמת להוספה לרשימה', src.indexOf('const deleted = await hardDeleteDocWithBackup') < src.indexOf('const applied = applyReturnUnsend(plan)'));
   ok('שיוך זיכוי פתוח חוסם את ההחזרה', /returnHasCreditAllocations\(id\)\) return;\n  const plan = retUnsendPlan/.test(src));

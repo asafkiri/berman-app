@@ -69,43 +69,84 @@ test('הפירוט היומי והשורה העליונה מראים את הני
   assert.doesNotMatch(html, /הניירות מהנהג לא חושבו/);
 });
 
-test('סגירת חודש: רק חודש מלא שעבר; נכתב ל-config; המאזן ממשיך ביום שאחרי; המרכזת של החודש לא משתנה; פתיחה מחדש', async () => {
-  const r = app([L.papers.p141, L.papers.p142], { today: '2026-11-03' });
+// config/app בענן מדומה: הטרנזקציה האמיתית (executeLedgerCloseTask) רצה מולו
+function withConfig(r, cfg = {}) {
+  r.context.testCfg = cfg;
+  r.context.doc = (_db, ...path) => path.join('/');
+  r.context.runTransaction = async (_db, fn) => fn({
+    get: async () => ({ exists: () => true, data: () => JSON.parse(JSON.stringify(r.context.testCfg)) }),
+    set: (_ref, data) => { r.context.testCfg = { ...r.context.testCfg, ...JSON.parse(JSON.stringify(data)) }; } });
+  r.run(`runCloudTask = async (label, task) => { testWrites.push(JSON.parse(JSON.stringify(task)));
+    try { if (task.op === 'ledger-close') await executeLedgerCloseTask(task); return true; } catch (e) { testWrites.push({ stale: e.code }); return false; } };`);
+  return r;
+}
+const cfg = r => JSON.parse(JSON.stringify(r.context.testCfg));
+const flush = async () => { for (let i = 0; i < 20; i++) await new Promise(res => setImmediate(res)); };
+const ok = async r => { await r.events.get('confirmOk:click')(); await flush(); };
+
+test('סגירת חודש: רק חודש מלא שעבר; טרנזקציה על config; המאזן ממשיך ביום שאחרי; המרכזת של החודש לא משתנה; פתיחה מחדש', async () => {
+  const r = withConfig(app([L.papers.p141, L.papers.p142], { today: '2026-11-03' }));
   const octBefore = r.month('2026-10-01', '2026-10-31');
   const box = from => r.run(`monthCloseHtml(receiptRangeData('${from}', monthLastDay('${from.slice(0, 7)}')))`);
   assert.match(box('2026-10-01'), /data-role="rc-month-close" data-day="2026-10-31"/);
-  assert.match(box('2026-10-01'), /במאזן עוד 2 פריטים פתוחים מהחודש הזה/);
+  assert.match(box('2026-10-01'), /2 פריטים פתוחים במאזן ייצאו ממנו בסגירה/);
   assert.equal(r.run(`monthCloseHtml(receiptRangeData('2026-11-01', '2026-11-30'))`), '', 'החודש הנוכחי — לא');
   assert.equal(r.run(`monthCloseHtml(receiptRangeData('2026-10-01', '2026-10-20'))`), '', 'חלק מחודש — לא');
   assert.equal(r.run(`monthCloseHtml(receiptRangeData('2026-08-01', '2026-08-31'))`), '', 'לפני תחילת המאזן — לא');
   r.run(`closeLedgerMonth('2026-10-31')`);
-  assert.match(r.node('confirmMsg').textContent, /המאזן ימשיך מ-.*עוד 2 פריטים פתוחים/);
+  assert.match(r.node('confirmMsg').textContent, /המאזן ימשיך מ-.*2 פריטים פתוחים ייצאו/);
   assert.equal(r.context.testWrites.length, 0, 'כלום לפני האישור');
-  await r.events.get('confirmOk:click')();
+  await ok(r);
   const w = r.context.testWrites.at(-1);
-  assert.deepEqual([w.op, w.path.slice(-2).join('/'), w.merge, w.data.ledgerClosedThrough, w.data.ledgerClosedPrev], ['set', 'config/app', true, '2026-10-31', '']);
+  assert.deepEqual([w.op, w.mode, w.day, w.expect], ['ledger-close', 'close', '2026-10-31', '']);
+  assert.deepEqual([cfg(r).ledgerClosedThrough, cfg(r).ledgerClosedHistory], ['2026-10-31', []]);
   assert.equal(r.run('ledgerClosedThrough'), '2026-10-31');
   assert.equal(r.run('currentLedger().start'), '2026-11-01');
   assert.equal(r.run('currentLedger().count'), 0, 'הפריטים של אוקטובר יצאו מהמאזן');
   assert.deepEqual(r.month('2026-10-01', '2026-10-31'), octBefore, 'המרכזת של אוקטובר — עם הניירות שלו, כמו שהושוותה');
   assert.match(box('2026-10-01'), /נסגר מול החשבונית ✓[\s\S]*data-role="rc-month-reopen" data-day="2026-10-31"/);
+  // הקליטה של 4.10 שהניירות סגרו — נשארת סגורה אחרי סגירת החודש (הסטטוס מהמאזן המלא)
+  assert.equal(r.run(`receiptOpenNow(receipts.find(x => (x.docDate || x.date) === '2026-10-04'))`), false);
   r.run(`setView('ledger')`);
   assert.match(r.node('app').innerHTML, /עד 31\.10 נסגר מול החשבונית/);
   // פתיחה מחדש
   r.run(`reopenLedgerMonth('2026-10-31')`);
-  await r.events.get('confirmOk:click')();
-  assert.equal(r.context.testWrites.at(-1).data.ledgerClosedThrough, '');
+  await ok(r);
+  assert.equal(cfg(r).ledgerClosedThrough, '');
   assert.equal(r.run('ledgerClosedThrough'), '');
   assert.equal(r.run('currentLedger().count'), 2, 'הפריטים חזרו');
 });
 
-test('פתיחה מחדש מחזירה את הסגירה הקודמת', async () => {
-  const r = app([], { today: '2026-12-02' });
+test('סגירות אחת אחרי השנייה, ופתיחה מחדש חוזרת לאחרונה שלפניה — גם כמה פעמים', async () => {
+  const r = withConfig(app([], { today: '2026-12-02' }), { ledgerClosedThrough: '2026-09-30' });
   r.run(`ledgerClosedThrough = '2026-09-30';`);
-  r.run(`closeLedgerMonth('2026-10-31')`); await r.events.get('confirmOk:click')();
-  assert.equal(r.context.testWrites.at(-1).data.ledgerClosedPrev, '2026-09-30');
-  r.run(`reopenLedgerMonth('2026-10-31')`); await r.events.get('confirmOk:click')();
-  assert.equal(r.run('ledgerClosedThrough'), '2026-09-30');
+  const step = async code => { r.run(code); await ok(r); };
+  await step(`closeLedgerMonth('2026-10-31')`);
+  await step(`closeLedgerMonth('2026-11-30')`);
+  assert.deepEqual([cfg(r).ledgerClosedThrough, cfg(r).ledgerClosedHistory], ['2026-11-30', ['2026-09-30', '2026-10-31']]);
+  await step(`reopenLedgerMonth('2026-11-30')`);
+  assert.equal(r.run('ledgerClosedThrough'), '2026-10-31');
+  assert.match(r.run(`monthCloseHtml(receiptRangeData('2026-10-01', '2026-10-31'))`), /data-role="rc-month-reopen"/);
+  await step(`reopenLedgerMonth('2026-10-31')`);
+  assert.deepEqual([cfg(r).ledgerClosedThrough, cfg(r).ledgerClosedHistory], ['2026-09-30', []], 'ספטמבר נשאר סגור');
+});
+
+test('סגירה ישנה (טלפון אחר כבר סגר חודש מאוחר יותר) לא כותבת אחורה; ניסיון חוזר של סגירה שנשמרה — בלי כתיבה', async () => {
+  const r = withConfig(app([], { today: '2026-12-02' }));
+  r.run(`closeLedgerMonth('2026-09-30')`); // הכפתור של ספטמבר על המסך, כשעוד לא נסגר כלום
+  r.context.testCfg = { ledgerClosedThrough: '2026-10-31', ledgerClosedHistory: [] }; // בינתיים טלפון אחר סגר את אוקטובר
+  await ok(r);
+  assert.equal(r.context.testWrites.at(-1).stale, 'stale-ledger-close');
+  assert.equal(cfg(r).ledgerClosedThrough, '2026-10-31', 'אוקטובר נשאר סגור');
+  // אותה פעולה שוב מהתור אחרי שנשמרה (התשובה אבדה) — הצלחה, בלי שינוי
+  r.context.testCfg = { ledgerClosedThrough: '2026-11-30', ledgerClosedHistory: ['2026-10-31'] };
+  await r.run(`executeLedgerCloseTask({ op: 'ledger-close', mode: 'close', day: '2026-11-30', expect: '2026-10-31', at: 1 })`);
+  assert.deepEqual(cfg(r).ledgerClosedHistory, ['2026-10-31']);
+  // פתיחה מחדש של חודש שכבר לא הסגירה הנוכחית — נדחית
+  r.run(`ledgerClosedThrough = '2026-10-31'; reopenLedgerMonth('2026-10-31')`);
+  await ok(r);
+  assert.equal(r.context.testWrites.at(-1).stale, 'stale-ledger-close');
+  assert.equal(cfg(r).ledgerClosedThrough, '2026-11-30');
 });
 
 const ret = (id, rows, extra = {}) => ({ id, date: '2026-10-03', credited: false, timestamp: Date.parse('2026-10-03T08:00:00'), sentTo: 'הנהג', ...extra,
@@ -140,4 +181,77 @@ test('כרטיס החזרה: בלי "אישור"; נייר שסגר — "אין 
   await done.click('rv-open', 'ret_t3');
   assert.equal(done.run('currentView'), 'returnReconcile');
   assert.doesNotMatch(done.node('app').innerHTML, /data-role="rv-all-credited"/);
+});
+
+// ===== מה שהסקירה מצאה — כל מקרה עם נייר שתואם בדיוק למה שנרשם: המרכזת לא משתנה =====
+const nm = c => (L.products.find(p => p.id === 'code_' + c) || {}).name || c;
+const line = (c, qty, extra = {}) => ({ productId: 'code_' + c, code: c, name: nm(c), barcode: '', qty, ...extra });
+const credit344 = r => r.month('2026-10-01', '2026-10-31').r344;
+
+test('קישור זיכוי להחזרה קודמת (v87) + נייר ראשי שתואם — לא נספר פעמיים', () => {
+  const R1 = { id: 'ret_a', date: '2026-10-01', credited: true, creditStatus: 'open', timestamp: 1, items: [line('344', 3, { noteQty: 2 })] };
+  const R2 = { id: 'ret_b', date: '2026-10-03', credited: true, creditStatus: 'ok', timestamp: 2, items: [line('344', 2), line('101', 4)],
+    creditAllocations: [{ id: 'l1', targetType: 'return', returnId: 'ret_a', items: [{ productId: 'code_344', code: '344', name: nm('344'), qty: 1 }] }] };
+  const before = app([], { receipts: [], returns: [R1, R2] });
+  const paper = { ...creditPaper('290099010', [['344', 3], ['101', 4]]), docDay: '2026-10-03', forReturnId: 'ret_b' };
+  const after = app([paper], { receipts: [], returns: [R1, R2] });
+  assert.equal(credit344(before).credited, 5);
+  assert.deepEqual(credit344(after), credit344(before));
+  assert.equal(after.run('fullLedger().docViews.ret_b.main'), true, 'הנייר — הראשי של ההחזרה');
+});
+
+test('זיכוי ששויך מההחזרה לחוסר בקליטה (v66/v123) + הנייר של ההחזרה — לא נספר פעמיים', () => {
+  const split = (rcId, day) => [{ id: 'sp1', at: 1, receiptId: rcId, receiptDate: day, items: [{ productId: 'code_344', name: nm('344'), qty: 2 }], source: 'shortage-credit' }];
+  const RC = (day) => ({ id: 'rc_s', date: day, timestamp: 1, items: [line('344', 3, { noteQty: 5 })],
+    shortCreditUnits: [{ id: 'sp1', productId: 'code_344', name: nm('344'), qty: 2, fromReturnsId: 'ret_s', at: 1 }] });
+  // א: 344 גם בהחזרה — הנייר מראה 4 (2 שהוחזרו + 2 לחוסר)
+  const Ra = { id: 'ret_s', date: '2026-10-10', credited: true, creditStatus: 'ok', timestamp: 2, items: [line('344', 2), line('101', 4)], creditAllocations: split('rc_s', '2026-10-08') };
+  const pa = { ...creditPaper('290099011', [['344', 4], ['101', 4]]), docDay: '2026-10-10', forReturnId: 'ret_s' };
+  const a0 = app([], { receipts: [RC('2026-10-08')], returns: [Ra] }), a1 = app([pa], { receipts: [RC('2026-10-08')], returns: [Ra] });
+  assert.equal(credit344(a0).credited, 4);
+  assert.deepEqual(credit344(a1), credit344(a0));
+  assert.equal(a1.run(`fullLedger().items.filter(i => i.state === 'problem' || i.state === 'question').length`), 0, 'ובמאזן — בלי "זוכה ולא הוחזר"');
+  // ב: 344 לא בהחזרה, והקליטה רחוקה מהנייר (1.10 מול 10.10) — השורה הולכת לקליטה ששויכה, לא "בלי שיוך"
+  const Rb = { ...Ra, items: [line('101', 4)], creditAllocations: split('rc_s', '2026-10-01') };
+  const pb = { ...creditPaper('290099012', [['344', 2], ['101', 4]]), docDay: '2026-10-10', forReturnId: 'ret_s' };
+  const b0 = app([], { receipts: [RC('2026-10-01')], returns: [Rb] }), b1 = app([pb], { receipts: [RC('2026-10-01')], returns: [Rb] });
+  assert.equal(credit344(b0).credited, 2);
+  assert.deepEqual(credit344(b1), credit344(b0));
+});
+
+test('נייר חיוב מ-1.10 על עודף בקליטה של 30.9 — נספר באוקטובר (כמו בחשבונית), ספטמבר לא משתנה', () => {
+  const RC = { id: 'rc_e', date: '2026-09-30', timestamp: 1, items: [line('344', 7, { noteQty: 5 })] };
+  const charge = { ...creditPaper('290099013', [['344', 2]]), kind: 'charge', docDay: '2026-10-01' };
+  const r0 = app([], { receipts: [RC], returns: [] }), r1 = app([charge], { receipts: [RC], returns: [] });
+  assert.deepEqual(r1.month('2026-09-01', '2026-09-30'), r0.month('2026-09-01', '2026-09-30'));
+  assert.equal(r1.month('2026-10-01', '2026-10-31').r344.billed, 2);
+  assert.equal(r1.run(`fullLedger().placed[0].attach.rowTargets[0].id`), 'rc_e', 'במאזן — על העודף של 30.9');
+});
+
+test('החזרה שנייר סגר נשארת סגורה אחרי סגירת החודש; בלי "החזר לרשימה", "מזג" ו"שלח שוב"', async () => {
+  const R = ret('ret_t1', [['101', 2], ['344', 1]]);
+  const r = withConfig(app([creditPaper('290099001', [['101', 2], ['344', 1]])], { receipts: [], returns: [R, ret('ret_t2', [['238', 1]]), ret('ret_t3', [['233', 1]])], today: '2026-11-03' }));
+  const card = () => r.run(`returnCardInReceipts(returns[0])`);
+  assert.doesNotMatch(card(), /data-role="ret-unsend"|data-role="ret-merge"|data-role="ret-resend"/);
+  assert.match(r.run(`returnCardInReceipts(returns[1])`), /data-role="ret-unsend"[\s\S]*data-role="ret-merge"/, 'החזרה פתוחה — כמו קודם');
+  r.run(`openReturnUnsendConfirm('ret_t1')`);
+  assert.ok(r.toasts.some(t => /כבר זיכה את התעודה הזאת בנייר/.test(t)));
+  assert.match(r.run('pendingReturnsBannerHtml()'), /יש 2 תעודות חזרות/, 'רק שתי הפתוחות');
+  r.run(`closeLedgerMonth('2026-10-31')`); await ok(r);
+  assert.equal(r.run('ledgerClosedThrough'), '2026-10-31');
+  assert.equal(r.run(`returnStateNow(returns[0])`), 'done');
+  assert.match(r.run('retVerifyRowHtml(returns[0])'), /ההחזרה זוכתה\. אין מה לעשות/);
+  assert.match(r.run('pendingReturnsBannerHtml()'), /יש 2 תעודות חזרות/, 'לא חוזרת לבאנר');
+});
+
+test('"הכל זוכה במלואו" כשהוזנו גם מוצרים שזוכו בלי שהוחזרו — מסמן את השורות, לא מאשר בלי לשמור אותם', async () => {
+  const r = app([], { receipts: [], returns: [ret('ret_x', [['101', 2], ['344', 1]])] });
+  await r.click('rv-verify-inline', 'ret_x');
+  r.run(`rvExtraAdd('code_238')`);
+  await r.click('rv-all-credited');
+  assert.equal(r.run('currentView'), 'returnReconcile', 'נשארים במסך');
+  assert.equal(r.run('returnVerify.items.every(l => l.checked && l.noteQty === l.qty)'), true);
+  assert.equal(r.run('returnVerify.extra.length'), 1, 'המוצר הנוסף נשאר לשמירה');
+  assert.ok(r.toasts.some(t => /שמור אימות/.test(t)));
+  assert.equal(r.context.testWrites.length, 0);
 });
