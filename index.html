@@ -6024,7 +6024,7 @@ function receiptQuantityButtonsHtml() {
   if (receiptUsesManualQuantities()) return '<div class="space-y-3 mb-3">' +
     '<button data-role="rc-quantity-all" class="btn-tap w-full bg-emerald-600 text-white rounded-xl py-4 px-3 font-black text-base">בדקתי ידנית — כל הכמויות תואמות, המשך לקליטה</button>' +
     '<button data-role="rc-quantity-differences" class="btn-tap w-full bg-white border-2 border-blue-300 text-blue-800 rounded-xl py-4 px-3 font-black text-base">בדקתי ידנית — יש חוסרים או עודפים</button>' +
-    (receiptPaperDocCount() === 1 ? '<button data-role="rc-quantity-none" class="btn-tap w-full bg-white border-2 border-rose-300 text-rose-800 rounded-xl py-4 px-3 font-black text-base">לא הגיע כלום — הכל חסר</button>' : '') + '</div>';
+    '<button data-role="rc-quantity-none" class="btn-tap w-full bg-white border-2 border-rose-300 text-rose-800 rounded-xl py-4 px-3 font-black text-base">לא הגיע כלום — הכל חסר</button></div>';
   // Folded to its own question. Counting by scanner is the ordinary path, so the
   // manual shortcut asks for one line of the screen until it is actually wanted.
   return '<details data-quantity-picker' + (receiptQuantityPickerOpen ? ' open' : '') +
@@ -6034,12 +6034,12 @@ function receiptQuantityButtonsHtml() {
     '<div class="flex gap-2 mt-2">' +
     '<button data-role="rc-quantity-all" class="btn-tap flex-1 bg-emerald-600 text-white rounded-xl py-2.5 font-black text-sm">כל הכמויות תואמות</button>' +
     '<button data-role="rc-quantity-differences" class="btn-tap flex-1 bg-white border-2 border-blue-300 text-blue-800 rounded-xl py-2.5 font-black text-sm">יש חוסרים או עודפים</button></div>' +
-    (receiptPaperDocCount() === 1 ? '<button data-role="rc-quantity-none" class="btn-tap w-full mt-2 bg-white border-2 border-rose-300 text-rose-800 rounded-xl py-2.5 font-black text-sm">לא הגיע כלום — הכל חסר</button>' : '') + '</details>';
+    '<button data-role="rc-quantity-none" class="btn-tap w-full mt-2 bg-white border-2 border-rose-300 text-rose-800 rounded-xl py-2.5 font-black text-sm">לא הגיע כלום — הכל חסר</button></details>';
 }
 function receiptQuantityRowsSignature(rows) {
   return JSON.stringify(rows.map(r => [r.productId, r.paperQty]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
 }
-// v130: "לא הגיע כלום" רק לקליטה של נייר אחד — בקליטה של כמה ניירות זה היה מאפס גם את מה שהגיע
+// v130: כמה תעודות בקליטה — "לא הגיע כלום" חל על כולן (אם משהו הגיע — סופרים או מסמנים חוסרים בשורות)
 function receiptPaperDocCount() {
   return aiScanResponse && aiScanResponse.scan && Array.isArray(aiScanResponse.scan.documents) ? aiScanResponse.scan.documents.length : 0;
 }
@@ -6048,7 +6048,6 @@ function receiptPaperDocCount() {
 function startReceiptQuantityReview(allMatch) {
   const none = allMatch === 'none';
   if (none) allMatch = false;
-  if (none && receiptPaperDocCount() !== 1) { showToast('בקליטה יש כמה ניירות — סמן את החוסרים בכל שורה ("יש חוסרים או עודפים")', null, null, 4500); return; }
   const paperRows = receiptQuantityPaperRows();
   if (!paperRows) {
     showToast('צריך להשלים את זיהוי המוצרים ובדיקת הפענוח לפני אישור הכמויות', null, null, 4500);
@@ -6075,7 +6074,12 @@ function startReceiptQuantityReview(allMatch) {
     saveReceiptDraft();
     if (allMatch || none) commitReceiptQuantityReview(); else renderReceiptQuantityReview();
   };
-  if (none) { showConfirm('לא הגיע כלום?', 'כל השורות שבתעודה יירשמו כחוסר (0 התקבלו)' + (receiptList.length ? ', ומה שכבר נספר יימחק' : '') + '. המאזן ישייך אותן למה שכבר חסר או עודף בהיסטוריה, ויראה מה באמת פתוח.', 'לא הגיע כלום', begin); return; }
+  if (none) {
+    const n = receiptPaperDocCount();
+    showConfirm('לא הגיע כלום?', (n > 1 ? 'לא הגיע כלום מכל ' + n + ' התעודות בקליטה: כל השורות שבהן' : 'כל השורות שבתעודה') + ' יירשמו כחוסר (0 התקבלו)' +
+      (receiptList.length ? ', ומה שכבר נספר יימחק' : '') + '. אם משהו כן הגיע — סרוק אותו או בחר "יש חוסרים או עודפים". המאזן ישייך את החוסרים למה שכבר חסר או עודף בהיסטוריה, ויראה מה באמת פתוח.', 'לא הגיע כלום', begin);
+    return;
+  }
   if (allMatch && receiptList.length) showConfirm('אישור כל הכמויות', 'הכמויות שכבר הוזנו יוחלפו בכמויות שבתעודה, כולל ביטול חוסרים ועודפים שסומנו. בדקת שכולן תואמות?', 'כן, כל הכמויות תואמות', begin);
   else begin();
 }
