@@ -39,7 +39,7 @@ function refreshAfterReturnCarry() { refreshes++; }
 function restoreDoc(name, obj) { restored = { name, obj }; }
 
 const FNS = ['r2', 'fmtMoney', 'lineTotalFromUnit', 'anIsDepositLine', 'anIsCarriedLine',
-  'returnSentUnits', 'returnItemsSignature', 'retVerifyRowHtml', 'retUnsendLineKind', 'retUnsendPlan', 'retUnsendSameLine',
+  'returnSentUnits', 'returnItemsSignature', 'retLedgerView', 'retWaitingPaper', 'retVerifyRowHtml', 'retUnsendLineKind', 'retUnsendPlan', 'retUnsendSameLine',
   'retUnsendNewId', 'applyReturnUnsend', 'undoReturnUnsend', 'retUnsendBtnHtml'];
 // eslint-disable-next-line no-eval
 const api = eval(extractSource(FNS, []) + '\n({ ' + FNS.join(', ') + ' })');
@@ -74,7 +74,7 @@ head('[1] אישור מהיר — כל היחידות שהוחזרו זוכו');
   ok('5 יחידות הוחזרו', returnSentUnits(r) === 5);
   const html = retVerifyRowHtml(r);
   ok('שורת האימות מציעה גם בדיקה וגם אישור', html.indexOf('data-role="rv-verify-inline"') > -1 && html.indexOf('data-role="rv-approve"') > -1);
-  ok('ושתיהן נושאות את מזהה התעודה', (html.match(/data-id="ret_open"/g) || []).length === 2);
+  ok('ושתיהן נושאות את מזהה התעודה — וגם כפתור צילום תעודת הזיכוי (v125)', (html.match(/data-id="ret_open"/g) || []).length === 3 && html.indexOf('data-role="paper-photo" data-id="ret_open"') > -1);
   ok('האישור נאמר ביחידות', html.indexOf('כל 5 היחידות') > -1);
   ok('בלי ₪ ובלי סכום מחושב', html.indexOf('₪') === -1 && html.indexOf(api.fmtMoney(openEx)) === -1);
   ok('הסכום — רשות, לזיהוי בלבד', html.indexOf('לזיהוי בלבד') > -1 && html.indexOf('(רשות)') > -1);
