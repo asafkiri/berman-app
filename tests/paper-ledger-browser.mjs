@@ -1,8 +1,7 @@
 // v125 — מסך "מאזן מול ברמן" ומסך הצילום בדפדפן אמיתי, על הנתונים של 4–5.10.2026.
 // הבדיקה שומרת על:
-// - המאזן נטען בלי שגיאות דף, עם 141 ו-142: "חויבת פעמיים" על לחמניות 10 בשקית ושאלת תיקון על לחם אחיד.
-// - "כן, זה תיקון" נכתב לענן (papers/decl_corr_…) ונשאר רק 1231 ×2.
-// - "בטל" מחזיר את השאלה.
+// - המאזן נטען בלי שגיאות דף, עם 141 ו-142: רק "חויבת פעמיים" על לחמניות 10 בשקית. v130: התיקון על לחם אחיד
+//   מזוהה לבד ומוצג "לידיעה" — בלי כפתור "כן, זה תיקון", ושום דבר לא נכתב לענן.
 // - הפס של הניירות מופיע בקליטה ונעלם במסך המאזן; מסך הצילום נפתח עם שני שדות הקובץ (מצלמה וגלריה).
 // - צילום שמתנגש עם נייר שמור באותו מספר: שאלה במאזן; "מחק את הצילום החדש" לא נוגע בשמור.
 // - בדיקת נייר שבענן: המספר לא נערך; בלי גלילה לצדדים ברוחב טלפון.
@@ -73,7 +72,7 @@ try {
   assert.match(await page.locator('#ledgerBar').innerText(), /צלם נייר מהנהג/);
   assert.doesNotMatch(await page.locator('#ledgerBar').innerText(), /מאזן/);
   const home = await page.locator('#app').innerText();
-  assert.match(home, /2 דברים לטיפול מול ברמן[\s\S]*חויבת פעמיים על לחמניות 10 בשקית ×2/);
+  assert.match(home, /דבר אחד לטיפול מול ברמן[\s\S]*חויבת פעמיים על לחמניות 10 בשקית ×2/);
   assert.doesNotMatch(home, /תעודות עם הפרש פתוח/);
   assert.equal(await page.locator('#app input[type="file"]').count(), 0, 'במסך עצמו אין מצלמה');
   await page.evaluate(() => window.t.go('returns'));
@@ -85,21 +84,11 @@ try {
   assert.doesNotMatch(await page.locator('#ledgerBar').innerText(), /מאזן:/, 'בלי כפתור המאזן במסך המאזן עצמו');
   const text = await page.locator('#app').innerText();
   assert.match(text, /חויבת פעמיים על לחמניות 10 בשקית ×2 — לבקש זיכוי מהנהג/);
-  assert.match(text, /נראה שתעודת הזיכוי של ההחזרה מ-4\.10 זיכתה לחם אחיד ברמן במקום אחיד פרוס ברמן, וזה התיקון/);
-  assert.deepEqual(await page.evaluate(() => window.t.kinds()), ['chargedTwice:code_1231', 'correctionPair:code_100']);
-  // "כן, זה תיקון"
-  await page.locator('#app [data-role="ledger-declare-correction"]').click();
-  await page.waitForFunction(() => window.t.count() === 1);
-  const decl = [...documents.keys()].find(k => /\/papers\/decl_corr_/.test(k));
-  assert.ok(decl, 'ההצהרה נכתבה לענן');
-  assert.equal(documents.get(decl).declare, 'correction');
+  assert.match(await page.locator('#app').evaluate(el => el.textContent), /תיקון של ברמן בנייר החיוב 95141 מ-4\.10 09:03: לחם אחיד ברמן ×13 — מבטל זיכוי שניתן על לחם אחיד ברמן במקום אחיד פרוס ברמן\. התקזז, אין מה לבקש/);
   assert.deepEqual(await page.evaluate(() => window.t.kinds()), ['chargedTwice:code_1231']);
-  assert.match(await page.locator('#app').innerText(), /התשובות שלך \(1\)/);
-  // "בטל" מחזיר את השאלה
-  await page.locator('#app details summary', { hasText: 'התשובות שלך' }).click();
-  await page.locator('#app [data-role="ledger-undo"]').click();
-  await page.waitForFunction(() => window.t.count() === 2);
-  assert.ok(!documents.has(decl));
+  assert.equal(await page.evaluate(() => window.t.count()), 1);
+  assert.equal(await page.locator('#app [data-role="ledger-declare-correction"]').count(), 0, 'בלי "כן, זה תיקון"');
+  assert.ok([...documents.keys()].every(k => !/\/papers\//.test(k)), 'שום תשובה לא נכתבה לענן');
   // מסך הצילום: הכפתור בפס פותח את המצלמה של האפליקציה, והצילום נכנס למסך הניירות
   assert.equal(await page.locator('#paperCamGlobal').getAttribute('capture'), 'environment');
   assert.equal(await page.locator('#paperGalGlobal').getAttribute('multiple'), '');
@@ -137,7 +126,7 @@ try {
   const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(over <= 1, 'היסטוריה: גלילה לצדדים ' + over);
   assert.deepEqual(errors, []);
-  console.log('✓ מאזן מול ברמן בדפדפן: 2 לטיפול → "כן, זה תיקון" → 1 → ביטול → 2; מסך הצילום וכרטיסי התעודות');
+  console.log('✓ מאזן מול ברמן בדפדפן: דבר אחד לטיפול, התיקון זוהה לבד; מסך הצילום וכרטיסי התעודות');
 } finally {
   await browser.close();
   server.close();

@@ -43,23 +43,30 @@ test('בלי ניירות: המאזן זהה למרכזת בכל מוצר, וכ�
   }
 });
 
-test('היום (בלי הניירות החדשים): 233, 238, 344 לטיפול, ושאלה על 1231 שהקיזוז שלו בוטל', () => {
+// v130: בלי שאלות — עודף בקליטה אחת וחוסר באחרת של אותו מוצר מתקזזים, גם כשפעם בוטל ביניהם קיזוז
+test('היום (בלי הניירות החדשים): 233, 238, 344 לטיפול; 1231 (עודף 4.10, חוסר 5.10) מתקזז לבד — בלי שאלה', () => {
   const lg = ledger([]);
-  assert.deepEqual(brief(lg), [['chargedNotReceived', 'code_233', 1, 'problem'], ['returnedNotCredited', 'code_344', 2, 'problem'],
-    ['canceledOffset', 'code_1231', 2, 'question']]);
+  assert.deepEqual(brief(lg), [['chargedNotReceived', 'code_233', 1, 'problem'], ['returnedNotCredited', 'code_344', 2, 'problem']]);
   assert.deepEqual(lg.items[1].keys, [{ key: 'code_344', units: 2 }, { key: 'code_238', units: 1 }], 'החזרה אחת — פריט אחד עם שני המוצרים');
-  assert.equal(lg.count, 3);
+  assert.equal(lg.count, 2);
   assert.equal(text(lg, [], 0), "חוסר בקליטה של 4.10: זוג לחמניות אצבע בש' ×1 — חויבת ולא קיבלת. לבקש זיכוי מהנהג");
   assert.match(text(lg, [], 1), /^החזרת .*×2, .*×1 ב-4\.10 ולא זוכית — לבקש זיכוי מהנהג$/);
-  assert.equal(text(lg, [], 2), 'עודף לחמניות 10 בשקית ×2 ב-4.10 וחוסר 2 ב-5.10 — ביטלת את הקיזוז ביניהם. יש נייר חיוב על העודף?');
+  const net = lg.items.find(i => i.key === 'code_1231');
+  assert.equal(net.kind, 'netted'); assert.equal(net.state, 'info'); assert.ok(net.offsetId, 'הקיזוז שבוטל — רק לידיעה');
+  assert.equal(ledgerItemText(net, lg, []).text, 'לחמניות 10 בשקית: עודף ב-4.10 וחוסר ב-5.10 התקזזו');
+  assert.ok(!lg.items.some(i => i.state === 'question'));
 });
 
-test('אחרי 141 ו-142: חיוב כפול על 1231 ×2, ושאלת תיקון על לחם אחיד — ושום דבר אחר', () => {
+test('אחרי 141 ו-142: רק חיוב כפול על 1231 ×2; התיקון של לחם אחיד מזוהה לבד ומתקזז — בלי שאלה', () => {
   const papers = [P.p141, P.p142], lg = ledger(papers);
-  assert.deepEqual(brief(lg), [['chargedTwice', 'code_1231', 2, 'problem'], ['correctionPair', 'code_100', 13, 'question']]);
+  assert.deepEqual(brief(lg), [['chargedTwice', 'code_1231', 2, 'problem']]);
   assert.equal(text(lg, papers, 0), 'חויבת פעמיים על לחמניות 10 בשקית ×2 — לבקש זיכוי מהנהג');
   assert.match(ledgerItemText(lg.items[0], lg, papers).detail, /כבר חויב בנייר החיוב 95141 מ-4\.10/);
-  assert.equal(text(lg, papers, 1), 'נייר החיוב 95141 מ-4.10 09:03 מחייב לחם אחיד ברמן ×13 — נראה שתעודת הזיכוי של ההחזרה מ-4.10 זיכתה לחם אחיד ברמן במקום אחיד פרוס ברמן, וזה התיקון');
+  const auto = lg.items.find(i => i.kind === 'autoCorrection');
+  assert.deepEqual([auto.key, auto.units, auto.state], ['code_100', 13, 'info']);
+  assert.equal(ledgerItemText(auto, lg, papers).text, 'תיקון של ברמן בנייר החיוב 95141 מ-4.10 09:03: לחם אחיד ברמן ×13 — מבטל זיכוי שניתן על לחם אחיד ברמן במקום אחיד פרוס ברמן. התקזז, אין מה לבקש');
+  assert.equal(lg.products.code_100.net, 0);
+  assert.deepEqual(lg.autoDeclared.map(d => [d.declare, d.standsFor.chargePaperId, d.standsFor.creditPaperId, d.standsFor.other]), [['correction', P.p141.id, P.p142.id, 'code_101']]);
   const a142 = lg.placed.find(p => p.id === P.p142.id).attach;
   assert.equal(a142.type, 'return'); assert.equal(a142.id, R1004); assert.equal(a142.role, 'side', '3 מתוך 17 שורות — משלים');
   assert.deepEqual(a142.rowTargets.map(t => t.type + ':' + t.id), ['return:' + R1004, 'receipt:' + RC1004, 'return:' + R1004, 'return:' + R1004], '233 לחוסר בקליטה של 4.10');
@@ -83,16 +90,20 @@ test('כל הניירות (כולל הזיכוי הראשון ונייר הצד)
   assert.equal(lg.placed.find(p => p.id === P.pSide.id).attach.id, R1004, 'נייר הצד הולך להחזרה שבה 119 ו-339 עוד פתוחים');
 });
 
-test('בלי נייר הצד: שאלה "יש עוד תעודת זיכוי?" על 119 ו-339 — וזה נכון', () => {
+test('בלי נייר הצד: 119 ו-339 "ממתין לתעודת זיכוי נוספת" — בלי שאלה; "זה הכל" הופך אותם ללטיפול', () => {
   const papers = [P.p141, P.p142, P.p123], lg = ledger(papers);
-  assert.deepEqual(brief(lg), [['chargedTwice', 'code_1231', 2, 'problem'], ['returnedNotCredited', 'code_339', 3, 'question']]);
-  assert.deepEqual(lg.items[1].keys, [{ key: 'code_339', units: 3 }, { key: 'code_119', units: 1 }], 'שאלה אחת להחזרה, עם שני המוצרים');
-  assert.equal(text(lg, papers, 1), 'בתעודות הזיכוי של ההחזרה מ-4.10 חסרים: ברמן אקטיב ×3, לחם מלא בטוב ×1 — יש עוד תעודת זיכוי?');
+  assert.deepEqual(brief(lg), [['chargedTwice', 'code_1231', 2, 'problem']]);
+  const more = lg.items.find(i => i.kind === 'returnedNotCredited');
+  assert.equal(more.state, 'pending'); assert.ok(more.askMore);
+  assert.deepEqual(more.keys, [{ key: 'code_339', units: 3 }, { key: 'code_119', units: 1 }], 'פריט אחד להחזרה, עם שני המוצרים');
+  assert.equal(ledgerItemText(more, lg, papers).text, 'בתעודות הזיכוי של ההחזרה מ-4.10 חסרים: ברמן אקטיב ×3, לחם מלא בטוב ×1 — ממתין לתעודת זיכוי נוספת');
   const done = declared({ id: 'decl_done', declare: 'complete', returnId: R1004 });
   const lgDone = ledger([...papers, done]);
   assert.deepEqual(brief(lgDone).map(x => x[3]), ['problem', 'problem'], '"זה הכל" — חסר אמיתי');
   assert.deepEqual(lgDone.items.find(i => i.kind === 'returnedNotCredited').keys.map(z => z.key), ['code_339', 'code_119'], 'פריט אחד להחזרה, גם אחרי "זה הכל"');
-  assert.equal(ledger(papers, { asOf: '2026-10-31' }).items.filter(i => i.state === 'question').length, 1, 'שורות שאושרו וחסרות בניירות נשארות שאלה גם אחרי שבועות — עד "זה הכל"');
+  const late = ledger(papers, { asOf: '2026-10-31' });
+  assert.equal(late.items.filter(i => i.state === 'question').length, 0);
+  assert.equal(late.items.find(i => i.kind === 'returnedNotCredited').state, 'pending', 'שורות שאושרו ברישום וחסרות בניירות — ממתין (במסך המאזן), לא נעלמות');
 });
 
 test('רק הזיכוי הראשון צולם: "ברמן זיכתה לחם אחיד במקום אחיד פרוס" עם "מקבל"; התיקון שמגיע אחר כך סוגר', () => {
@@ -117,7 +128,7 @@ test('B1: נייר הזיכוי של ההחזרה מ-1.10, שצולם כשכבר
   assert.deepEqual(brief(lg), brief(ledger([])));
   const short = paper({ ...p, id: 'paper_t2', rows: p.rows.filter(r => r.itemCode !== '401') });
   const lg2 = ledger([short]);
-  assert.ok(lg2.items.some(i => i.kind === 'returnedNotCredited' && i.key === 'code_401' && i.state === 'question' && i.askMore), 'נייר ראשי בלי 401 — שואל אם יש עוד');
+  assert.ok(lg2.items.some(i => i.kind === 'returnedNotCredited' && i.key === 'code_401' && i.state === 'pending' && i.askMore), 'נייר ראשי בלי 401 — ממתין לנייר נוסף (בלי שאלה)');
 });
 
 test('נייר משלים על שורה שכבר אושרה אינו מזכה פעמיים ואינו יוצר "לבקש זיכוי"', () => {
@@ -150,20 +161,22 @@ test('נייר שכבר נכלל בקליטה, תעודת משלוח שלא נק
   assert.equal(lg.states[copy141.id], 'duplicate', 'אותו נייר עם ספרה אחרת במספר');
   assert.equal(lg.states[unread.id], 'unproven');
   assert.deepEqual(brief(lg), [['chargedTwice', 'code_1231', 2, 'problem'], ['deliveryNotReceived', pendingNote.id, undefined, 'problem'],
-    ['unproven', unread.id, undefined, 'question'], ['correctionPair', 'code_100', 13, 'question']]);
+    ['unproven', unread.id, undefined, 'question']]);
 });
 
-test('נייר זיכוי שלא ברור לאיזו החזרה הוא שייך — לא נספר עד שעונים', () => {
+// v130: בלי "לאיזו החזרה?" — המאזן לפי מוצר לא תלוי בבחירה; [שנה] נשאר בבדיקת הנייר
+test('נייר זיכוי שמתאים לכמה החזרות — משויך לבד להחזרה מתקופת המאזן, בלי שאלה; המאזן לא משתנה; בחירה של המשתמש נשמרת', () => {
   const p = paper({ id: 'paper_amb', kind: 'credit', number: '290094992', docDay: '2026-10-02', rows: [row(1, '2381', 1)] });
   const lg = ledger([p]);
-  assert.equal(lg.states[p.id], 'needs-attach');
-  const it = lg.items.find(i => i.kind === 'needsAttach');
-  const t = ledgerItemText(it, lg, [p]);
-  assert.equal(t.text, 'לאיזו החזרה שייך נייר הזיכוי 94992 מ-2.10?');
-  assert.ok(t.actions.slice(0, -1).every(a => /^ההחזרה מ-\d+\.\d+ · (שורה אחת|\d+ שורות) · /.test(a.label)), 'כל כפתור אומר גם כמה שורות ומה הגדול שבהן');
-  assert.ok(t.actions.length >= 3 && t.actions.at(-1).label === 'לא שייך להחזרה');
+  assert.equal(lg.states[p.id], 'counted');
+  assert.ok(!lg.items.some(i => i.kind === 'needsAttach' || i.state === 'question'));
+  const at = lg.placed.find(x => x.id === p.id).attach;
+  assert.equal(at.type, 'return'); assert.ok(lg.docDays[at.id] >= '2026-09-01');
+  assert.deepEqual(nets(lg), nets(ledger([])), 'נייר משלים על שורה שאושרה — לא מזכה פעמיים');
   const chosen = { ...p, attach: { type: 'return', id: R1001, role: 'side', rowTargets: [{ line: 0, type: 'return', id: R1001 }], by: 'user' } };
-  assert.equal(ledger([chosen]).states[p.id], 'counted');
+  const lc = ledger([chosen]);
+  assert.equal(lc.states[p.id], 'counted');
+  assert.equal(lc.placed.find(x => x.id === p.id).attach.id, R1001);
 });
 
 test('חודש שנסגר מול החשבונית יוצא מהמאזן', () => {
@@ -215,7 +228,10 @@ test('M3/M7: שיוך אוטומטי ששמור על הנייר אינו נאמ�
   const stale = { ...P.pSide, attach: { type: null, id: null, ask: [R1004, 'returns_2c14e178-xx'], by: 'auto' } };
   assert.deepEqual(brief(ledger([P.p141, P.p142, P.p123, stale])), [['chargedTwice', 'code_1231', 2, 'problem']]);
   const wrongMain = { ...P.p142, attach: { type: 'return', id: R1004, role: 'main', rowTargets: [0, 1, 2, 3].map(i => ({ line: i, type: 'return', id: R1004 })), by: 'auto' } };
-  assert.deepEqual(brief(ledger([P.p141, wrongMain])), [['chargedTwice', 'code_1231', 2, 'problem'], ['correctionPair', 'code_100', 13, 'question']]);
+  const lw = ledger([P.p141, wrongMain]);
+  assert.equal(lw.placed.find(p => p.id === P.p142.id).attach.role, 'side', 'השיוך השמור (ראשי) לא נאמן — מחושב מחדש');
+  assert.deepEqual(brief(lw), [['chargedTwice', 'code_1231', 2, 'problem']]);
+  assert.ok(lw.items.some(i => i.kind === 'autoCorrection' && i.key === 'code_100'));
 });
 
 test('M4: שורה שהועברה (carry) ונייר משלים עליה — לא מסתיר את החסר האמיתי של 4.10', () => {
@@ -242,14 +258,15 @@ test('M6: "מקבל את ההחלפה" לא מתבטל בגלל החזרה חד�
   assert.ok(!lg.items.some(i => i.kind === 'creditedNotReturned' || i.kind === 'swap'));
 });
 
-test('M7: בהחזרה קטנה (4 שורות) נייר הזיכוי שליד נייר החיוב נשאר משלים — שאלת התיקון נשארת', () => {
+test('M7: בהחזרה קטנה (4 שורות) נייר הזיכוי שליד נייר החיוב נשאר משלים — התיקון מזוהה', () => {
   const small = { id: R1004, date: '2026-10-04', docDate: '2026-10-04', timestamp: 7, credited: true, creditStatus: 'open',
     items: [{ productId: 'code_101', code: '101', name: 'אחיד פרוס ברמן', qty: 13 }, { productId: 'code_344', code: '344', name: 'לחם מקמח כוסמין E-FREE', qty: 2, noteQty: 0 },
       { productId: 'code_238', code: '238', name: 'ברמן אסלי 5 פיתות', qty: 1, noteQty: 0 }, { productId: 'code_450', code: '450', name: 'חלה מרובעת ברמן', qty: 7 }] };
   const rets = F.returns.filter(r => r.id !== R1004).concat([small]);
   const lg = paperLedger({ recs: F.receipts, rets, papers: [P.p142, P.p141], from: '2026-09-01', asOf: '2026-10-05' });
   assert.equal(lg.placed.find(p => p.id === P.p142.id).attach.role, 'side');
-  assert.deepEqual(brief(lg), [['chargedTwice', 'code_1231', 2, 'problem'], ['correctionPair', 'code_100', 13, 'question']]);
+  assert.deepEqual(brief(lg), [['chargedTwice', 'code_1231', 2, 'problem']]);
+  assert.ok(lg.items.some(i => i.kind === 'autoCorrection' && i.key === 'code_100' && i.units === 13));
 });
 
 test('M8: נייר של החזרה מחודש שנסגר — יוצא מהמאזן, לא נספר כזיכוי בלי שיוך', () => {
@@ -262,7 +279,7 @@ test('M8: נייר של החזרה מחודש שנסגר — יוצא מהמאז
 test('שורת חיוב לא נצמדת לעודף קטן ממנה; מזהה קיזוז מושווה במדויק; סוג נייר לא מוכר לא נספר; תעודת משלוח של יום עם קליטה בלי מספר', () => {
   const recs = F.receipts.concat([{ id: 'rc_over_t', date: '2026-10-02', docDate: '2026-10-02', timestamp: 8, items: [{ productId: 'code_100', code: '100', name: 'לחם אחיד ברמן', qty: 1, noteQty: 0 }] }]);
   const lg = paperLedger({ recs, rets: F.returns, papers: [P.p141, P.p142], from: '2026-09-01', asOf: '2026-10-05' });
-  assert.ok(lg.items.some(i => i.kind === 'correctionPair' && i.key === 'code_100'), 'עודף של 1 לא בולע חיוב של 13');
+  assert.ok(lg.items.some(i => i.kind === 'autoCorrection' && i.key === 'code_100' && i.units === 13), 'עודף של 1 לא בולע חיוב של 13');
   assert.equal(api.ledgerOffsetIdMatches('xo2|A|B|code_2381', 'A', 'B', 'code_238'), false);
   assert.equal(api.ledgerOffsetIdMatches('xo2|A|B|code_238~code_239', 'A', 'B', 'code_238'), true);
   const future = paper({ id: 'paper_future', kind: 'invoice-month', number: '1539902', docDay: '2026-10-01', rows: [row(1, '101', 5)] });
@@ -315,12 +332,12 @@ test('נייר מוקדם לחודש: כל ההחזרות המתאימות לפ�
   const lg = ledger([p]);
   assert.equal(lg.states[p.id], 'outside');
   assert.equal(lg.products.code_233.net, 1, 'החוסר של 4.10 על 233 נשאר');
-  // בחודש סגור — השאלה כוללת גם את ההחזרות שלפני (תשובה כזו מוציאה את הנייר מהמאזן)
+  // v130: בחודש סגור, כשיש גם החזרה מתקופת המאזן שמתאימה — הנייר משויך אליה לבד (בלי שאלה), והמאזן לא משתנה
   const q = paper({ id: 'paper_290094800', kind: 'credit', number: '290094800', numerator: '94800', docDay: '2026-10-01', rows: [row(1, '2381', 2)] });
   const lc = ledger([q], { closedThrough: '2026-09-30' });
-  assert.equal(lc.states[q.id], 'needs-attach');
-  const labels = ledgerItemText(lc.items.find(i => i.kind === 'needsAttach'), lc, [q]).actions.map(a => a.label);
-  assert.ok(labels.some(l => /לפני תחילת המאזן/.test(l)), labels.join(' / '));
+  assert.equal(lc.states[q.id], 'counted');
+  assert.ok(lc.docDays[lc.placed.find(x => x.id === q.id).attach.id] >= '2026-10-01', 'החזרה מאחרי הסגירה');
+  assert.deepEqual(nets(lc), nets(ledger([], { closedThrough: '2026-09-30' })));
 });
 
 test('החלפה (100 במקום 101) לא בולעת חוסר אחר של 101 בקליטה; אחרי "מקבל" החוסר נשאר על הקליטה שלו', () => {
@@ -364,18 +381,19 @@ test('חודש סגור: שורה לחוסר בקליטה מלפני הסגיר�
   assert.ok(!lg.items.some(i => i.kind === 'returnNotCreditedYet' && i.part.id === R1001), 'ההחזרה מ-1.10 זוכתה בנייר');
 });
 
-test('שאלת התיקון מציגה את כל שורת נייר החיוב (×13) גם כשעודף קטן אחר של אותו מוצר קיים; "כן" לא מעלים את העודף', () => {
+test('התיקון מזוהה על כל שורת נייר החיוב (×13) גם כשעודף קטן אחר של אותו מוצר קיים; ולא מעלים את העודף', () => {
   const rc = F.receipts.find(r => r.id.startsWith('receipt_83b2692c'));
   const recs = F.receipts.map(r => r === rc ? { ...rc, items: rc.items.concat([{ productId: 'code_100', code: '100', name: 'לחם אחיד', qty: 1, noteQty: 0 }]) } : r);
   const run = ps => paperLedger({ recs, rets: F.returns, papers: ps, from: '2026-09-01', asOf: '2026-10-05' });
   const set = [P.p141, P.p142];
   let lg = run(set);
-  const it = lg.items.find(i => i.kind === 'correctionPair');
-  assert.equal(it.units, 13);
-  assert.match(ledgerItemText(it, lg, set).text, /×13/);
-  const decl = declared({ id: 'decl_corr_x', declare: 'correction', docDay: P.p141.docDay, rows: [{ line: 1, itemCode: '100', productId: it.key, qty: it.units }], standsFor: { returnId: it.pair.returnId, chargePaperId: it.part.id } });
+  assert.deepEqual(lg.items.filter(i => i.key === 'code_100').map(i => [i.kind, i.units, i.state]), [['receivedNotCharged', 1, 'pending'], ['autoCorrection', 13, 'info']]);
+  assert.match(ledgerItemText(lg.items.find(i => i.kind === 'autoCorrection'), lg, set).text, /×13/);
+  // תשובה ישנה "כן, זה תיקון" (מלפני v130) — במקום הזיהוי האוטומטי, לא בנוסף
+  const decl = declared({ id: 'decl_corr_x', declare: 'correction', docDay: P.p141.docDay, rows: [{ line: 1, itemCode: '100', productId: 'code_100', qty: 13 }], standsFor: { returnId: R1004, chargePaperId: P.p141.id } });
   lg = run(set.concat([decl]));
   assert.deepEqual(lg.items.filter(i => i.key === 'code_100').map(i => [i.kind, i.units]), [['receivedNotCharged', 1]]);
+  assert.deepEqual(lg.autoDeclared, []);
 });
 
 test('נתונים פגומים (שיוך משתמש שאינו רשימה, שורה ריקה, פריטים שאינם רשימה) — המאזן לא נופל', () => {
@@ -400,10 +418,9 @@ test('נייר זיכוי לחוסרים בקליטה, כשרק החזרות מ�
   assert.deepEqual(Object.values(lg.products).filter(x => x.net).map(x => [x.key, x.net]), Object.values(base.products).filter(x => x.net).map(x => [x.key, x.net]));
 });
 
-test('שאלת תיקון והחלפה פתוחות גם על ההחזרה שהן מדברות עליה (כרטיס ההחזרה לא אומר "מוסבר")', () => {
+test('תיקון שמזוהה לבד סוגר את ההחזרה; החלפה פתוחה גם על ההחזרה שהיא מדברת עליה (כרטיס ההחזרה לא אומר "מוסבר")', () => {
   const lg = ledger([P.p141, P.p142]);
-  const it = lg.items.find(i => i.kind === 'correctionPair');
-  assert.ok(lg.docViews[R1004].open.indexOf(it.id) !== -1);
+  assert.deepEqual([lg.docViews[R1004].open, lg.docViews[R1004].gap], [[], 0], 'התיקון התקזז — אין מה לבקש על ההחזרה');
   const rets = F.returns.map(r => r.id === R1004 ? { ...r, credited: false } : r);
   const lg2 = paperLedger({ recs: F.receipts, rets, papers: [P.p123, P.pSide], from: '2026-09-01', asOf: '2026-10-05' });
   const sw = lg2.items.find(i => i.kind === 'swap');
@@ -411,15 +428,53 @@ test('שאלת תיקון והחלפה פתוחות גם על ההחזרה שה�
   assert.deepEqual(lg2.docViews[R1004].mainIds, [P.p123.id], 'הנייר הראשי לפי התפקיד, לא לפי הסדר');
 });
 
-test('בחירה של המשתמש ב"לאיזו החזרה?" נשמרת גם לנייר מעורב (רוב השורות חוסרים בקליטה)', () => {
+test('נייר מעורב (רוב השורות חוסרים בקליטה) — משויך לבד להחזרה; בחירה של המשתמש נשמרת', () => {
   const rows = [row(1, '233', 1), row(2, '1231', 2), row(3, '458', 2)];
   const p = paper({ id: 'paper_290090238', kind: 'credit', number: '290090238', numerator: '90238', docDay: '2026-10-05', rows });
   const lg = ledger([p]);
-  assert.equal(lg.states[p.id], 'needs-attach');
+  assert.equal(lg.states[p.id], 'counted', 'בלי שאלה');
+  assert.equal(lg.placed.find(x => x.id === p.id).attach.id, R1004);
+  assert.ok(!lg.items.some(i => i.kind === 'creditedNotReturned' && i.key === 'code_458'));
   const base = api.ledgerDocBase(F.receipts.filter(r => storedReceiptDate(r) >= '2026-09-21'), F.returns.filter(r => ledgerReturnDay(r) >= '2026-09-21' && ledgerReturnDay(r) <= '2026-10-05'));
   const at = api.paperAttach({ ...p, forReturnId: R1004, userPick: true }, base, [], [p], '2026-09-01');
   assert.equal(at.type, 'return'); assert.equal(at.id, R1004);
   const lg2 = ledger([{ ...p, forReturnId: R1004, attach: { ...at, by: 'user' } }]);
   assert.equal(lg2.states[p.id], 'counted');
   assert.ok(!lg2.items.some(i => i.kind === 'creditedNotReturned' && i.key === 'code_458'), '458 נשלח בהחזרה של 4.10 — לא "זיכתה שלא החזרת"');
+});
+
+// ===== v130: הכל בקליטה, בלי שאלות =====
+// נייר "ת.משלוח" קטן (141) נקלט כמו תעודת משלוח: "לא הגיע כלום" — כל שורותיו חוסר בקליטה. המאזן משייך:
+// 1231 ×2 מול העודף של 4.10, ו-100 ×13 מזוהה לבד כתיקון של ברמן (נייר הזיכוי 142 שלידו זיכה 101 במקום).
+const SMALL = { ...P.p141, kind: 'delivery', small: true };
+const RC_SMALL = { id: 'rc_small_t', date: '2026-10-04', docDate: '2026-10-04', timestamp: 9, paperDocs: [{ kind: 'charge', number: '290095141', date: '04/10/2026', units: 15, lines: 2 }],
+  items: [{ productId: 'code_100', code: '100', name: 'לחם אחיד ברמן', qty: 0, noteQty: 13 }, { productId: 'code_1231', code: '1231', name: 'לחמניות 10 בשקית', qty: 0, noteQty: 2 }] };
+
+test('נייר קטן שנקלט ("לא הגיע כלום") עם 142: נשאר רק חוסר 1231 ×2; לחם אחיד מתקזז לבד כתיקון', () => {
+  const papers = [SMALL, P.p142];
+  const lg = paperLedger({ recs: F.receipts.concat([RC_SMALL]), rets: F.returns, papers, from: '2026-09-01', asOf: '2026-10-05' });
+  assert.equal(lg.states[SMALL.id], 'in-receipt', 'הנייר הקטן נספר בקליטה, לא כנייר חיוב');
+  assert.deepEqual(brief(lg), [['chargedNotReceived', 'code_1231', 2, 'problem']]);
+  assert.equal(text(lg, papers, 0), 'חוסר בקליטה של 5.10: לחמניות 10 בשקית ×2 — חויבת ולא קיבלת. לבקש זיכוי מהנהג');
+  const auto = lg.items.find(i => i.kind === 'autoCorrection');
+  assert.deepEqual([auto.key, auto.units, auto.decl.standsFor.receiptId], ['code_100', 13, RC_SMALL.id]);
+  assert.equal(ledgerItemText(auto, lg, papers).text, 'תיקון של ברמן בנייר המשלוח הקטן 95141 מ-4.10: לחם אחיד ברמן ×13 — מבטל זיכוי שניתן על לחם אחיד ברמן במקום אחיד פרוס ברמן. התקזז, אין מה לבקש');
+  assert.deepEqual(nets(lg), { code_1231: 2 });
+  assert.equal(lg.placed.find(p => p.id === P.p142.id).attach.role, 'side', 'הנייר הקטן שלא הגיע לידו — 142 משלים, כמו ליד נייר חיוב');
+});
+
+test('נייר קטן שצורף לקליטה של 5.10 — אותה תוצאה; בלי 142 — לחם אחיד ×13 "חויבת ולא קיבלת"; כשהסחורה שלו הגיעה — אין תיקון', () => {
+  const RC1005 = 'receipt_92580828-0558-42fc-8e7e-2a4fa1560417';
+  const recs = F.receipts.map(r => r.id !== RC1005 ? r : { ...r, paperDocs: r.paperDocs.concat([{ kind: 'charge', number: '290095141' }]),
+    items: r.items.map(i => i.productId === 'code_1231' ? { ...i, noteQty: 22 } : i).concat([{ productId: 'code_100', code: '100', name: 'לחם אחיד ברמן', qty: 0, noteQty: 13 }]) });
+  const lg = paperLedger({ recs, rets: F.returns, papers: [SMALL, P.p142], from: '2026-09-01', asOf: '2026-10-05' });
+  assert.deepEqual(brief(lg), [['chargedNotReceived', 'code_1231', 2, 'problem']]);
+  assert.deepEqual(nets(lg), { code_1231: 2 });
+  const alone = paperLedger({ recs: F.receipts.concat([RC_SMALL]), rets: F.returns, papers: [SMALL], from: '2026-09-01', asOf: '2026-10-05' });
+  assert.ok(alone.items.some(i => i.kind === 'chargedNotReceived' && i.key === 'code_100' && i.units === 13 && i.state === 'problem'), 'אין נייר זיכוי סמוך — חוסר אמיתי');
+  assert.deepEqual(alone.autoDeclared, []);
+  const got = { ...RC_SMALL, items: RC_SMALL.items.map(i => ({ ...i, qty: i.noteQty })) };
+  const lgot = paperLedger({ recs: F.receipts.concat([got]), rets: F.returns, papers: [SMALL, P.p142], from: '2026-09-01', asOf: '2026-10-05' });
+  assert.deepEqual(lgot.autoDeclared, [], 'הסחורה הגיעה — אין מה לתקן');
+  assert.equal(lgot.products.code_100.net, 0);
 });

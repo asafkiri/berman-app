@@ -319,3 +319,36 @@ for(const agorot of [21,31,5000]) test(supplier+': a money gap of '+agorot+' ago
  assert.equal(r.run('pendingReceipt.status'),'ok');
  assert.equal(r.requests.length,1);
 });
+
+// v130: "לא הגיע כלום" — every line of the one paper is a full shortage. Same final receipt as counting
+// nothing by hand; only after a confirmation; never offered when the receiving holds more than one paper.
+test(supplier+': nothing-arrived records every paper line as a full shortage, only after confirmation',async()=>{
+ const data=plainData();data.items[0].qty=0;data.items[1].qty=0;
+ const normal=await scanned(data,[]);
+ normal.run('startReceiptQuantityReview(false)');
+ normal.run("receiptQuantityReview.rows.forEach(x=>{x.kind='shortage';x.difference=String(x.paperQty)})");
+ assert.equal(normal.run('commitReceiptQuantityReview()'),true);closeNormal(normal);
+ const r=await scanned(plainData(),[{productId:'milk',name:'מוצר ראשון',barcode:'7290000000008',qty:4}]);
+ assert.match(r.run('receiptQuantityButtonsHtml()'),/data-role="rc-quantity-none"[^>]*>לא הגיע כלום — הכל חסר/);
+ r.run('showConfirm=(...args)=>{globalThis.pendingChoice=args}');
+ r.click('rc-quantity-none');
+ assert.equal(r.run('receiptQuantityReview'),null,'nothing before the confirmation');
+ assert.equal(r.run('receiptList[0].qty'),4);
+ assert.equal(r.run('pendingChoice[0]'),'לא הגיע כלום?');
+ assert.match(r.run('pendingChoice[1]'),/ומה שכבר נספר יימחק/);
+ r.run('pendingChoice[3]()');closeNormal(r);
+ assert.deepEqual(json(r,'receiptList.map(l=>[l.productId,l.qty])'),[['milk',0],['coffee',0]]);
+ assert.deepEqual(finance(r),finance(normal));
+ assert.equal(r.run('receiptQuantityCheckAudit().method'),'manual');
+ assert.equal(r.requests.length,normal.requests.length,'no paid read');
+});
+if(supplier==='berman')test('berman: nothing-arrived is not offered for a receiving with two papers',async()=>{
+ const data=plainData(),r=create({data});
+ r.run('receiptOpened=true;bermanSeedPhotoFirstScan(2);aiScanDocuments.forEach(d=>d.pages=[{dataUrl:"data:image/jpeg;base64,Zml4dHVyZQ==",orientationConfirmed:true}])');
+ await r.run('bermanRunPaperScanInBackground()');
+ r.run('receiptList=[{productId:"milk",name:"מוצר ראשון",qty:10}];receiptDupConfirmed=true;showConfirm=(a,b,c,fn)=>fn()');
+ assert.equal(r.run('receiptPaperDocCount()'),2);
+ assert.doesNotMatch(r.run('receiptQuantityButtonsHtml()'),/rc-quantity-none/);
+ r.run('startReceiptQuantityReview("none")');
+ assert.deepEqual(json(r,'receiptList.map(l=>[l.productId,l.qty])'),[['milk',10]],'what arrived stays');
+});

@@ -334,13 +334,16 @@ test('התנגשות: מספר ששמור בענן עם שורות אחרות �
   void before; void older;
 });
 
-test('הסוג נקבע לפי המספר: 2900 בלי מספר פנימי = נייר חיוב; עם מספר פנימי = תעודת משלוח; סוג שלא נקרא — אין ברירת מחדל', async () => {
+// v130: נייר "ת.משלוח" קטן (2900 בלי מספר פנימי) הוא תעודת משלוח קטנה (small) — נקלט בקליטה, לא נייר חיוב
+test('הסוג נקבע לפי המספר: 2900 בלי מספר פנימי = תעודת משלוח קטנה; עם מספר פנימי = תעודת משלוח; סוג שלא נקרא — אין ברירת מחדל', async () => {
   const doc = extra => ({ doc: { ...credit142().scan.documents[0], docType: 'invoice', headerText: null, ...extra, rows: [] } });
   const rec = d => JSON.parse(JSON.stringify(app(credit142()).run(`bermanPaperRecord(${JSON.stringify(d)}, { captureId: 'c' })`)));
-  assert.equal(rec(doc({ docNumber: '290095141' })).paper.kind, 'charge');
-  assert.equal(rec(doc({ docNumber: '290095141', headerText: 'תעודת משלוח' })).paper.kind, 'charge', 'המספר גובר על כותרת שנקראה ארוכה');
-  assert.equal(rec(doc({ docNumber: '244734757', internalNumber: '2900951' })).paper.kind, 'delivery');
-  assert.equal(rec(doc({ docNumber: '244734757' })).paper.kind, 'delivery');
+  const kind = d => { const p = rec(d).paper; return p.kind + (p.small ? ':small' : ''); };
+  assert.equal(kind(doc({ docNumber: '290095141' })), 'delivery:small');
+  assert.equal(kind(doc({ docNumber: '290095141', headerText: 'תעודת משלוח' })), 'delivery:small', 'המספר גובר על כותרת שנקראה ארוכה');
+  assert.equal(kind(doc({ docNumber: null, headerText: 'ת.משלוח' })), 'delivery:small', 'בלי מספר — לפי הכותרת הקצרה');
+  assert.equal(kind(doc({ docNumber: '244734757', internalNumber: '2900951' })), 'delivery');
+  assert.equal(kind(doc({ docNumber: '244734757' })), 'delivery');
   assert.equal(rec(doc({ docNumber: '290095142', docType: 'invoice', headerText: 'ת.משלוח החזרה יבש' })).paper.kind, 'credit');
   const unknown = rec(doc({ docType: 'unknown', docNumber: '290095150', rows: undefined }));
   void unknown;

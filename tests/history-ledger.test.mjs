@@ -53,8 +53,9 @@ test('עם 141 ו-142: כרטיסי נייר, וסטטוס הקליטות והה
   assert.match(strip(c142), /נספר במאזן[\s\S]*4\.10\.2026 · 09:04 · 290095142[\s\S]*זיכוי משלים להחזרה מ-4\.10[\s\S]*זוכו 17 יח׳ · 4 שורות/);
   assert.match(strip(c142), /אחיד פרוס ברמן[\s\S]*13 יח׳/);
   assert.match(c142, /data-role="paper-open" data-id="paper_290095142"/);
-  assert.match(strip(c141), /שאלה במאזן[\s\S]*עודף לחמניות 10 בשקית ×2 בקליטה מ-4\.10[\s\S]*וזה התיקון[\s\S]*חויבו 15 יח׳ · 2 שורות/);
-  assert.match(c141, /data-role="ledger-open"/);
+  // v130: התיקון של ברמן מזוהה לבד — בלי "שאלה במאזן"
+  assert.match(strip(c141), /נספר במאזן[\s\S]*עודף לחמניות 10 בשקית ×2 בקליטה מ-4\.10 · תיקון של ברמן: לחם אחיד ברמן ×13 \(התקזז\)[\s\S]*חויבו 15 יח׳ · 2 שורות/);
+  assert.doesNotMatch(strip(c141), /שאלה במאזן|בלי עודף מתאים/);
   // הקליטות
   assert.match(strip(r.card(html, /תעודת קליטה.*4\.10\.2026/)), /אומתה — ניירות 95141, 95142/);
   const c510raw = r.card(html, /תעודת קליטה.*5\.10\.2026/), c510 = strip(c510raw);
@@ -64,18 +65,18 @@ test('עם 141 ו-142: כרטיסי נייר, וסטטוס הקליטות והה
   assert.equal(r.run(`receiptOpenNow(receipts.find(x => x.id === '${R510}'))`), true);
   assert.equal(r.run(`receiptOpenNow(receipts.find(x => x.id === '${R410}'))`), false, '4.10 — הניירות הסבירו את ההפרש');
   assert.equal(r.run(`receiptDiscrepancyInfo(receipts.find(x => x.id === '${R410}')).open`), true, '...אף שבתעודה עצמה עדיין רשום הפרש (לא נכתבה מחדש)');
-  // ההחזרה של 4.10 — שאלת התיקון שייכת אליה
-  assert.equal(r.run(`returnStateNow(returns.find(x => x.id === '${RET410}'))`), 'open');
+  // ההחזרה של 4.10 — התיקון זוהה לבד, 142 זיכה את השאר: סגורה (כמו אחרי "כן, זה תיקון")
+  assert.equal(r.run(`returnStateNow(returns.find(x => x.id === '${RET410}'))`), 'done');
   const cRet = r.card(html, /תעודת חזרות.*4\.10\.2026/);
-  assert.match(strip(cRet), /שאלה במאזן[\s\S]*וזה התיקון/);
+  assert.match(strip(cRet), /זוכתה — נייר 95142/);
+  assert.doesNotMatch(strip(cRet), /שאלה במאזן/);
   // 344 ו-238 זוכו ב-142 — לא "חסר זיכוי", ולא מועברים להחזרה הבאה (זה היה תובע אותם מהנהג שוב)
   assert.doesNotMatch(cRet, /פירוט הפער|data-role="ret-carry"/);
-  assert.match(cRet, /במאזן: 1 לטיפול/);
   // מסננים
   const open = strip(r.history('open')), done = strip(r.history('done'));
-  assert.match(open, /נייר חיוב מהנהג/); assert.doesNotMatch(open, /נייר זיכוי מהנהג/);
+  assert.doesNotMatch(open, /נייר חיוב מהנהג|נייר זיכוי מהנהג/, 'שני הניירות הוסברו — לא "פתוחות"');
   assert.match(open, /חויבת פעמיים/); assert.doesNotMatch(open, /אומתה — ניירות 95141/);
-  assert.match(done, /נייר זיכוי מהנהג/); assert.match(done, /אומתה — ניירות 95141, 95142/);
+  assert.match(done, /נייר זיכוי מהנהג/); assert.match(done, /נייר חיוב מהנהג/); assert.match(done, /אומתה — ניירות 95141, 95142/);
   // באנרים: החוסר של 5.10 נשאר; מה ש-142 זיכה בהחזרה של 4.10 כבר לא "חסר זיכוי"
   const rb = r.run('receiptsBalance()'), tb = r.run('returnsBalance()');
   assert.equal(rb.shortUnits, 2); assert.equal(rb.shortDocs, 1);

@@ -2,8 +2,9 @@
 // על הנתונים של 19.8–5.10.2026 (tests/ledger-2026-10.json) ועל החזרות קטנות סינתטיות.
 // מה שנבדק:
 // - ספטמבר זהה בדיוק, עם ניירות ובלעדיהם (₪14,210.88); חודש לפני תחילת המאזן — בלי ניירות.
-// - אוקטובר: בלי ניירות 4 יח׳ פתוחות (233, 344, 238); עם 141 ו-142 — 1231 ×2 (חיוב כפול) ו-100 ×13,
-//   והשלוש נסגרות; "כן, זה תיקון" — רק 1231 ×2 (₪17). הפירוט היומי מראה את הניירות.
+// - אוקטובר: בלי ניירות 4 יח׳ פתוחות (233, 344, 238); עם 141 ו-142 — רק 1231 ×2 (חיוב כפול, ₪17): השלוש נסגרות,
+//   ו-100 ×13 מתקזז כתיקון של ברמן שזוהה לבד (v130; כמו "כן, זה תיקון"). גם כש-141 נקלט כנייר משלוח קטן.
+//   הפירוט היומי מראה את הניירות.
 // - סגירת חודש: כפתור רק לחודש מלא שעבר ובתוך המאזן; הכתיבה ל-config/app; המאזן מתחיל ביום שאחרי,
 //   והמרכזת של החודש הסגור לא משתנה; "פתח מחדש" מחזיר את הסגירה הקודמת.
 // - כרטיס החזרה: בלי "אישור"; נייר שסגר — "זוכתה, אין מה לעשות"; "הכל זוכה במלואו" רק בבדיקה הידנית
@@ -49,14 +50,28 @@ test('אוקטובר: הניירות במרכזת — כמו המאזן', () => 
   assert.equal(both.papers, 2);
   assert.deepEqual(both.days, { '2026-10-04': ['95141', '95142'] });
   assert.deepEqual(both.r1231, { billed: 42, credited: 1, open: 2 }, '141 חייב את העודף של 4.10 — ו-5.10 חויבה שוב: חיוב כפול');
-  assert.deepEqual(both.r100, { billed: 13, credited: 0, open: 13 }, '100 ×13 מ-141 — עד שיתברר שזה תיקון');
+  // v130: התיקון של ברמן מזוהה לבד (בלי "כן, זה תיקון") — הזיכוי הראשון זיכה 100, ונייר החיוב מבטל אותו
+  assert.deepEqual(both.r100, { billed: 13, credited: 13, open: 0 }, '100 ×13 מ-141 — תיקון שזוהה לבד');
   assert.deepEqual([both.r233.open, both.r344.open, both.r238.open], [0, 0, 0], '142 זיכה אותם');
-  assert.equal(both.open, 15);
+  assert.equal(both.open, 2, 'נשאר רק 1231 ×2');
   assert.equal(both.fair, none.fair, 'מה שבאמת מגיע לא משתנה — נייר אינו סחורה');
+  assert.equal(Math.round((both.net - both.fair) * 100) / 100, 17, '2 × ₪8.50');
+  // תשובה ישנה "כן, זה תיקון" — במקום הזיהוי, לא בנוסף
   const fixed = app([L.papers.p141, L.papers.p142, corr]).month('2026-10-01', '2026-10-31');
-  assert.deepEqual(fixed.r100, { billed: 13, credited: 13, open: 0 }, '"כן, זה תיקון" — הזיכוי הראשון זיכה 100');
-  assert.equal(fixed.open, 2, 'נשאר רק 1231 ×2');
-  assert.equal(Math.round((fixed.net - fixed.fair) * 100) / 100, 17, '2 × ₪8.50');
+  assert.deepEqual(fixed, both);
+});
+
+// v130: נייר "ת.משלוח" קטן נקלט בקליטה ("לא הגיע כלום") — המרכזת זהה למה שהמאזן אומר: רק 1231 ×2
+test('נייר קטן שנקלט בקליטה: במרכזת 100 מתקזז (תיקון שזוהה לבד), ונשאר 1231 ×2 — כמו עם נייר החיוב', () => {
+  const small = { ...L.papers.p141, kind: 'delivery', small: true };
+  const rcSmall = { id: 'rc_small_t', date: '2026-10-04', docDate: '2026-10-04', timestamp: 9, paperDocs: [{ kind: 'charge', number: '290095141', date: '04/10/2026', units: 15, lines: 2 }],
+    items: [{ productId: 'code_100', code: '100', name: 'לחם אחיד ברמן', barcode: '498355', qty: 0, noteQty: 13 }, { productId: 'code_1231', code: '1231', name: 'לחמניות 10 בשקית', barcode: '498256', qty: 0, noteQty: 2 }] };
+  const r = app([small, L.papers.p142], { receipts: [rcSmall].concat(L.receipts.slice().reverse()) });
+  const m = r.month('2026-10-01', '2026-10-31');
+  assert.deepEqual(m.r100, { billed: 13, credited: 13, open: 0 });
+  assert.equal(m.r1231.open, 2);
+  assert.equal(m.open, 2);
+  assert.equal(r.run('currentLedger().count'), 1);
 });
 
 test('הפירוט היומי והשורה העליונה מראים את הניירות', () => {
@@ -89,12 +104,12 @@ test('סגירת חודש: רק חודש מלא שעבר; טרנזקציה על 
   const octBefore = r.month('2026-10-01', '2026-10-31');
   const box = from => r.run(`monthCloseHtml(receiptRangeData('${from}', monthLastDay('${from.slice(0, 7)}')))`);
   assert.match(box('2026-10-01'), /data-role="rc-month-close" data-day="2026-10-31"/);
-  assert.match(box('2026-10-01'), /2 פריטים פתוחים במאזן ייצאו ממנו בסגירה/);
+  assert.match(box('2026-10-01'), /פריט אחד פתוח במאזן ייצא ממנו בסגירה/);
   assert.equal(r.run(`monthCloseHtml(receiptRangeData('2026-11-01', '2026-11-30'))`), '', 'החודש הנוכחי — לא');
   assert.equal(r.run(`monthCloseHtml(receiptRangeData('2026-10-01', '2026-10-20'))`), '', 'חלק מחודש — לא');
   assert.equal(r.run(`monthCloseHtml(receiptRangeData('2026-08-01', '2026-08-31'))`), '', 'לפני תחילת המאזן — לא');
   r.run(`closeLedgerMonth('2026-10-31')`);
-  assert.match(r.node('confirmMsg').textContent, /המאזן ימשיך מ-.*2 פריטים פתוחים ייצאו/);
+  assert.match(r.node('confirmMsg').textContent, /המאזן ימשיך מ-.*פריט אחד פתוח ייצא/);
   assert.equal(r.context.testWrites.length, 0, 'כלום לפני האישור');
   await ok(r);
   const w = r.context.testWrites.at(-1);
@@ -114,7 +129,7 @@ test('סגירת חודש: רק חודש מלא שעבר; טרנזקציה על 
   await ok(r);
   assert.equal(cfg(r).ledgerClosedThrough, '');
   assert.equal(r.run('ledgerClosedThrough'), '');
-  assert.equal(r.run('currentLedger().count'), 2, 'הפריטים חזרו');
+  assert.equal(r.run('currentLedger().count'), 1, 'הפריט חזר (1231 ×2)');
 });
 
 test('סגירות אחת אחרי השנייה, ופתיחה מחדש חוזרת לאחרונה שלפניה — גם כמה פעמים', async () => {
