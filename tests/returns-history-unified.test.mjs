@@ -76,7 +76,7 @@ test('setView("returnsHistory") is only a compatibility alias — it lands on th
   assert.equal(rt.run("currentView = 'returns'; setView('receiptsHistory'); currentView"), 'receiptsHistory');
   const page = html(rt);
   assert.match(page, /<h2 class="[^"]*">היסטוריית תעודות<\/h2>/);
-  assert.match(page, /קליטות וחזרות יחד · פתח קודם את מה שדורש טיפול/);
+  assert.match(page, /קליטות, חזרות והניירות מהנהג יחד · פתח קודם את מה שדורש טיפול/);
   assert.doesNotMatch(page, /<h2[^>]*>תעודות קליטה<\/h2>/, 'the old receipts-only heading is gone');
   // ההיסטוריה המאוחדת היא מסך משני — סרגל "חזרה" מוצג, לשוניות המצב לא
   assert.equal(rt.node('modeTabs').style.display, 'none');

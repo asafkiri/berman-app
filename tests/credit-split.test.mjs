@@ -34,6 +34,8 @@ const byCode = c => productList.find(p => String(p.code) === String(c));
 
 // ===== המצב הגלובלי שהפונקציות הנשלפות נשענות עליו =====
 let products = productList, promos = promoList, receipts = [], returns = [], VAT = 0.18;
+// v127: בלי מאזן (אין ניירות) — הבאנרים כמו קודם
+const ledgerDocStatus = () => null, receiptLedgerStatus = () => null;
 
 const FNS = ['r2', 'lineTotalFromUnit', 'todayStr', 'storedReceiptDate', 'dDisp',
   'normNote', 'noteSign', 'notesAnchor', 'receiptAwaitingDoc', 'cloneReceiptDiffItem',
