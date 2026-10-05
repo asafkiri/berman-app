@@ -816,7 +816,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '128'; // v128: הניירות מהנהג במרכזת החודשית, סגירת חודש מול החשבונית, ובלי "אישור" עיוור בכרטיס ההחזרה
+const APP_VERSION = '129'; // v129: בלי כפתור "מאזן" בפס — מה שפתוח מול ברמן מוסבר במשפטים במסך הקליטה ובניהול
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -5809,8 +5809,7 @@ function commitQty(again) {
 function renderManage() {
   const btn = (role, icon, label, extra) =>
     '<button data-role="' + role + '" class="btn-tap ' + (extra || 'border-slate-200') + ' bg-white border rounded-2xl py-4 px-3 font-black text-slate-700 text-sm flex flex-col items-center justify-center gap-2 shadow-sm"><i class="fa-solid ' + icon + ' text-2xl"></i><span>' + label + '</span></button>';
-  const openRecs = receipts.filter(r => receiptOpenNow(r)); // v127: לפי המאזן כשיש נייר
-  const banner = openRecs.length ? '<button data-role="rc-history" class="btn-tap w-full bg-rose-50 border border-rose-200 text-rose-700 rounded-xl py-2.5 px-3 font-bold text-sm flex items-center justify-between gap-2 mb-3"><span><i class="fa-solid fa-clipboard-question"></i> ' + openRecs.length + ' תעודות עם הפרש פתוח</span><span class="text-xs font-black bg-rose-100 px-2 py-0.5 rounded-lg">לטיפול ←</span></button>' : '';
+  const banner = openIssuesBannerHtml({}); // v129: מה פתוח מול ברמן — משפט לכל דבר
   app.innerHTML = banner + pendingReturnsBannerHtml() +
     '<div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">' +
       '<div class="flex items-center gap-2 mb-3"><i class="fa-solid fa-screwdriver-wrench text-slate-400"></i><span class="font-black text-slate-800 text-base">ניהול</span></div>' +
@@ -6151,11 +6150,10 @@ function renderReceivingScreen() {
   // v107: גם אחרי "צלם את התעודה" מתוך קליטה שכבר נספרה — השורות נשמרות,
   // ושלב הצילום מוצג שוב עד שהנייר נפתח.
   const opened = receiptAttachTarget ? receiptOpened : (receiptOpened || (receiptList.length > 0 && !receiptPhotoStepPending()));
-  const allOpenRecs = receipts.filter(r => receiptOpenNow(r)); // v127: לפי המאזן כשיש נייר
-  const noDocRecs = allOpenRecs.filter(receiptAwaitingDoc);
-  const openRecs = allOpenRecs.filter(r => !receiptAwaitingDoc(r));
+  const noDocRecs = receipts.filter(receiptAwaitingDoc);
   const noDocBanner = noDocRecs.length ? '<button data-role="rc-history" class="btn-tap w-full bg-amber-50 border border-amber-300 text-amber-800 rounded-xl py-2.5 px-3 font-bold text-sm flex items-center justify-between gap-2 mb-3"><span><i class="fa-solid fa-file-circle-xmark"></i> ' + (noDocRecs.length === 1 ? 'קליטה אחת בלי תעודה — ממתינה לנייר' : noDocRecs.length + ' קליטות בלי תעודה — ממתינות לנייר') + '</span><span class="text-xs font-black bg-amber-100 px-2 py-0.5 rounded-lg">לצירוף ←</span></button>' : '';
-  const openBanner = openRecs.length ? '<button data-role="rc-history" class="btn-tap w-full bg-rose-50 border border-rose-200 text-rose-700 rounded-xl py-2.5 px-3 font-bold text-sm flex items-center justify-between gap-2 mb-3"><span><i class="fa-solid fa-clipboard-question"></i> ' + openRecs.length + ' תעודות עם הפרש פתוח</span><span class="text-xs font-black bg-rose-100 px-2 py-0.5 rounded-lg">לטיפול ←</span></button>' : '';
+  // v129: במקום "N תעודות עם הפרש פתוח" וכפתור המאזן בפס — מה פתוח מול ברמן, משפט לכל דבר (בזמן ספירה — שורה אחת)
+  const openBanner = openIssuesBannerHtml({ compact: opened });
   const banner = receiptDuplicatePaperHtml() + noDocBanner + openBanner;
   // v227: כלי הניהול עברו לטאב "ניהול" משלהם בשורת המצבים — מסך הקליטה נשאר נקי
   const topButtons = '';
@@ -15116,13 +15114,67 @@ function refreshLedgerBar() {
   // v126: המקום האחד לכל נייר מהנהג — באותו מקום בכל מסך עבודה (גם בקליטה, במאזן ובמסך הניירות)
   const show = ['receiving', 'returns', 'manage', 'receiptsHistory', 'ledger', 'paperIntake'].indexOf(currentView) !== -1;
   if (!show) { el.innerHTML = ''; return; }
-  let n = 0, failed = false;
-  try { n = currentLedger().count + paperLocalConflicts().length; } catch (e) { failed = true; console.error('ledger failed', e); }
-  const tone = failed ? 'bg-slate-100 border-2 border-slate-200 text-slate-600' : n ? 'bg-amber-500 text-white' : 'bg-emerald-50 border-2 border-emerald-200 text-emerald-800';
+  // v129: בלי כפתור "מאזן" — מה שפתוח מוסבר במשפטים במסך הקליטה ובניהול (openIssuesBannerHtml)
   el.innerHTML = '<div class="flex gap-2">' +
     '<button data-role="paper-photo" class="btn-tap flex-1 min-w-0 min-h-[48px] bg-blue-600 text-white rounded-xl py-2.5 font-black text-sm flex items-center justify-center gap-1.5 shadow"><i class="fa-solid fa-camera"></i> צלם נייר מהנהג</button>' +
-    '<button data-role="paper-gallery" aria-label="בחר תמונות של ניירות מהגלריה" class="btn-tap shrink-0 min-w-[48px] min-h-[48px] bg-white border-2 border-blue-200 text-blue-700 rounded-xl flex items-center justify-center"><i class="fa-solid fa-images"></i></button>' +
-    (currentView === 'ledger' ? '' : '<button data-role="ledger-open" class="btn-tap flex-1 min-w-0 min-h-[48px] rounded-xl py-2.5 font-black text-sm flex items-center justify-center gap-1.5 ' + tone + '"><i class="fa-solid fa-scale-balanced"></i> ' + (failed ? 'מאזן — לא חושב' : n ? 'מאזן: ' + n + ' לטיפול' : 'מאזן ✓') + '</button>') + '</div>';
+    '<button data-role="paper-gallery" aria-label="בחר תמונות של ניירות מהגלריה" class="btn-tap shrink-0 min-w-[48px] min-h-[48px] bg-white border-2 border-blue-200 text-blue-700 rounded-xl flex items-center justify-center"><i class="fa-solid fa-images"></i></button></div>';
+}
+// ===== v129: מה פתוח מול ברמן — משפט לכל דבר =====
+// במקום "מאזן: N לטיפול" בפס ו"N תעודות עם הפרש פתוח": כל מה שדורש טיפול — מהמאזן (חיוב כפול, זיכוי
+// שחסר, שאלה), ומקליטות פתוחות שהמאזן לא רואה (לפני תחילת המאזן, או שהשורות לא נסגרות מול הסכום
+// שבתחתית) — "בקליטה של 5.10: חסר …, עודף …". לחיצה על משפט — למקום שבו מטפלים בו.
+function receiptGapSentence(rc, di) {
+  di = di || receiptDiscrepancyInfo(rc);
+  const n = x => Number(x.open != null ? x.open : x.n) || 0;
+  const parts = [];
+  const short = (di.shortItems || []).filter(x => n(x) > 0), over = (di.overItems || []).filter(x => (Number(x.n) || 0) > 0);
+  if (short.length) parts.push('חסר ' + short.map(x => (x.name || '') + ' ×' + mtxQty(n(x))).join(', '));
+  if (over.length) parts.push('עודף ' + over.map(x => (x.name || '') + ' ×' + mtxQty(x.n)).join(', '));
+  const g = Number(di.unresolvedUnitsGap) || 0;
+  if (g) parts.push(g > 0 ? mtxQty(g) + ' יח׳ בנייר שלא שויכו לשורות' : mtxQty(-g) + ' יח׳ נספרו מעבר לנייר');
+  return 'בקליטה של ' + ledgerDayShort(storedReceiptDate(rc)) + ': ' + (parts.join(' · ') || 'הפרש פתוח');
+}
+function openIssuesList() {
+  const out = [];
+  let lg = null;
+  try { lg = currentLedger(); } catch (e) { console.error('ledger failed', e); out.push({ state: 'question', text: 'המאזן לא חושב — רענן את האפליקציה', role: 'ledger-open' }); }
+  try { paperLocalConflicts().forEach(rec => out.push({ state: 'question', text: 'צילום חדש של ' + paperLabel(rec.paper) + ' נקרא אחרת מהנייר עם אותו מספר — מה נכון?', role: 'ledger-open' })); } catch (e) {}
+  if (lg) {
+    const all = ledgerAllPapers(lg);
+    lg.items.filter(it => it.state === 'problem' || it.state === 'question').forEach(it => {
+      let t = ''; try { t = ledgerItemText(it, lg, all).text; } catch (e) {}
+      if (t) out.push({ state: it.state, text: t, role: 'ledger-open' });
+    });
+  }
+  // קליטה פתוחה שהמאזן לא מכסה: לפני תחילת המאזן, או פער בין השורות לסכום שבתחתית הנייר
+  receipts.forEach(rc => {
+    if (receiptAwaitingDoc(rc)) return;
+    const di = receiptDiscrepancyInfo(rc);
+    if (!di.open) return;
+    const inLedger = lg && storedReceiptDate(rc) >= lg.start;
+    if (inLedger && !di.unresolvedUnitsGap) return;
+    out.push({ state: 'problem', text: receiptGapSentence(rc, di), role: 'rc-history' });
+  });
+  const rank = { problem: 0, question: 1 };
+  return out.sort((a, b) => (rank[a.state] || 0) - (rank[b.state] || 0));
+}
+function openIssuesBannerHtml(opts) {
+  opts = opts || {};
+  const list = openIssuesList();
+  if (!list.length) return '';
+  const problem = list.some(x => x.state === 'problem');
+  const head = list.length === 1 ? 'דבר אחד לטיפול מול ברמן' : list.length + ' דברים לטיפול מול ברמן';
+  const tone = problem ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-amber-50 border-amber-200 text-amber-900';
+  // בזמן ספירה — שורה אחת, כדי לא לדחוף את הספירה למטה
+  if (opts.compact) return '<button data-role="' + list[0].role + '" class="btn-tap w-full ' + tone + ' border rounded-xl py-2.5 px-3 font-bold text-sm flex items-center justify-between gap-2 mb-3"><span class="min-w-0 truncate"><i class="fa-solid fa-triangle-exclamation"></i> ' + head + '</span><span class="text-xs font-black shrink-0">←</span></button>';
+  const max = 3;
+  const line = x => '<button data-role="' + x.role + '" class="btn-tap w-full min-h-[44px] text-right px-3 py-2 border-t ' + (problem ? 'border-rose-100' : 'border-amber-100') + ' flex items-center justify-between gap-2">' +
+    '<span class="min-w-0 text-sm font-bold leading-snug ' + (x.state === 'problem' ? 'text-rose-800' : 'text-amber-900') + '"><i class="fa-solid ' + (x.state === 'problem' ? 'fa-circle-exclamation' : 'fa-circle-question') + '" aria-hidden="true"></i> ' + htmlEscape(x.text) + '</span>' +
+    '<span class="text-xs font-black shrink-0 opacity-70">←</span></button>';
+  return '<div class="' + tone + ' border rounded-xl mb-3 overflow-hidden" role="region" aria-label="' + head + '">' +
+    '<div class="px-3 py-2 text-xs font-black"><i class="fa-solid fa-triangle-exclamation"></i> ' + head + '</div>' +
+    list.slice(0, max).map(line).join('') +
+    (list.length > max ? '<button data-role="ledger-open" class="btn-tap w-full min-h-[44px] text-right px-3 py-2 border-t ' + (problem ? 'border-rose-100' : 'border-amber-100') + ' text-xs font-black">ועוד ' + (list.length - max) + ' ←</button>' : '') + '</div>';
 }
 // הצילום עצמו: הכפתור בפס פותח את המצלמה (או את הגלריה) של כל האפליקציה, והקבצים נכנסים למסך הניירות
 function paperOpenCamera(gallery) {

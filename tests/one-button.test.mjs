@@ -471,7 +471,7 @@ test('מקום אחד: המצלמה רק בפס העליון — בקליטה, �
     noCamera(r.node('app').innerHTML, view);
     const bar = r.node('ledgerBar').innerHTML;
     assert.match(bar, /data-role="paper-photo"[\s\S]*צלם נייר מהנהג/, view); assert.match(bar, /data-role="paper-gallery"/, view);
-    assert.equal(/data-role="ledger-open"/.test(bar), view !== 'ledger', view + ': כפתור המאזן — חוץ ממסך המאזן עצמו');
+    assert.doesNotMatch(bar, /data-role="ledger-open"|מאזן/, view + ': v129 — בלי כפתור המאזן בפס (מה שפתוח מוסבר במשפטים במסך)');
   }
   r.run(`setView('order')`);
   assert.equal(r.node('ledgerBar').innerHTML, '', 'במסך ההזמנה — בלי');
