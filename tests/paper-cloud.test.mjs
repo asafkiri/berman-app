@@ -272,3 +272,78 @@ test('"ביטול תשובה" נרשם ביומן עם התשובה שבוטלה
   const undo = log.find(v => v.title === 'ביטול תשובה במאזן');
   assert.ok(undo); assert.match(undo.details, /אישרת שאין עוד תעודת זיכוי להחזרה מ-4\.10/);
 });
+
+// ===== בדיקה אחרונה =====
+test('מחיקת העותק במספר השגוי לא זורקת את הקריאה המתוקנת שעוד ממתינה לענן', async () => {
+  const cloud = makeCloud();
+  const A = phone(cloud, scan(CREDIT(13)));
+  cloud.dropReply = 1;
+  await read(A);
+  await A.run(`openPaperReview('paper_290095142', 'cap0')`);
+  A.run(`globalThis.__offline = true; const _x = executePaperCreateTask; executePaperCreateTask = async t => { if (globalThis.__offline) throw new Error('network'); return _x(t); };
+    paperUiInput({ id: 'reviewNumber', value: '290095149', getAttribute: () => null, dataset: {} });`);
+  await A.run('savePaperReview()'); await tick();
+  assert.equal(local(A).cap0.paper.id, 'paper_290095149');
+  await A.run(`openPaperReview('paper_290095142')`); // העותק בענן במספר הישן
+  await A.run('deletePaperFromReview()'); await tick();
+  assert.equal(local(A).cap0.discarded, undefined, 'הרשומה המתוקנת נשארת');
+  A.run('globalThis.__offline = false;');
+  await A.run('paperFlushPending()'); await tick();
+  assert.equal(A.run(`currentLedger().states['paper_290095149']`), 'counted');
+});
+
+test('[שנה] שיוך: לא עם תיקונים שלא נשמרו; שיוך של המשתמש מחושב מחדש לשורות שתוקנו', async () => {
+  const cloud = makeCloud();
+  const A = phone(cloud, scan(CREDIT(13)));
+  await read(A);
+  await A.run(`openPaperReview('paper_290095142')`);
+  assert.match(A.node('app').innerHTML, /data-role="review-attach-toggle"/);
+  A.run(`paperReview.paper.rows[1].productId = 'code_1220'; renderPaperReview();`);
+  assert.doesNotMatch(A.node('app').innerHTML, /data-role="review-attach-toggle"/);
+  assert.match(A.node('app').innerHTML, /יש תיקונים שעוד לא נשמרו/);
+  A.run(`paperUiClick({ dataset: { role: 'review-attach', return: '' } })`); await tick();
+  assert.equal(A.run('currentView'), 'paperReview', 'לא נשמר שיוך מעל תיקון שלא נשמר');
+  assert.ok(!cloud.papers()[0].attach || cloud.papers()[0].attach.by !== 'user');
+  // שיוך משתמש, ואז תיקון שורה ואישור — השיוך מחושב מחדש לשורות החדשות
+  const B = phone(cloud, scan(CREDIT(13)));
+  B.run(`papers[0].rows[1].productId = 'code_1220'; papers[0].rows[1].itemCode = '1220';`); // השורה זוהתה לא נכון כשנבחר השיוך
+  await B.run(`setPaperAttach('paper_290095142', ${JSON.stringify(R1004)})`); await tick();
+  assert.equal(cloud.papers()[0].attach.by, 'user');
+  assert.notEqual(cloud.papers()[0].attach.rowTargets.find(t => t.line === 1).type, 'receipt');
+  B.run(`papers[0].rows[1].productId = 'code_1220'; papers[0].rows[1].itemCode = '1220';`);
+  await B.run(`openPaperReview('paper_290095142')`);
+  B.run(`paperReview.paper.rows[1].productId = 'code_233'; paperReview.paper.rows[1].itemCode = '233'; paperReview.checked = true;`);
+  await B.run('savePaperReview()'); await tick();
+  const at = cloud.papers()[0].attach;
+  assert.equal(at.by, 'user'); assert.equal(at.id, R1004);
+  assert.equal(at.rowTargets.find(t => t.line === 1).type, 'receipt', '233 — לחוסר בקליטה של 4.10');
+});
+
+test('נייר שנמחק ושוחזר מהסל — התמונה עוד בטלפון, ואותה תמונה לא נקראת שוב בתשלום', async () => {
+  const cloud = makeCloud();
+  const A = phone(cloud, scan(CREDIT(12)));
+  A.run(`const imgs = {}; paperImgPut = async (k, v) => { imgs[k] = v; }; paperImgGet = async k => imgs[k] || null; globalThis.__imgs = imgs;`);
+  A.run(`openPaperIntake({}); paperIntake.items = [{ captureId: 'cap0', hash: 'HASH1', page: { dataUrl: 'data:img', baseDataUrl: 'data:img', rotation: 0, orientationConfirmed: true }, status: 'photo' }];`);
+  await A.run('paperIntakeRun()'); await tick();
+  await A.run(`openPaperReview('paper_290095142')`);
+  await A.run('deletePaperFromReview()'); await tick();
+  assert.ok(A.run(`!!globalThis.__imgs.cap0`), 'התמונה לא נמחקת עם הנייר');
+  const t = cloud.trash()[0];
+  A.run(`trash = [${JSON.stringify({ ...t, trashId: t.id })}];`);
+  await A.run(`restoreTrashItem(${JSON.stringify(t.id)})`); await tick();
+  await A.run(`openPaperReview('paper_290095142')`); await tick();
+  assert.ok(A.run('!!paperReview.img'), 'הבדיקה אחרי שחזור — עם התמונה');
+  assert.equal(A.run(`paperByHash('HASH1') && paperByHash('HASH1').paper.id`), 'paper_290095142', 'אותה תמונה — "כבר נקרא"');
+});
+
+test('בדיקה של צילום מתנגש — בלי [שנה] שיוך (הוא היה נכתב על הנייר השמור האחר)', async () => {
+  const cloud = makeCloud();
+  const B = phone(cloud, scan(CREDIT(13)));
+  await read(B, 1, '', 'capB');
+  const A = phone(cloud, scan({ ...CREDIT(13), rows: [rowOf(0, '497112', '101', 12), rowOf(1, '497297', '233', 2), rowOf(2, '498034', '344', 2), rowOf(3, '497204', '238', 1)] }));
+  await read(A, 1, '', 'capA');
+  assert.ok(local(A).capA0.conflict);
+  await A.run(`openPaperReview('paper_290095142', 'capA0')`);
+  assert.equal(A.run('paperReview.conflict'), true);
+  assert.doesNotMatch(A.node('app').innerHTML, /review-attach-toggle/);
+});

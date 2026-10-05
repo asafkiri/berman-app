@@ -13427,9 +13427,6 @@ function paperIdb() {
 async function paperImgPut(key, dataUrl) {
   try { const idb = await paperIdb(); await new Promise((res, rej) => { const tx = idb.transaction('img', 'readwrite'); tx.objectStore('img').put({ dataUrl, at: Date.now() }, key); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); } catch (e) {}
 }
-async function paperImgDel(key) {
-  try { const idb = await paperIdb(); idb.transaction('img', 'readwrite').objectStore('img').delete(key); } catch (e) {}
-}
 async function paperImgGet(key) {
   try { const idb = await paperIdb(); return await new Promise(res => { const r = idb.transaction('img').objectStore('img').get(key); r.onsuccess = () => res(r.result ? r.result.dataUrl : null); r.onerror = () => res(null); }); } catch (e) { return null; }
 }
@@ -13458,13 +13455,13 @@ function paperByHash(hash) {
   if (!hash) return null;
   const store = paperLocalResults();
   const local = Object.keys(store).map(k => store[k]).find(r => r && r.hash === hash && !(r.interim && paperUploadBusy));
+  const cloud = papers.find(p => p && p.photoHash === hash && !p.deleted);
   if (local) {
-    if (local.discarded) return local.reason ? { rejected: true, local } : local.outcome === 'duplicate' && local.paper ? { paper: local.paper, local } : null;
-    if (!local.paper) return null;
-    if (papers.some(x => x.id === local.paper.id && x.deleted && x.captureId === local.captureId)) return null;
+    if (local.discarded) return local.reason ? { rejected: true, local } : local.outcome === 'duplicate' && local.paper ? { paper: local.paper, local } : cloud ? { paper: cloud } : null;
+    if (!local.paper) return cloud ? { paper: cloud } : null;
+    if (papers.some(x => x.id === local.paper.id && x.deleted && x.captureId === local.captureId)) return cloud ? { paper: cloud } : null;
     return { paper: local.paper, local };
   }
-  const cloud = papers.find(p => p && p.photoHash === hash && !p.deleted);
   return cloud ? { paper: cloud } : null;
 }
 // סכום שתי הספרות האחרונות של הברקוד בכל שורה — מה שברמן מדפיסה כ"ביקורת"
@@ -13842,7 +13839,7 @@ async function openPaperReview(id, cap) {
   const local = !!found.local && !found.local.ackedAt;
   let st = ''; try { st = currentLedger().states[p.id] || ''; } catch (e) {}
   paperReview = { id: p.id, cap: (found.local && found.local.captureId) || p.captureId || '', paper: p, local, conflict: !!(found.local && found.local.conflict),
-    st, wasAccepted: p.state === 'accepted', attachPick: false, checked: false, query: '', pickLine: null,
+    st, wasAccepted: p.state === 'accepted', attachPick: false, checked: false, query: '', pickLine: null, orig: JSON.stringify(p),
     units: p.anchors && p.anchors.units != null ? p.anchors.units : '', lines: p.anchors && p.anchors.lines != null ? p.anchors.lines : '', img: null };
   setView('paperReview');
   const key = (found.local && found.local.captureId) || p.captureId;
@@ -13912,11 +13909,18 @@ function renderPaperReview() {
     '</div><div class="h-24"></div>';
   if (r.pickLine != null) refreshReviewSearch();
 }
+function paperReviewDirty(r) {
+  const p = r.paper, a = p.anchors || {};
+  return JSON.stringify(p) !== r.orig || String(r.units) !== String(a.units != null ? a.units : '') || String(r.lines) !== String(a.lines != null ? a.lines : '');
+}
 // שיוך נייר זיכוי שכבר נספר: מה המאזן שייך, ו[שנה] — ההחזרות של 14 הימים שלפני התאריך המודפס
 function paperReviewAttachHtml(r) {
   const p = r.paper;
-  if (p.kind !== 'credit' || !r.wasAccepted || !p.docDay) return '';
+  // צילום שמתנגש — השיוך היה נכתב על הנייר השמור האחר; לא כאן
+  if (p.kind !== 'credit' || !r.wasAccepted || !p.docDay || r.conflict) return '';
   const shown = paperAttachShown(p) || 'לא משויך להחזרה — נספר לפי מוצר';
+  // תיקונים שעוד לא נשמרו — קודם "אשר את הנייר" (השיוך נבנה מהשורות השמורות)
+  if (paperReviewDirty(r)) return '<div id="reviewAttach" class="bg-white border border-slate-200 rounded-2xl p-3 mb-3 text-xs font-bold text-slate-600"><span class="font-black text-slate-700">שיוך:</span> ' + htmlEscape(shown) + '<div class="text-slate-400 mt-1">יש תיקונים שעוד לא נשמרו — אשר את הנייר, ואז אפשר לשנות שיוך.</div></div>';
   let list = '';
   if (r.attachPick) {
     const from = ledgerAddDays(p.docDay, -LEDGER_RETURN_WINDOW_DAYS);
@@ -13928,7 +13932,7 @@ function paperReviewAttachHtml(r) {
       return btn(rt.id, 'ההחזרה מ-' + ledgerDayShort(ledgerReturnDay(rt)) + ' · ' + ledgerRowsText(live.length) + ' · ' + mtxQty(live.reduce((a, l) => a + (Number(l.qty) || 0), 0)) + ' יח׳');
     }).join('') + btn('', 'לא שייך להחזרה') + '</div>';
   }
-  return '<div class="bg-white border border-slate-200 rounded-2xl p-3 mb-3"><div class="flex items-center justify-between gap-2"><div class="text-xs font-bold text-slate-600 min-w-0"><span class="font-black text-slate-700">שיוך:</span> ' + htmlEscape(shown) + '</div>' +
+  return '<div id="reviewAttach" class="bg-white border border-slate-200 rounded-2xl p-3 mb-3"><div class="flex items-center justify-between gap-2"><div class="text-xs font-bold text-slate-600 min-w-0"><span class="font-black text-slate-700">שיוך:</span> ' + htmlEscape(shown) + '</div>' +
     '<button data-role="review-attach-toggle" class="btn-tap shrink-0 min-h-[44px] px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-black">' + (r.attachPick ? 'סגור' : 'שנה') + '</button></div>' + list + '</div>';
 }
 function paperReviewStatusHtml() {
@@ -13940,6 +13944,8 @@ function paperReviewStatusHtml() {
     (st.conflictBlocked ? ' · <span class="text-amber-800">המספר זהה לנייר שמור — תקן את המספר, או בחר למעלה: החלף / מחק</span>' : '');
 }
 function refreshPaperReviewStatus() {
+  // השיוך: תיקון שעוד לא נשמר מחליף את [שנה] בהסבר
+  const at = document.getElementById('reviewAttach'); if (at && paperReview) at.outerHTML = paperReviewAttachHtml(paperReview) || '<div id="reviewAttach"></div>';
   const el = $('reviewStatus'); if (el) el.innerHTML = paperReviewStatusHtml();
   const b = $('reviewSave'); if (b) { const ok = paperReviewState().ok; b.disabled = !ok; b.className = 'btn-tap flex-1 py-3 rounded-xl font-black text-white ' + (ok ? 'bg-blue-600' : 'bg-slate-300'); }
 }
@@ -13955,7 +13961,8 @@ async function savePaperReview() {
   p.proof = { ...(p.proof || {}), unitsOk: true, linesOk: true, confirmedBy: deviceName || 'user', confirmedAt: Date.now() };
   p.state = 'accepted'; p.kindKnown = true;
   delete p.review; (p.rows || []).forEach(x => { delete x.flag; });
-  p.attach = (p.attach && p.attach.by === 'user') ? p.attach : paperAttachNow(p);
+  // שיוך שהמשתמש בחר נשמר — אבל מחושב מחדש לשורות שתוקנו (אותה החזרה, או "לא שייך")
+  p.attach = (p.attach && p.attach.by === 'user') ? paperUserAttach(p, p.attach.type === 'return' ? p.attach.id : null) : paperAttachNow(p);
   const ok = await paperWrite(p, r);
   if (ok) { paperReview = null; showToast(ok === 'kept-number' ? 'הנייר אושר ✓ — המספר כבר נשמר בענן, ולכן לא שונה' : 'הנייר אושר ✓', null, null, ok === 'kept-number' ? 4000 : 2200); setView('ledger'); }
 }
@@ -14013,19 +14020,26 @@ async function deletePaperFromReview() {
       // סימן המחיקה נשאר ברשימה עד שהמאזין מביא אותו (כדי שאותה תמונה תזוהה כנמחקת)
       papers = papers.map(x => x.id === target.id ? { ...x, deleted: true, state: 'void' } : x);
       // הצילום שממנו נשמר — נמחק גם במכשיר: אותה תמונה שתיבחר שוב תיקרא מחדש (המשתמש ביקש)
-      if (target.captureId) { paperPatchLocal(target.captureId, cur => cur ? { ...cur, discarded: true, discardedAt: cur.discardedAt || Date.now() } : cur); paperImgDel(target.captureId); }
+      // (רק אם הרשומה עדיין מתארת את המסמך הזה — רשומה שהמספר שלה תוקן ועוד לא נשלחה היא הנייר הנכון.
+      // התמונה נשארת עד הגיזום: אם הנייר ישוחזר מהסל, היא עוד שם לבדיקה)
+      if (target.captureId) paperPatchLocal(target.captureId, cur => cur && (cur.ackedAt || !cur.paper || cur.paper.id === target.id) ? { ...cur, discarded: true, discardedAt: cur.discardedAt || Date.now() } : cur);
     }
     paperReview = null; ledgerInvalidate(); refreshLedgerBar(); setView('ledger');
   });
 }
-async function setPaperAttach(paperId, returnId) {
-  const found = paperFind(paperId); if (!found) return;
-  const p = cloneSafe(found.paper);
-  // userPick: ההחזרה שהמשתמש בחר — השורות שנשלחו בה משויכות אליה גם כשהן מיעוט בנייר
+// שיוך שהמשתמש בחר, לשורות הנוכחיות של הנייר. userPick: ההחזרה שנבחרה מקבלת את השורות שנשלחו
+// בה גם כשהן מיעוט בנייר; "לא שייך להחזרה" — שורות ההחזרה נשארות בלי שיוך, השאר לחוסרים בקליטה.
+function paperUserAttach(p, returnId) {
   const base = { ...p, forReturnId: returnId || null, attach: null, userPick: !!returnId };
   let at = returnId ? paperAttachNow(base) : null;
-  if (!returnId) { const tmp = paperAttachNow({ ...base, kind: 'credit' }); at = { type: null, id: null, role: null, rowTargets: (tmp && tmp.rowTargets || []).map(t => t.type === 'return' ? { line: t.line, type: null, id: null } : t), by: 'user' }; }
-  if (at) { delete at.ask; at.by = 'user'; }
+  if (!returnId) { const tmp = paperAttachNow({ ...base, kind: 'credit' }); at = { type: null, id: null, role: null, rowTargets: (tmp && tmp.rowTargets || []).map(t => t && t.type === 'return' ? { line: t.line, type: null, id: null } : t), by: 'user' }; }
+  if (at) { delete at.ask; delete at.fit; at.by = 'user'; }
+  return at;
+}
+async function setPaperAttach(paperId, returnId) {
+  const found = paperFind(paperId); if (!found) return false;
+  const p = cloneSafe(found.paper);
+  const at = paperUserAttach(p, returnId);
   p.attach = at; p.forReturnId = returnId || null;
   const rev = (Number(p.rev) || 1) + 1;
   const onDevice = !!(found.local && !found.local.ackedAt);
@@ -14033,6 +14047,7 @@ async function setPaperAttach(paperId, returnId) {
     : await runCloudTask('attach paper', { op: 'update', path: dataPath('papers', p.id), data: { attach: at, forReturnId: returnId || null, rev }, operationId: makeOperationId('paper_attach') });
   if (ok && onDevice) logAction('paper', 'שיוך נייר להחזרה', actionDetailsFromCloud('attach paper', { path: dataPath('papers', p.id), data: { forReturnId: returnId || null } }), { paperId: p.id });
   if (ok) { const i = papers.findIndex(x => x.id === p.id); if (i !== -1) papers[i] = { ...papers[i], attach: at, forReturnId: returnId || null, rev }; ledgerInvalidate(); if (currentView === 'ledger') renderLedger(); refreshLedgerBar(); }
+  return !!ok;
 }
 // "אלה שני ניירות שונים" — הנייר לא נחשב עוד כצילום נוסף של הנייר האחר
 async function setPaperDistinct(paperId, otherId) {
@@ -14197,7 +14212,7 @@ function paperUiClick(t) {
   if (role === 'review-kind') { r.paper.kind = t.dataset.kind; r.paper.kindKnown = true; renderPaperReview(); return true; }
   if (role === 'review-checked') { r.checked = !r.checked; renderPaperReview(); return true; }
   if (role === 'review-attach-toggle') { r.attachPick = !r.attachPick; renderPaperReview(); return true; }
-  if (role === 'review-attach') { const id = r.id; setPaperAttach(id, t.dataset.return || '').then(() => { if (paperReview && paperReview.id === id) { paperReview = null; showToast('השיוך נשמר ✓', null, null, 2200); setView('ledger'); } }); return true; }
+  if (role === 'review-attach') { if (paperReviewDirty(r) || r.conflict) { renderPaperReview(); return true; } const id = r.id; setPaperAttach(id, t.dataset.return || '').then(ok => { if (ok && paperReview && paperReview.id === id) { paperReview = null; showToast('השיוך נשמר ✓', null, null, 2200); setView('ledger'); } }); return true; }
   if (role === 'review-pick') { const i = parseInt(id, 10); r.pickLine = r.pickLine === i ? null : i; r.query = ''; renderPaperReview(); const s = $('reviewSearch'); if (s) s.focus(); return true; }
   if (role === 'review-pick-product') { const p = products.find(x => x.id === id); const row = r.paper.rows[r.pickLine]; if (p && row) { row.productId = p.id; row.matchedBy = 'user'; if (!row.itemCode) row.itemCode = productCode(p); } r.pickLine = null; r.query = ''; renderPaperReview(); return true; }
   if (role === 'review-row-del') { r.paper.rows.splice(parseInt(id, 10), 1); r.pickLine = null; renderPaperReview(); return true; }
