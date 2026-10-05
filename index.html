@@ -6416,7 +6416,8 @@ function finishReceipt() {
   // v130: בקליטה של כמה ניירות (תעודה גדולה ונייר "ת.משלוח" קטן) אותו מוצר יכול להופיע בשניהם, והספירה
   // היא שורה אחת למוצר — משווים למספר המוצרים השונים שבניירות, לא לסכום השורות המודפסות
   let expectLines = receiptNoteLines;
-  if (expectLines != null && receiptPaperDocCount() > 1) { const pr = receiptQuantityPaperRows(); if (pr) expectLines = pr.length; }
+  // (כשאי אפשר לצרף את השורות — למשל בצירוף לקליטה שנשמרה — לא בודקים: בדיקת היחידות ומסך ההשוואה שומרים)
+  if (expectLines != null && receiptPaperDocCount() > 1) { const pr = receiptQuantityPaperRows(); expectLines = pr ? pr.length : null; }
   if (!receiptLinesConfirmed && expectLines != null && receiptList.length !== expectLines) {
     showConfirm('פער בספירת הפריטים', (expectLines === receiptNoteLines ? 'בתעודה מודפס "פריטים: ' + receiptNoteLines + '"' : 'בתעודות יש ' + expectLines + ' מוצרים שונים') + ' אך נקלטו ' + receiptList.length + ' שורות. ייתכן ששורה פוספסה או נוספה פעמיים. להמשיך בכל זאת?', 'המשך בכל זאת', function () { receiptLinesConfirmed = true; finishReceipt(); });
     return;
@@ -12974,7 +12975,7 @@ function paperAttach(p, base, others, all, start) {
   // נייר קטן שכל שורותיו הן בדיוק חוסר שעוד לא זוכה בקליטה — זיכוי לחוסר, לא להחזרה
   if (!p.forReturnId && rows.length && rows.length <= 2 && rows.every(r => nearRecs(r.k, -1).some(d => recRoom(d, r.k, -1, true) === r.q)))
     return { type: null, id: null, role: null, rowTargets: rows.map(r => targetRow(r, -1)), by: 'auto' };
-  let R = null, ask = null, askFit = false, tied = [];
+  let R = null, ask = null, askFit = false, tied = [], ranked = [];
   if (p.forReturnId) {
     const f = rets.find(d => d.id === p.forReturnId);
     // צולם מכרטיס ההחזרה — רק אם רוב שורותיו באמת נשלחו בה; אחרת לפי הציון. המשתמש בחר אותה בשאלה — תמיד
@@ -12988,6 +12989,7 @@ function paperAttach(p, base, others, all, start) {
     const cands = rets.filter(d => d.day <= day && d.day >= ledgerAddDays(day, -LEDGER_RETURN_WINDOW_DAYS)).map(score).filter(c => c.score > 0)
       .sort((a, b) => cmp(a, b) || b.d.day.localeCompare(a.d.day));
     const top = cands[0], next = cands[1];
+    ranked = cands;
     if (top && top.score * 2 >= rows.length && !(next && cmp(top, next) === 0)) R = top.d;
     else if (cands.length) ask = cands.slice(0, 4).map(c => c.d.id);
     // fit: המועמדת המובילה מכסה לפחות חצי משורות הנייר (השאלה בגלל תיקו) — אחרת השורות נספרות לפי היעדים שלהן
@@ -12995,7 +12997,11 @@ function paperAttach(p, base, others, all, start) {
     // v130: המועמדות שבאמת שוות למובילה — רק מביניהן בוחרים לבד (לעולם לא מועמדת שמדורגת נמוך יותר)
     if (ask && askFit) tied = cands.filter(c => cmp(top, c) === 0).map(c => c.d.id);
   }
-  if (!R) return { type: null, id: null, role: null, rowTargets: rows.map(r => targetRow(r, -1)), by: 'auto', ...(ask ? { ask, fit: askFit, tied } : {}) };
+  // v130 (סבב 3): בלי החזרה אחת — שורה שמתאימה להחזרה מועמדת הולכת אליה כזיכוי משלים (max מול הרישום),
+  // לא לחוסר בקליטה: אחרת אותן יחידות נספרות פעמיים (ברישום של ההחזרה ובנייר) וחוסר אמיתי בקליטה נסגר
+  // (רק החזרה מתקופת המאזן — החזרה מחודש שנסגר אינה בספירה, ושם השורה נספרת על החוסר בקליטה כמו קודם)
+  const retRow = r => { const c = ask && ranked.find(x => (!start || x.d.day >= start) && onR(x.d, r.k) && r.q <= left(x.d, r.k)); return c ? { line: r.i, type: 'return', id: c.d.id } : null; };
+  if (!R) return { type: null, id: null, role: null, rowTargets: rows.map(r => retRow(r) || targetRow(r, -1)), by: 'auto', ...(ask ? { ask, fit: askFit, tied } : {}) };
   const keysOnR = Object.keys(R.rows).filter(k => R.rows[k].sent > 0);
   const covered = new Set(rows.filter(r => onR(R, r.k)).map(r => r.k));
   const hasMain = (others || []).some(o => o.attach && o.attach.type === 'return' && o.attach.id === R.id && o.attach.role === 'main');
@@ -13071,6 +13077,8 @@ function paperLedger(opts) {
       // נייר שרוב שורותיו לא מתאימות לאף החזרה — נספר לפי היעדים של השורות (בלי שיוך)
       const pick = at.fit ? (Array.isArray(at.tied) ? at.tied : []).find(id => byId.has('return:' + id)) : null;
       if (pick) at = paperAttach({ ...p, forReturnId: pick, userPick: true }, baseWide, placed, real, opts.tieStart || start);
+      // נבחרה לבד מבין שוות — לא ראיה לתיקון של ברמן (בהחזרה אחרת מהשוות הנייר היה "ראשי")
+      if (pick && at.type === 'return') at = { ...at, tiePick: true };
       // נייר שרוב שורותיו שייכות להחזרה מלפני תחילת המאזן — לשם; נייר של חוסרים בקליטה שרק חלק ממנו
       // משותף להחזרות ישנות — נספר לפי היעדים של השורות (קליטה מלפני ההתחלה — לא נספרת)
       const onRecs = (Array.isArray(at.rowTargets) ? at.rowTargets : []).every(t => t && t.type === 'receipt' && byId.has('receipt:' + t.id));
@@ -13145,15 +13153,18 @@ function paperLedger(opts) {
   const pairCtx = { placed, docOf: (t, id) => byId.get(t + ':' + id), mainOf };
   const answered = (cp, k) => declared.some(d => d.declare === 'correction' && d.standsFor && d.standsFor.chargePaperId === cp.id && (d.rows || []).some(r => r && paperRowKey(r).key === k));
   const corrCands = [];
-  loose.forEach(x => { if (x.sign > 0 && !answered(x.p, x.k)) corrCands.push({ cp: x.p, k: x.k, q: x.q, recId: null, line: x.line }); });
+  // עודף של אותו מוצר בקליטה סמוכה (גם קטן מהשורה), או מאזן המוצר קטן מהשורה — חלק ממה שחויב הגיע: לא תיקון
+  const unexplained = (k, q, day, recId) => {
+    const lo = ledgerAddDays(day, -7), hi = ledgerAddDays(day, 1);
+    const net = (gaps[k] || []).reduce((a, z) => a + z.gap, 0);
+    return net >= q && !(gaps[k] || []).some(z => z.type === 'receipt' && z.id !== recId && z.gap < 0 && z.day >= lo && z.day <= hi);
+  };
+  loose.forEach(x => { if (x.sign > 0 && !answered(x.p, x.k) && unexplained(x.k, x.q, String(x.p.docDay), null)) corrCands.push({ cp: x.p, k: x.k, q: x.q, recId: null, line: x.line }); });
   smallIn.forEach(sp => sp.rows.forEach((r, line) => {
     if (!r) return;
     const k = paperRowKey(r).key, q = Number(r.qty) || 0;
     const own = (gaps[k] || []).find(z => z.type === 'receipt' && z.id === sp.recId);
-    const net = (gaps[k] || []).reduce((a, z) => a + z.gap, 0);
-    const day = String(sp.docDay), lo = ledgerAddDays(day, -7), hi = ledgerAddDays(day, 1);
-    const surplusNear = (gaps[k] || []).some(z => z.type === 'receipt' && z.id !== sp.recId && z.gap < 0 && z.day >= lo && z.day <= hi);
-    if (q > 0 && own && own.gap >= q && net >= q && !surplusNear && !answered(sp, k)) corrCands.push({ cp: sp, k, q, recId: sp.recId, line });
+    if (q > 0 && own && own.gap >= q && unexplained(k, q, String(sp.docDay), sp.recId) && !answered(sp, k)) corrCands.push({ cp: sp, k, q, recId: sp.recId, line });
   }));
   corrCands.forEach(c => { c.list = ledgerCorrectionCandidates(c.k, c.cp, c.q, pairCtx); });
   const slotUses = {}, slotTaken = new Set();
@@ -13161,7 +13172,7 @@ function paperLedger(opts) {
   // שורת זיכוי ש"כן, זה תיקון" (תשובה מגרסה קודמת) כבר הסבירה — לא מסבירה חיוב נוסף
   declared.filter(d => d.declare === 'correction' && !d.auto && d.standsFor && d.standsFor.chargePaperId).forEach(d => {
     const cp = placed.find(x => x.id === d.standsFor.chargePaperId) || smallIn.find(x => x.id === d.standsFor.chargePaperId);
-    if (cp) (Array.isArray(d.rows) ? d.rows : []).filter(Boolean).forEach(r => ledgerCorrectionCandidates(paperRowKey(r).key, cp, Number(r.qty) || 0, pairCtx).forEach(m => slotTaken.add(m.slot)));
+    if (cp) (Array.isArray(d.rows) ? d.rows : []).filter(Boolean).forEach(r => ledgerCorrectionCandidates(paperRowKey(r).key, cp, Number(r.qty) || 0, pairCtx, true).forEach(m => slotTaken.add(m.slot)));
   });
   corrCands.forEach(c => {
     if (c.list.length !== 1 || slotUses[c.list[0].slot] !== 1 || slotTaken.has(c.list[0].slot)) return;
@@ -13383,13 +13394,16 @@ function ledgerClassify(k, x, units, sign, c) {
 // v130: כל זוגות התיקון האפשריים לשורת חיוב X ×q בנייר chargeP: שורה בנייר זיכוי מאותו יום (שני הנומרטורים
 // מודפסים, הפרש ≤3) על מוצר אחר Y באותה כמות, בהחזרה שזוכתה ברישום על Y לפחות בכמות הזו, ושאין לה נייר ראשי.
 // slot — שורת הזיכוי (נייר + מספר שורה), כדי ששורת זיכוי אחת לא תסביר שני חיובים.
-function ledgerCorrectionCandidates(k, chargeP, q, c) {
+// legacy — לחסימה בלבד (שורות ש"כן, זה תיקון" ישן כבר הסביר): הכלל של הגרסאות הקודמות — בלי נומרטור אין
+// מגבלת ±3, ובלי בדיקת כיסוי ובחירה בשוויון. רחב יותר = חוסם יותר = בטוח יותר.
+function ledgerCorrectionCandidates(k, chargeP, q, c, legacy) {
   const out = [], nc = paperNumerator(chargeP);
-  if (!chargeP || !nc || !(q > 0)) return out;
+  if (!chargeP || (!nc && !legacy) || !(q > 0)) return out;
   for (const p of c.placed || []) {
     if (p.kind !== 'credit' || String(p.docDay) !== String(chargeP.docDay)) continue;
     const np = paperNumerator(p);
-    if (!np || Math.abs(np - nc) > 3) continue;
+    if (legacy ? (np && nc && Math.abs(np - nc) > 3) : (!np || Math.abs(np - nc) > 3)) continue;
+    if (!legacy && p.attach && p.attach.tiePick) continue;
     const retId = p.attach && p.attach.type === 'return' ? p.attach.id : null;
     const R = retId && c.docOf('return', retId);
     if (!R || (c.mainOf[retId] || []).length || !R.credited) continue;
@@ -13397,7 +13411,7 @@ function ledgerCorrectionCandidates(k, chargeP, q, c) {
     // מסביר את ההחזרה, ואין "זיכוי ראשון שלא צולם" לתקן
     const onR = new Set((Array.isArray(p.rows) ? p.rows : []).filter(Boolean).map(r => paperRowKey(r).key).filter(y => R.rows[y] && (R.rows[y].sent > 0 || R.rows[y].cred > 0)));
     const linesOnR = Object.keys(R.rows).filter(y => R.rows[y].sent > 0).length || 1;
-    if (onR.size * 2 >= linesOnR) continue;
+    if (!legacy && onR.size * 2 >= linesOnR) continue;
     (Array.isArray(p.rows) ? p.rows : []).forEach((r, i) => {
       if (!r) return;
       const y = paperRowKey(r).key;
@@ -14287,8 +14301,9 @@ function receivingDeliveryRoute(scan, paper, item, opts) {
   if (aiTotalPages() > 0 && !(resp && receiptPaperScanState === 'ok')) return { action: 'refuse', reason: resp ? 'photos-failed' : 'photos' };
   // 7. אין קליטה פתוחה
   if (receivingDraftEmpty()) {
-    // v130: נייר קטן לא מצורף לקליטה שנשמרה בלי נייר (היא כמעט תמיד התעודה הגדולה) — פותח קליטה משלו
-    const bare = !opts.fresh && !paper.small && day && receipts.find(r => r && receiptAwaitingDoc(r) && storedReceiptDate(r) === day);
+    // קליטה שנשמרה בלי נייר מאותו יום — הניירות שלה (גם נייר "ת.משלוח" קטן: מה שהגיע איתו נספר שם) מצטרפים אליה.
+    // v130 (סבב 3): לא פותחים לנייר הקטן קליטה משלו — אז התעודה הגדולה הייתה מצטרפת אליה ולא לקליטה שבה הספירה
+    const bare = !opts.fresh && day && receipts.find(r => r && receiptAwaitingDoc(r) && storedReceiptDate(r) === day);
     if (bare) return ask('bare', 'bare', { receipt: bare });
     if (unbound && (day === todayStr() || small)) return { action: 'new' };
     return ask('date-new', 'new');

@@ -110,13 +110,14 @@ test('סבב 2: כרטיס הנייר — רק השורה שזוהתה כתיק�
   assert.doesNotMatch(t, /×2 \(התקזז\)/);
 });
 
-test('סבב 2: נייר קטן ביום שיש בו קליטה שנשמרה בלי נייר — פותח קליטה משלו, לא מצורף לתעודה הגדולה', async () => {
-  const bare = { id: 'rc_bare', date: days(-1).toLocaleDateString('en-CA'), docDate: days(-1).toLocaleDateString('en-CA'), noDoc: true, noteParts: [], items: [{ productId: 'code_101', name: 'אחיד', qty: 12 }], timestamp: 1 };
+// סבב 3: קליטה שנשמרה בלי נייר — הניירות שלה מצטרפים אליה, גם הנייר הקטן (מה שהגיע איתו נספר שם). פתיחת
+// קליטה נפרדת לנייר הקטן הייתה מושכת אליה גם את התעודה הגדולה, והספירה שבקליטה הישנה לא הייתה מקבלת נייר
+test('סבב 3: נייר קטן ביום שיש בו קליטה שנשמרה בלי נייר — מצטרף אליה (כמו התעודה הגדולה)', async () => {
+  const d = days(-1).toLocaleDateString('en-CA');
+  const bare = { id: 'rc_bare', date: d, docDate: d, noDoc: true, noteParts: [], items: [{ productId: 'code_101', name: 'אחיד', qty: 12 }], timestamp: 1 };
   const r = app(small('290095177', days(-1)), { receipts: [bare] });
   await readPapers(r);
-  assert.equal(r.run('testConfirms.length'), 0, 'בלי "לצרף לקליטה שנשמרה בלי תעודה?"');
-  assert.equal(r.run('receiptOpened'), true);
-  assert.notEqual(r.run('receiptDraftId'), 'rc_bare');
+  assert.equal(r.run(`receivingDeliveryRoute(paperIntake.items[0].scan, paperFind('paper_290095177').paper, null, {}).reason`), 'bare');
 });
 
 test('סבב 2: תעודה גדולה ונייר קטן עם אותו מוצר — הספירה שתואמת לשניהם לא שואלת "פער בספירת הפריטים"', async () => {
@@ -128,4 +129,14 @@ test('סבב 2: תעודה גדולה ונייר קטן עם אותו מוצר �
   r.run(`receiptList = receiptQuantityPaperRows().map(x => ({ productId: x.productId, name: x.name, barcode: x.barcode, qty: x.paperQty })); receiptDupConfirmed = true; saveReceiptDraft(); finishReceipt();`);
   assert.ok(!JSON.parse(r.run('JSON.stringify(testConfirms.map(c => c.title))')).some(t => /פער בספירת הפריטים/.test(t)));
   assert.ok(r.run('!!pendingReceipt || currentView === "reconcile"'), 'ממשיך לסיכום');
+});
+
+test('סבב 3: כמה ניירות ושורות שאי אפשר לצרף (למשל צירוף לקליטה שנשמרה) — בלי "פער בספירת הפריטים" על סכום השורות המודפסות', async () => {
+  const r = app(delivery('77001234'));
+  await receive(r);
+  r.serve(small('290095180', days(0)));
+  await readPapers(r, 1, 1);
+  r.run(`receiptList = receiptQuantityPaperRows().map(x => ({ productId: x.productId, name: x.name, barcode: x.barcode, qty: x.paperQty })); receiptDupConfirmed = true; saveReceiptDraft();
+    receiptQuantityPaperRows = () => null; finishReceipt();`);
+  assert.ok(!JSON.parse(r.run('JSON.stringify(testConfirms.map(c => c.title))')).some(t => /פער בספירת הפריטים/.test(t)));
 });
