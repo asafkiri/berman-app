@@ -77,3 +77,55 @@ test('סקירה 8: נייר קטן מחודש אחר — לא נכנס לבד (
   r.context.testP = { ...p, docDay: '2026-11-01' };
   assert.equal(r.run(`receivingDeliveryRoute(${scan}, testP, null, { fresh: true }).action`), 'new', 'אותו חודש — נכנס לבד');
 });
+
+// ===== סבב סקירה 2 =====
+const L2 = JSON.parse(fs.readFileSync(new URL('./ledger-2026-10.json', import.meta.url), 'utf8'));
+function ledgerApp(recs, rets, papersList) {
+  const r = runtime({ data: { ...fixture(), products: L2.products } });
+  r.context.testL = { receipts: recs, returns: rets, papers: papersList };
+  r.run(`receipts = testL.receipts; returns = testL.returns; papers = testL.papers; todayStr = () => '2026-10-05'; ledgerInvalidate();`);
+  return r;
+}
+
+test('סבב 2: ההודעה אחרי שמירה מחושבת עם הקליטה שנשמרה עכשיו (גם לפני שהענן החזיר אותה), בלי לשנות את הרשימה', () => {
+  const r = ledgerApp([], [], []);
+  r.context.saved = { id: 'rc_new', date: '2026-10-05', docDate: '2026-10-05', timestamp: 1, paperDocs: [{ number: '244799991' }], items: [{ productId: 'code_101', code: '101', name: 'אחיד פרוס', qty: 7, noteQty: 10 }] };
+  assert.match(r.run('receivingBalanceLine(saved)'), /^במאזן: חוסר בקליטה של 5\.10: .* ×3 — חויבת ולא קיבלת/);
+  assert.equal(r.run('receipts.length'), 0, 'הרשימה לא השתנתה');
+  assert.equal(r.run('currentLedger().count'), 0, 'והמאזן חזר לרשימה האמיתית');
+});
+
+test('סבב 2: קליטה שנשמרה בלי נייר — לא "הכל מאוזן", אלא ממתין לנייר', () => {
+  const r = ledgerApp([{ id: 'rc_bare', date: '2026-10-04', docDate: '2026-10-04', timestamp: 1, noDoc: true, noteParts: [], items: [{ productId: 'code_101', code: '101', name: 'x', qty: 3 }] },
+    { id: 'rc_ok', date: '2026-10-05', docDate: '2026-10-05', timestamp: 2, paperDocs: [{ number: '244799992' }], items: [{ productId: 'code_101', code: '101', name: 'x', qty: 3, noteQty: 3 }] }], [], []);
+  assert.equal(r.run('receivingBalanceLine()'), 'אין מה לבקש מהנהג כרגע · דבר אחד ממתין לנייר (במאזן)');
+});
+
+test('סבב 2: כרטיס הנייר — רק השורה שזוהתה כתיקון "(התקזז)"; השורה השנייה של אותו מוצר — בלי עודף מתאים', () => {
+  const ch = { ...L2.papers.p141, rows: [L2.papers.p141.rows[0], L2.papers.p141.rows[1], { ...L2.papers.p141.rows[0], line: 3, qty: 2 }] };
+  const r = ledgerApp(L2.receipts.slice().reverse(), L2.returns.slice().reverse(), [ch, L2.papers.p142]);
+  const t = r.run(`paperAttachShown(papers[0])`);
+  assert.match(t, /תיקון של ברמן: .* ×13 \(התקזז\)/);
+  assert.match(t, /שורה אחת בלי עודף מתאים בקליטה/);
+  assert.doesNotMatch(t, /×2 \(התקזז\)/);
+});
+
+test('סבב 2: נייר קטן ביום שיש בו קליטה שנשמרה בלי נייר — פותח קליטה משלו, לא מצורף לתעודה הגדולה', async () => {
+  const bare = { id: 'rc_bare', date: days(-1).toLocaleDateString('en-CA'), docDate: days(-1).toLocaleDateString('en-CA'), noDoc: true, noteParts: [], items: [{ productId: 'code_101', name: 'אחיד', qty: 12 }], timestamp: 1 };
+  const r = app(small('290095177', days(-1)), { receipts: [bare] });
+  await readPapers(r);
+  assert.equal(r.run('testConfirms.length'), 0, 'בלי "לצרף לקליטה שנשמרה בלי תעודה?"');
+  assert.equal(r.run('receiptOpened'), true);
+  assert.notEqual(r.run('receiptDraftId'), 'rc_bare');
+});
+
+test('סבב 2: תעודה גדולה ונייר קטן עם אותו מוצר — הספירה שתואמת לשניהם לא שואלת "פער בספירת הפריטים"', async () => {
+  const r = app(delivery('77001234'));
+  await receive(r);
+  r.serve(small('290095180', days(0)));
+  await readPapers(r, 1, 1);
+  assert.deepEqual(state(r).nums, ['77001234', '290095180']);
+  r.run(`receiptList = receiptQuantityPaperRows().map(x => ({ productId: x.productId, name: x.name, barcode: x.barcode, qty: x.paperQty })); receiptDupConfirmed = true; saveReceiptDraft(); finishReceipt();`);
+  assert.ok(!JSON.parse(r.run('JSON.stringify(testConfirms.map(c => c.title))')).some(t => /פער בספירת הפריטים/.test(t)));
+  assert.ok(r.run('!!pendingReceipt || currentView === "reconcile"'), 'ממשיך לסיכום');
+});
