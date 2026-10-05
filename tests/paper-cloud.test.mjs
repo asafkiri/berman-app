@@ -201,3 +201,74 @@ test('צילום שמתנגש עם נייר שמור: "אשר" חסום עד ש�
   assert.match(html, /מחכה לבדיקה שלך/);
   assert.match(html, /data-role="ledger-paper-open"/);
 });
+
+// ===== סבב סקירה שלישי =====
+test('מחיקה מהעותק שבענן בטלפון שצילם: אותה תמונה נקראת שוב (המשתמש ביקש), והתמונה לא נשמרת לנצח', async () => {
+  const cloud = makeCloud();
+  const A = phone(cloud, scan(CREDIT(13)));
+  A.run(`openPaperIntake({}); paperIntake.items = [{ captureId: 'cap0', hash: 'same-photo', page: { dataUrl: 'data:x', baseDataUrl: 'data:x', rotation: 0, orientationConfirmed: true }, status: 'photo' }];`);
+  await A.run('paperIntakeRun()'); await tick();
+  assert.ok(local(A).cap0.ackedAt);
+  await A.run(`openPaperReview('paper_290095142')`);
+  assert.equal(A.run('paperReview.local'), false);
+  await A.run('deletePaperFromReview()'); await tick();
+  assert.equal(cloud.papers()[0].deleted, true);
+  assert.equal(local(A).cap0.discarded, true, 'גם הרשומה של הצילום במכשיר');
+  assert.equal(A.run(`paperByHash('same-photo')`), null, 'אותה תמונה — תיקרא שוב');
+  assert.equal(A.run(`papers.some(p => p.id === 'paper_290095142' && p.deleted && p.captureId === 'cap0') ? 'skip' : 'keep'`), 'skip', 'תמונה של נייר שנמחק — לא נשמרת בגיזום');
+});
+
+test('צילום נוסף של נייר שעוד "לבדיקה" — לא נאמר שהוא נספר', async () => {
+  const cloud = makeCloud();
+  const A = phone(cloud, scan(CREDIT(12)));
+  await read(A, 1, '', 'c1');
+  await read(A, 1, '', 'c2');
+  assert.equal(local(A).c20.outcome, 'duplicate');
+  const card = A.run(`paperIntakeItemHtml(paperIntake.items[0])`);
+  assert.doesNotMatch(card, /נספר פעם אחת/);
+  assert.match(card, /צילום נוסף של נייר שכבר נשמר — לא נקרא עד הסוף/);
+});
+
+test('ההתנגשות נעלמת כשהנייר השמור נמחק; "החלף" לא שולח לסל את סימן המחיקה; רשומת סל של סימן מחיקה לא "משוחזרת"', async () => {
+  const cloud = makeCloud();
+  const B = phone(cloud, scan(CREDIT(13)));
+  await read(B, 1, '', 'capB');
+  const A = phone(cloud, scan(CREDIT(5)));
+  await read(A, 1, '', 'capA');
+  assert.ok(local(A).capA0.conflict);
+  await B.run(`openPaperReview('paper_290095142')`);
+  await B.run('deletePaperFromReview()'); await tick();
+  A.run('papers = __cloudPapers(); paperClearStaleConflicts();'); // המאזין
+  await A.run('paperFlushPending()'); await tick(); // הסנכרון שהניקוי מתזמן
+  assert.equal(A.run('paperLocalConflicts().length'), 0);
+  assert.equal(cloud.papers()[0].captureId, 'capA0', 'הצילום החדש נשמר במקום סימן המחיקה');
+  assert.equal(cloud.trash().length, 1, 'רק הנייר שנמחק — לא סימן המחיקה');
+  B.run(`trash = [${JSON.stringify({ trashId: 'junk', collectionName: 'papers', originalId: 'paper_290095142', data: null, paperData: { paper: { id: 'paper_290095142', deleted: true, state: 'void', rows: [] } } })}];`);
+  await B.run(`restoreTrashItem('junk')`);
+  assert.ok(B.toasts.some(t => /אין מה לשחזר/.test(t)));
+});
+
+test('נייר שהסוג שלו לא נקרא — בלי כמויות עד שבוחרים סוג; "תעודת משלוח" נשארת בלי כמויות', async () => {
+  const cloud = makeCloud();
+  const kindless = { ...DELIVERY(18), docType: 'unknown', headerText: null, internalNumber: null };
+  const A = phone(cloud, scan(kindless));
+  await read(A);
+  const id = cloud.papers()[0].id;
+  await A.run(`openPaperReview(${JSON.stringify(id)})`);
+  assert.equal(A.run('paperReview.paper.kind'), null);
+  assert.doesNotMatch(A.node('app').innerHTML, /data-role="review-qty"/);
+  A.run(`paperUiClick({ dataset: { role: 'review-kind', kind: 'delivery' } })`);
+  assert.doesNotMatch(A.node('app').innerHTML, /data-role="review-qty"/);
+  A.run(`paperUiClick({ dataset: { role: 'review-kind', kind: 'credit' } })`);
+  assert.match(A.node('app').innerHTML, /data-role="review-qty"/);
+});
+
+test('"ביטול תשובה" נרשם ביומן עם התשובה שבוטלה', async () => {
+  const cloud = makeCloud();
+  const A = phone(cloud, scan(CREDIT(13)));
+  await A.run(`saveLedgerDeclaration('decl_done_x', { declare: 'complete', returnId: ${JSON.stringify(R1004)} })`); await tick();
+  await A.run(`undoLedgerDeclaration('decl_done_x')`); await tick();
+  const log = [...cloud.store.entries()].filter(([k]) => k.includes('/actionLog/')).map(([, v]) => v);
+  const undo = log.find(v => v.title === 'ביטול תשובה במאזן');
+  assert.ok(undo); assert.match(undo.details, /אישרת שאין עוד תעודת זיכוי להחזרה מ-4\.10/);
+});

@@ -382,3 +382,37 @@ test('נתונים פגומים (שיוך משתמש שאינו רשימה, שו
   assert.doesNotThrow(() => paperLedger({ recs, rets, papers: bad, from: '2026-09-01', asOf: '2026-10-05' }));
 });
 
+
+// ===== סבב סקירה שלישי =====
+test('נייר זיכוי לחוסרים בקליטה, כשרק החזרות מלפני תחילת המאזן חולקות איתו מוצר — נספר על הקליטה (לא "מחוץ לתקופה")', () => {
+  const p = paper({ id: 'paper_290090056', kind: 'credit', number: '290090056', numerator: '90056', docDay: '2026-09-01', rows: [row(1, '233', 1), row(2, '3604', 1)] });
+  const lg = ledger([p]);
+  assert.equal(lg.states[p.id], 'counted');
+  assert.deepEqual(lg.placed.find(x => x.id === p.id).attach.rowTargets.map(t => t.type), ['receipt', 'receipt']);
+  const base = ledger([]);
+  assert.deepEqual(Object.values(lg.products).filter(x => x.net).map(x => [x.key, x.net]), Object.values(base.products).filter(x => x.net).map(x => [x.key, x.net]));
+});
+
+test('שאלת תיקון והחלפה פתוחות גם על ההחזרה שהן מדברות עליה (כרטיס ההחזרה לא אומר "מוסבר")', () => {
+  const lg = ledger([P.p141, P.p142]);
+  const it = lg.items.find(i => i.kind === 'correctionPair');
+  assert.ok(lg.docViews[R1004].open.indexOf(it.id) !== -1);
+  const rets = F.returns.map(r => r.id === R1004 ? { ...r, credited: false } : r);
+  const lg2 = paperLedger({ recs: F.receipts, rets, papers: [P.p123, P.pSide], from: '2026-09-01', asOf: '2026-10-05' });
+  const sw = lg2.items.find(i => i.kind === 'swap');
+  assert.ok(sw && lg2.docViews[R1004].open.indexOf(sw.id) !== -1);
+  assert.deepEqual(lg2.docViews[R1004].mainIds, [P.p123.id], 'הנייר הראשי לפי התפקיד, לא לפי הסדר');
+});
+
+test('בחירה של המשתמש ב"לאיזו החזרה?" נשמרת גם לנייר מעורב (רוב השורות חוסרים בקליטה)', () => {
+  const rows = [row(1, '233', 1), row(2, '1231', 2), row(3, '458', 2)];
+  const p = paper({ id: 'paper_290090238', kind: 'credit', number: '290090238', numerator: '90238', docDay: '2026-10-05', rows });
+  const lg = ledger([p]);
+  assert.equal(lg.states[p.id], 'needs-attach');
+  const base = api.ledgerDocBase(F.receipts.filter(r => storedReceiptDate(r) >= '2026-09-21'), F.returns.filter(r => ledgerReturnDay(r) >= '2026-09-21' && ledgerReturnDay(r) <= '2026-10-05'));
+  const at = api.paperAttach({ ...p, forReturnId: R1004, userPick: true }, base, [], [p], '2026-09-01');
+  assert.equal(at.type, 'return'); assert.equal(at.id, R1004);
+  const lg2 = ledger([{ ...p, forReturnId: R1004, attach: { ...at, by: 'user' } }]);
+  assert.equal(lg2.states[p.id], 'counted');
+  assert.ok(!lg2.items.some(i => i.kind === 'creditedNotReturned' && i.key === 'code_458'), '458 נשלח בהחזרה של 4.10 — לא "זיכתה שלא החזרת"');
+});
