@@ -1,8 +1,8 @@
-// v107 — "מצאתי את התעודה" בקליטה בלי תעודה אינו מבוי סתום.
-// קליטה בלי תעודה עם שורות שכבר נספרו: "סיום" עם שדות ריקים מחזיר לקליטה בלי
-// תעודה, "חזור לקליטה בלי תעודה" עושה אותו דבר, ו"צלם את התעודה" חוזר לשלב
-// הצילום בלי לאבד את הספירה — והקריאה מהנייר רצה מולה.
-// Run: node tests/nodoc-found-escape-browser.mjs (Playwright + Chromium; BERMAN_CHROMIUM optional)
+// v126 — "כפתור אחד" בדפדפן אמיתי, שני טלפונים מבודדים על אותה קליטה משותפת (מנוע הסנכרון אמיתי).
+// A מצלם בכפתור הניירות → "קרא והתחל לספור": הספירה נפתחת מיד בשני הטלפונים ("קורא…"), B סופר
+// בינתיים, והתעודה נכנסת לשניהם — בקשה אחת (A), אפס (B), בלי התנגשות. A מסיים והקליטה נשמרת עם
+// מספר התעודה. 390px בלי גלילה לצדדים.
+// Run: NODE_PATH=$(npm root -g) node tests/one-button-browser.mjs (Playwright + Chromium; BERMAN_CHROMIUM optional)
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -11,6 +11,9 @@ import { html, moduleSource, fixture } from './receipt-scan-harness.mjs';
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const data = fixture(), documents = new Map();
+const pad = n => String(n).padStart(2, '0'), now = new Date();
+Object.assign(data.paper, { serviceVersion: 7, verification: { version: 1, status: 'agreed', primaryReads: 2, escalationAttempted: false, reasons: [], issues: [], readCount: 2 } });
+Object.assign(data.paper.scan.documents[0], { docNumber: '77001234', internalNumber: '4411', headerText: 'תעודת משלוח', docDate: pad(now.getDate()) + '/' + pad(now.getMonth() + 1) + '/' + now.getFullYear() });
 const photo = 'data:image/svg+xml;base64,' + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="450" height="650"><rect width="450" height="650" fill="white"/><text x="25" y="60" font-size="25">SHARED RECEIPT</text><path d="M25 100h400M25 150h300M25 200h350M25 250h200" stroke="black" stroke-width="6"/></svg>').toString('base64');
 let transactionQueue = Promise.resolve(), releaseTransaction;
 const rpc = async (operation, args = {}) => {
@@ -55,14 +58,17 @@ const replay = `
 const testData = ${JSON.stringify(data)};
 products=testData.products;promos=testData.promos;
 aiRunAnalyzer=async()=>{};
-window.fetch=async(url)=>{if(String(url)===AI_SCAN_WORKER_URL)return{ok:true,status:200,json:async()=>structuredClone(testData.paper)};throw new Error('External network is forbidden in local replay: '+url)};
+let scanRequests=0, gate=null;
+window.fetch=async(url)=>{if(String(url)===AI_SCAN_WORKER_URL){scanRequests++;if(gate)await gate;return{ok:true,status:200,json:async()=>structuredClone(testData.paper)}}throw new Error('External network is forbidden in local replay: '+url)};
+openScanner=async()=>{window.t.scanner=(window.t.scanner||0)+1;};
 window.t={
-  state:()=>({items:structuredClone(receiptList),noDoc:receiptNoDoc,opened:receiptOpened,editing:editingNotes,mode:receiptEntryMode,notes:structuredClone(receiptNotes),paperState:receiptPaperScanState,view:currentView}),
-  counted:()=>{receiptList=structuredClone(testData.items);receiptNotes=[];recomputeNoteTotal();receiptNoDoc=true;receiptOpened=true;receiptEntryMode='manual';receiptDocDate='2026-09-09';editingNotes=false;saveReceiptDraft();renderReceiving();},
-  photo:()=>{aiScanDocuments[0].pages=[{dataUrl:${JSON.stringify(photo)},orientationConfirmed:true}];renderReceiving();},
-  closeScanner:()=>{try{closeScanner()}catch(e){}},
-  regularEmpty:()=>{receiptNotes=[];recomputeNoteTotal();receiptNoDoc=false;editingNotes=true;receiptEntryMode='manual';saveReceiptDraft();renderReceiving();},
-  paperDone:()=>!aiScanBusy&&receiptPaperScanState!=='running'
+  state:()=>({items:structuredClone(receiptList),opened:receiptOpened,busy:aiScanBusy,paperState:receiptPaperScanState,source:receiptAnchorSource,notes:structuredClone(receiptNotes),per:aiScanResponse&&structuredClone(aiScanResponse.perDocument),pages:aiTotalPages(),view:currentView,requests:scanRequests,conflict:!!sharedReceiptStatus.conflict,ready:!!sharedReceiving?.ready}),
+  hold:()=>{let release;gate=new Promise(r=>release=r);window.t.release=()=>{gate=null;release();};},
+  addCount:()=>{receiptList=receiptList.concat([{productId:testData.products[0].id,name:testData.products[0].name,barcode:testData.products[0].barcode||'',qty:2}]);saveReceiptDraft();renderReceiving();},
+  countAsPaper:()=>{receiptList=testData.paper.scan.documents[0].rows.map(row=>{const p=products.find(x=>x.code===row.itemCode);return{productId:p.id,name:p.name,barcode:p.barcode,qty:Number(row.quantity)};});saveReceiptDraft();},
+  finish:async()=>{finishReceipt();if(!pendingReceipt)return 'no-summary';await confirmReceipt();return 'saved';},
+  saved:()=>Object.keys(window.__docs||{}),
+  scrollOk:()=>document.scrollingElement.scrollWidth<=document.scrollingElement.clientWidth+1
 };
 setView('receiving');await startSharedReceiving();window.t.loaded=true;
 `;
@@ -81,77 +87,61 @@ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const url='http://127.0.0.1:'+server.address().port;
 const browser=await chromium.launch({headless:true,executablePath:process.env.BERMAN_CHROMIUM,args:['--no-sandbox']});
 const errors=[],external=[];
-async function device(){
-  const context=await browser.newContext({viewport:{width:430,height:920},serviceWorkers:'block'});
+async function device(name){
+  const context=await browser.newContext({viewport:{width:390,height:860},serviceWorkers:'block',locale:'he-IL'});
   await context.exposeBinding('__sharedRpc',(_source,operation,args)=>rpc(operation,args));
   await context.route('**/*',route=>{if(route.request().url().startsWith(url)||route.request().url().startsWith('data:'))return route.continue();external.push(route.request().url());return route.abort();});
-  const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));
+  const page=await context.newPage();page.on('pageerror',error=>errors.push(name+': '+error.message));
   page.on('dialog',dialog=>dialog.dismiss());
-  await page.goto(url);await page.waitForFunction(()=>window.sharedTest?.loaded);
+  await page.goto(url);await page.waitForFunction(()=>window.t?.loaded&&window.t.state().ready);
   return page;
 }
 const state=page=>page.evaluate(()=>window.t.state());
-const context=await browser.newContext({viewport:{width:430,height:920},serviceWorkers:'block'});
-await context.exposeBinding('__sharedRpc',(_source,operation,args)=>rpc(operation,args));
-await context.route('**/*',route=>{if(route.request().url().startsWith(url)||route.request().url().startsWith('data:'))return route.continue();external.push(route.request().url());return route.abort();});
-const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));
-page.on('dialog',dialog=>dialog.dismiss());
-const role=r=>page.locator('#app [data-role="'+r+'"]').first();
+const svg=Buffer.from(photo.split(',')[1],'base64');
 try{
-  await page.goto(url);await page.waitForFunction(()=>window.t?.loaded);
-  await page.evaluate(()=>t.counted());
-  const items=(await state(page)).items;assert.ok(items.length>0);
-  await role('rc-nodoc-photo').waitFor({state:'visible'});
-
-  // [1] "מצאתי את התעודה — הזן" ואז "סיום" בשדות ריקים: חזרה לקליטה בלי תעודה
-  await role('rc-nodoc-found').click();
-  await role('rc-notes-done').waitFor({state:'visible'});
-  await role('rc-notes-done').click();
-  await role('rc-nodoc-found').waitFor({state:'visible'});
-  let s=await state(page);assert.equal(s.editing,false);assert.equal(s.noDoc,true);assert.deepEqual(s.items,items);
-
-  // [2] הכפתור המפורש "חזור לקליטה בלי תעודה"
-  await role('rc-nodoc-found').click();
-  await role('rc-nodoc-back').click();
-  await role('rc-nodoc-found').waitFor({state:'visible'});
-  s=await state(page);assert.equal(s.editing,false);assert.equal(s.noDoc,true);assert.deepEqual(s.items,items);
-
-  // [3] מתוך השדות: "צלם את התעודה במקום להקליד" — שלב הצילום, הספירה נשמרת
-  await role('rc-nodoc-found').click();
-  await role('rc-nodoc-photo').click();
-  await role('rc-paper-cam').waitFor({state:'attached'}); // v126: כפתור הניירות
-  s=await state(page);assert.equal(s.noDoc,false);assert.equal(s.opened,false);assert.equal(s.mode,'photo');assert.deepEqual(s.items,items);
-  assert.match(await page.locator('#app').innerText(),new RegExp(items.length+' שורות'));
-  await page.screenshot({path:'/tmp/berman-nodoc-photo-step.png',fullPage:true});
-
-  // [3b] משלב הצילום אפשר לבחור להקליד — נפתחים השדות, ומהם שוב לצילום
-  await role('rc-entry-manual').click();
-  await role('rc-notes-done').waitFor({state:'visible'});
-  s=await state(page);assert.equal(s.opened,true);assert.equal(s.editing,true);assert.deepEqual(s.items,items);
-  await role('rc-nodoc-photo').click();
-  await role('rc-paper-cam').waitFor({state:'attached'});
-
-  // [4] "אין תעודה בכלל" משלב הצילום — חוזרים לאותה ספירה
-  await role('rc-open-nodoc').click();await page.evaluate(()=>t.closeScanner());
-  await role('rc-nodoc-found').waitFor({state:'visible'});
-  s=await state(page);assert.equal(s.noDoc,true);assert.deepEqual(s.items,items);
-
-  // [5] מהסרגל הכתום: "מצאתי את התעודה — צלם אותה", צילום, והקריאה רצה מול הספירה
-  await role('rc-nodoc-photo').click();
-  await role('rc-paper-cam').waitFor({state:'attached'});
-  // צילום בכרטיס של v125 (תעודה ארוכה, עמוד אחרי עמוד) — הקריאה רצה מול הספירה
-  await page.evaluate(()=>t.photo());
-  await role('rc-open-photo').waitFor({state:'attached'});
-  await role('rc-open-photo').click();await page.evaluate(()=>t.closeScanner());
-  await page.waitForFunction(()=>t.paperDone());
-  s=await state(page);assert.equal(s.opened,true);assert.equal(s.noDoc,false);assert.equal(s.paperState,'ok');assert.equal(s.notes.length,1);assert.deepEqual(s.items,items);
-
-  // [6] קליטה רגילה (לא "בלי תעודה") — "סיום" בשדות ריקים עדיין חוסם
-  await page.evaluate(()=>t.regularEmpty());
-  await role('rc-notes-done').click();
-  s=await state(page);assert.equal(s.editing,true);
-  assert.equal(await page.locator('#app [data-role="rc-nodoc-back"]').count(),0);
-
+  const a=await device('A'), b=await device('B');
+  const role=(p,r)=>p.locator('#app [data-role="'+r+'"]').first();
+  // מסך הקליטה: כפתור אחד, בלי מצלמה שנייה בפס
+  await role(a,'rc-paper-cam').waitFor({state:'visible'});
+  assert.equal(await a.locator('#app [data-role="rc-open-photo"]').count(),0);
+  assert.doesNotMatch(await a.locator('#ledgerBar').innerText(),/צלם נייר/);
+  assert.ok(await a.evaluate(()=>window.t.scrollOk()),'אין גלילה לצדדים ב-390px');
+  await a.screenshot({path:'/tmp/berman-one-button.png',fullPage:true});
+  // A מצלם — הצילום נכנס למסך הניירות
+  await a.setInputFiles('#rcPaperCam',{name:'paper.svg',mimeType:'image/svg+xml',buffer:svg});
+  await role(a,'paper-run-receive').waitFor({state:'visible'});
+  assert.match(await a.locator('#app').innerText(),/הניירות מהנהג/);
+  assert.match(await a.locator('#app').innerText(),/קרא והתחל לספור \(1\)/);
+  await a.screenshot({path:'/tmp/berman-one-button-tray.png',fullPage:true});
+  await a.evaluate(()=>window.t.hold());
+  await role(a,'paper-run-receive').click();
+  // הספירה נפתחת מיד, בשני הטלפונים: "קורא…"
+  await a.waitForFunction(()=>window.t.state().view==='receiving'&&window.t.state().busy&&window.t.state().requests===1);
+  await b.waitForFunction(()=>window.t.state().busy&&window.t.state().opened);
+  assert.match(await b.locator('#app').innerText(),/קורא את הניירות מהנהג/);
+  // B סופר בזמן שהנייר נקרא
+  await b.evaluate(()=>window.t.addCount());
+  await a.waitForFunction(()=>window.t.state().items.length===1);
+  await a.evaluate(()=>window.t.release());
+  await a.waitForFunction(()=>window.t.state().paperState==='ok');
+  await b.waitForFunction(()=>window.t.state().paperState==='ok');
+  for(const p of [a,b]){
+    const s=await state(p);
+    assert.equal(s.busy,false);assert.equal(s.source,'paper');assert.equal(s.pages,0);assert.equal(s.conflict,false);
+    assert.deepEqual(s.notes.map(n=>[n.units,n.lines]),[[30,5]]);assert.equal(s.per[0].paperId,'paper_77001234');
+    assert.equal(s.items.length,1,'הספירה של B נשמרה');
+    assert.match(await p.locator('#app').innerText(),/העוגנים נקראו מהתעודה/);
+  }
+  assert.equal((await state(a)).requests,1);assert.equal((await state(b)).requests,0);
+  await a.screenshot({path:'/tmp/berman-one-button-counting.png',fullPage:true});
+  assert.ok(await a.evaluate(()=>window.t.scrollOk()));
+  // A מסיים: הקליטה נשמרת עם מספר התעודה
+  await a.evaluate(()=>window.t.countAsPaper());
+  assert.equal(await a.evaluate(()=>window.t.finish()),'saved');
+  const saved=[...documents.entries()].filter(([k])=>/\/receipts\//.test(k));
+  assert.equal(saved.length,1);assert.equal(saved[0][1].paperDocs[0].number,'77001234');
+  assert.equal(saved[0][1].paperScan.response.perDocument[0].paperId,'paper_77001234');
+  assert.equal((await state(a)).requests,1);
   assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
-  console.log('nodoc-found escape: all checks passed');
+  console.log('one-button browser: all checks passed — /tmp/berman-one-button*.png');
 }finally{await browser.close();server.close();}

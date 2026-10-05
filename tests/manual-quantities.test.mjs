@@ -271,7 +271,10 @@ test(supplier+': manual scan failure and an interrupted reload offer photo recov
  const repair=supplier==='berman'?'rc-paper-rescan':'rc-photo-repair';assert.ok(html.includes('data-role="'+repair+'"'));
  const b=create({data,storage:a.storage});b.run("currentView='receiving';mainMode='receiving';renderReceiving()");
  assertManualScreen(b);assert.ok(b.node('app').innerHTML.includes('data-role="'+repair+'"'));
- b.click(repair);assert.ok(b.node('app').innerHTML.includes('data-role="'+photoRole(true)+'"'));
+ b.click(repair);
+ // v126: שלב הצילום הוא כפתור הניירות; "עמוד אחרי עמוד" מחזיר את כרטיס הצילום של v125
+ if(supplier==='berman'){assert.ok(b.node('app').innerHTML.includes('data-role="rc-paper-cam"'));b.click('rc-entry-photo-multi');}
+ assert.ok(b.node('app').innerHTML.includes('data-role="'+photoRole(true)+'"'));
 });
 test(supplier+': switching back to scanning preserves the paper, entered differences and existing quantities',async()=>{
  const r=await scanned(plainData(),[]);r.click('rc-quantity-differences');

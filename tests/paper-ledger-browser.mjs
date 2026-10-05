@@ -43,7 +43,7 @@ const L = ${JSON.stringify({ receipts: L.receipts, returns: L.returns, papers: [
 products=testData.products;promos=testData.promos;receipts=L.receipts;returns=L.returns;papers=L.papers;
 todayStr=()=> '2026-10-05';ledgerInvalidate();
 window.fetch=async(url)=>{throw new Error('External network is forbidden in local replay: '+url)};
-window.t={ view:()=>currentView, count:()=>currentLedger().count, ledger:()=>{ ledgerInvalidate(); setView('ledger'); }, review:id=>openPaperReview(id), history:()=>{ receiptHistoryFilter='all'; setView('receiptsHistory'); }, kinds:()=>currentLedger().items.filter(i=>i.state==='problem'||i.state==='question').map(i=>i.kind+':'+i.key) };
+window.t={ view:()=>currentView, go:v=>setView(v), count:()=>currentLedger().count, ledger:()=>{ ledgerInvalidate(); setView('ledger'); }, review:id=>openPaperReview(id), history:()=>{ receiptHistoryFilter='all'; setView('receiptsHistory'); }, kinds:()=>currentLedger().items.filter(i=>i.state==='problem'||i.state==='question').map(i=>i.kind+':'+i.key) };
 setView('receiving');window.t.loaded=true;
 `;
 const css = `.hidden{display:none!important}.flex{display:flex}.grid{display:grid}.flex-1{flex:1}.gap-2{gap:.5rem}.fixed{position:fixed}.bottom-0{bottom:0}.inset-x-0{left:0;right:0}.w-full{width:100%}body{margin:0;font:16px Arial}button,input{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}`;
@@ -68,8 +68,12 @@ try {
   const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
   await page.goto(url);
   await page.waitForFunction(() => window.t && window.t.loaded);
-  // הפס בקליטה
-  assert.match(await page.locator('#ledgerBar').innerText(), /צלם נייר מברמן[\s\S]*מאזן: 2 לטיפול/);
+  // הפס בקליטה — v126: בלי מצלמה (למסך הקליטה כפתור ניירות משלו); בהחזרות — עם
+  assert.match(await page.locator('#ledgerBar').innerText(), /מאזן: 2 לטיפול/);
+  assert.doesNotMatch(await page.locator('#ledgerBar').innerText(), /צלם נייר/);
+  await page.evaluate(() => window.t.go('returns'));
+  assert.match(await page.locator('#ledgerBar').innerText(), /צלם נייר מהנהג[\s\S]*מאזן: 2 לטיפול/);
+  await page.evaluate(() => window.t.go('receiving'));
   await page.locator('#ledgerBar [data-role="ledger-open"]').click();
   assert.equal(await page.evaluate(() => window.t.view()), 'ledger');
   assert.equal((await page.locator('#ledgerBar').innerText()).trim(), '', 'הפס לא מופיע במסך המאזן עצמו');
