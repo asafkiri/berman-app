@@ -63,12 +63,12 @@ async function intake(r, items, forReturnId = '') {
 test('שני ניירות → שתי בקשות → שני ניירות; בלי עוגנים צפויים; טיוטת הקליטה לא נגעה', async () => {
   const r = app(credit142(), { returns: L.returns, receipts: L.receipts });
   const before = r.run('JSON.stringify([aiScanDocuments, reconcileData, receiptNotes])');
-  const draft = r.storage.get('bm_receipt_draft_v1');
+  const draft = r.storage.get('bm_receipt_draft');
   await intake(r, [page(1), page(2)]);
   assert.equal(r.requests.length, 2);
   r.requests.forEach(q => { const d = JSON.parse(q.body).documents[0]; assert.equal(d.expectedUnits, null); assert.equal(d.expectedLines, null); assert.equal(d.pages.length, 1); });
   assert.equal(r.run('JSON.stringify([aiScanDocuments, reconcileData, receiptNotes])'), before);
-  assert.equal(r.storage.get('bm_receipt_draft_v1'), draft);
+  assert.equal(r.storage.get('bm_receipt_draft'), draft, 'נייר זיכוי לא נוגע בטיוטת הקליטה');
   const s = store(r);
   assert.deepEqual(Object.keys(s).sort(), ['cap0', 'cap1']);
   const p = s.cap0.paper;
@@ -235,7 +235,7 @@ test('פתיחה מחדש של מסך הצילום באמצע קריאה — א�
   await until(() => g.calls.length === 2); // הקריאה השלישית (האימות) נשלחה ותלויה
   r.run(`openPaperIntake({ forReturnId: 'RB' });`); // "צלם נייר" מהמאזן, באמצע
   assert.equal(r.run('paperIntake.items.length'), 2, 'הסבב לא הוחלף');
-  assert.equal(r.run('paperIntake.items[1].status'), 'photo');
+  assert.equal(r.run('paperIntake.items[1].status'), 'queued', 'v126: ממתין בתור של אותו סבב');
   assert.equal(r.run('paperIntake.note'), '', 'לא "נקטעה" על קריאה שעוד רצה');
   assert.ok(r.storage.get('bm_paper_inflight_v1'), 'הסימון של הקריאה שרצה לא נמחק');
   const s = store(r);

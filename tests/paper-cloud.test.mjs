@@ -181,6 +181,22 @@ test('תעודת משלוח שצולמה פעמיים ונקראה קצת אחר
   assert.deepEqual(cloud.papers().map(p => p.rows[1].qty), [18]);
 });
 
+// v126 (סקירה): קודם נשמרה קריאה שלא אישרה את עצמה, ואחר כך צילום שכן — החדש מחליף בענן, עם הקריאה שלו
+test('תעודת משלוח: צילום שנקרא עד הסוף מחליף בענן קריאה של אותה תעודה שלא נקראה עד הסוף — והקריאה שלו נשמרת', async () => {
+  const cloud = makeCloud();
+  const A = phone(cloud, scan(DELIVERY(17)));
+  await read(A);
+  assert.equal(cloud.papers()[0].state, 'needs-review');
+  A.setResp(scan(DELIVERY(18)));
+  A.run(`openPaperIntake({}); paperIntake.items = [{ captureId: 'capB', hash: 'hB', page: { dataUrl: 'data:y', baseDataUrl: 'data:y', rotation: 0, orientationConfirmed: true }, status: 'photo' }];`);
+  await A.run('paperIntakeRun()'); await tick();
+  const rec = local(A).capB;
+  assert.equal(rec.outcome, 'replaced'); assert.ok(!rec.discarded && !rec.conflict);
+  assert.deepEqual(cloud.papers().map(p => [p.state, p.rows[1].qty, p.captureId]), [['accepted', 18, 'capB']]);
+  const saved = [...cloud.store.entries()].find(([k]) => k.split('/').slice(-2, -1)[0] === 'paperScans');
+  assert.equal(saved[1].doc.rows[1].quantity, 18, 'paperScans — הקריאה הטובה');
+});
+
 test('צילום שמתנגש עם נייר שמור: "אשר" חסום עד שמתקנים את המספר; כרטיס ההחזרה מראה נייר שמחכה לבדיקה', async () => {
   const cloud = makeCloud();
   const B = phone(cloud, scan(CREDIT(13)));

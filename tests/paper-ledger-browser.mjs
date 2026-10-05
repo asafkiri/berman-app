@@ -43,7 +43,7 @@ const L = ${JSON.stringify({ receipts: L.receipts, returns: L.returns, papers: [
 products=testData.products;promos=testData.promos;receipts=L.receipts;returns=L.returns;papers=L.papers;
 todayStr=()=> '2026-10-05';ledgerInvalidate();
 window.fetch=async(url)=>{throw new Error('External network is forbidden in local replay: '+url)};
-window.t={ view:()=>currentView, count:()=>currentLedger().count, ledger:()=>{ ledgerInvalidate(); setView('ledger'); }, review:id=>openPaperReview(id), history:()=>{ receiptHistoryFilter='all'; setView('receiptsHistory'); }, kinds:()=>currentLedger().items.filter(i=>i.state==='problem'||i.state==='question').map(i=>i.kind+':'+i.key) };
+window.t={ view:()=>currentView, go:v=>setView(v), count:()=>currentLedger().count, ledger:()=>{ ledgerInvalidate(); setView('ledger'); }, review:id=>openPaperReview(id), history:()=>{ receiptHistoryFilter='all'; setView('receiptsHistory'); }, kinds:()=>currentLedger().items.filter(i=>i.state==='problem'||i.state==='question').map(i=>i.kind+':'+i.key) };
 setView('receiving');window.t.loaded=true;
 `;
 const css = `.hidden{display:none!important}.flex{display:flex}.grid{display:grid}.flex-1{flex:1}.gap-2{gap:.5rem}.fixed{position:fixed}.bottom-0{bottom:0}.inset-x-0{left:0;right:0}.w-full{width:100%}body{margin:0;font:16px Arial}button,input{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}`;
@@ -68,11 +68,16 @@ try {
   const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
   await page.goto(url);
   await page.waitForFunction(() => window.t && window.t.loaded);
-  // הפס בקליטה
-  assert.match(await page.locator('#ledgerBar').innerText(), /צלם נייר מברמן[\s\S]*מאזן: 2 לטיפול/);
+  // הפס — v126: המקום האחד לכל נייר, באותו מקום בכל מסך (גם בקליטה)
+  assert.match(await page.locator('#ledgerBar').innerText(), /צלם נייר מהנהג[\s\S]*מאזן: 2 לטיפול/);
+  assert.equal(await page.locator('#app input[type="file"]').count(), 0, 'במסך עצמו אין מצלמה');
+  await page.evaluate(() => window.t.go('returns'));
+  assert.match(await page.locator('#ledgerBar').innerText(), /צלם נייר מהנהג[\s\S]*מאזן: 2 לטיפול/);
+  await page.evaluate(() => window.t.go('receiving'));
   await page.locator('#ledgerBar [data-role="ledger-open"]').click();
   assert.equal(await page.evaluate(() => window.t.view()), 'ledger');
-  assert.equal((await page.locator('#ledgerBar').innerText()).trim(), '', 'הפס לא מופיע במסך המאזן עצמו');
+  assert.match(await page.locator('#ledgerBar').innerText(), /צלם נייר מהנהג/, 'גם במסך המאזן — אותו כפתור');
+  assert.doesNotMatch(await page.locator('#ledgerBar').innerText(), /מאזן:/, 'בלי כפתור המאזן במסך המאזן עצמו');
   const text = await page.locator('#app').innerText();
   assert.match(text, /חויבת פעמיים על לחמניות 10 בשקית ×2 — לבקש זיכוי מהנהג/);
   assert.match(text, /נראה שתעודת הזיכוי של ההחזרה מ-4\.10 זיכתה לחם אחיד ברמן במקום אחיד פרוס ברמן, וזה התיקון/);
@@ -90,11 +95,13 @@ try {
   await page.locator('#app [data-role="ledger-undo"]').click();
   await page.waitForFunction(() => window.t.count() === 2);
   assert.ok(!documents.has(decl));
-  // מסך הצילום
-  await page.locator('#app [data-role="paper-photo"]').first().click();
-  assert.equal(await page.evaluate(() => window.t.view()), 'paperIntake');
-  assert.equal(await page.locator('#paperCamInput').getAttribute('capture'), 'environment');
-  assert.equal(await page.locator('#paperGalInput').getAttribute('multiple'), '');
+  // מסך הצילום: הכפתור בפס פותח את המצלמה של האפליקציה, והצילום נכנס למסך הניירות
+  assert.equal(await page.locator('#paperCamGlobal').getAttribute('capture'), 'environment');
+  assert.equal(await page.locator('#paperGalGlobal').getAttribute('multiple'), '');
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.locator('#ledgerBar [data-role="paper-photo"]').click()]);
+  await chooser.setFiles({ name: 'paper.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="500"><rect width="300" height="500" fill="white"/><path d="M20 60h260M20 120h200" stroke="black" stroke-width="6"/></svg>') });
+  await page.waitForFunction(() => window.t.view() === 'paperIntake' && document.querySelector('#paperIntakeList > div'));
+  assert.equal(await page.locator('#app input[type="file"]').count(), 0);
   // צילום חדש שמתנגש עם נייר שמור באותו מספר — שאלה במאזן, ו"מחק את הצילום החדש" משאיר את השמור
   await page.evaluate(p142 => { localStorage.setItem('bm_paper_results_v1', JSON.stringify({ capC: { captureId: 'capC', hash: 'hC', at: 1,
     paper: { ...p142, captureId: 'capC', rows: [p142.rows[0]] }, conflict: { id: p142.id, at: 1 } } })); window.t.ledger(); }, L.papers.p142);

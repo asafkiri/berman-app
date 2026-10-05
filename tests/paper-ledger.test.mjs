@@ -18,7 +18,7 @@ const FNS = ['r2', 'todayStr', 'storedReceiptDate', 'productCode', 'productListP
   'receiptPaperNumber', 'storedReceiptPaperNumbers', 'priceAuditDate', 'ledgerAddDays', 'ledgerReturnDay', 'ledgerLineKey', 'ledgerDocBase', 'paperRowKey',
   'paperUnits', 'paperFingerprint', 'receiptScanFingerprints', 'paperNumbers', 'paperNumerator', 'paperSameSheet', 'ledgerOffsetIdMatches', 'ledgerPaperStates', 'ledgerDeliveriesSince', 'paperAttach',
   'paperLedger', 'ledgerClassify', 'ledgerCorrectionPair', 'ledgerDayShort', 'ledgerRowsText', 'paperLabel', 'ledgerItemText'];
-const CONSTS = ["const LEDGER_FROM_DEFAULT = '2026-09-01';", 'const LEDGER_RETURN_WINDOW_DAYS = 14;', 'const LEDGER_PENDING_DELIVERIES = 3;', "const LEDGER_PAPER_KINDS = ['delivery', 'charge', 'credit', 'declared'];"];
+const CONSTS = ["const LEDGER_PHOTO_HINT = ' כשיש נייר — צלם אותו בכפתור \"צלם נייר מהנהג\" למעלה.';", "const LEDGER_FROM_DEFAULT = '2026-09-01';", 'const LEDGER_RETURN_WINDOW_DAYS = 14;', 'const LEDGER_PENDING_DELIVERIES = 3;', "const LEDGER_PAPER_KINDS = ['delivery', 'charge', 'credit', 'declared'];"];
 // eslint-disable-next-line no-eval
 const api = eval('let VAT = 0.18; let products = F.products; let promos = [];\n' + extractSource(FNS, CONSTS) + '\n({ ' + FNS.join(', ') + ' })');
 const { paperLedger, ledgerItemText, rangeProductMatrixData, storedReceiptDate, ledgerReturnDay } = api;
@@ -287,6 +287,13 @@ test('סוג שלא נקרא — "לבדיקה", לא נספר כחיוב; תע�
   assert.match(t.text, /לא נמצאה בקליטה של 5\.10/);
   assert.deepEqual(t.actions.map(a => a.role), ['ledger-paper-open', 'ledger-start-receiving']);
   assert.match(t.detail, /3 יח׳ ו-שורה אחת/);
+  // v126: התעודה כבר נקראה — "לקליטה" מכניס אותה כפי שנקראה; לא שולחים להקליד
+  assert.doesNotMatch(t.detail, /הקלד את המספרים/);
+  assert.equal(t.actions.find(a => a.role === 'ledger-start-receiving').paperId, 'paper_244799999');
+  const far = ledgerItemText({ ...it, sameDay: false }, lg, [dn]);
+  assert.match(far.text, /צולמה ועוד לא נקלטה/);
+  assert.match(far.detail, /כבר נקראה \(3 יח׳ ו-שורה אחת מהתחתית\)/);
+  assert.doesNotMatch(far.detail, /הקלד את המספרים/);
 });
 
 // ===== סבב סקירה שני =====
