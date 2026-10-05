@@ -4,6 +4,8 @@
 // - "כן, זה תיקון" נכתב לענן (papers/decl_corr_…) ונשאר רק 1231 ×2.
 // - "בטל" מחזיר את השאלה.
 // - הפס של הניירות מופיע בקליטה ונעלם במסך המאזן; מסך הצילום נפתח עם שני שדות הקובץ (מצלמה וגלריה).
+// - צילום שמתנגש עם נייר שמור באותו מספר: שאלה במאזן; "מחק את הצילום החדש" לא נוגע בשמור.
+// - בדיקת נייר שבענן: המספר לא נערך; בלי גלילה לצדדים ברוחב טלפון.
 // - כרטיסי התעודות של 4.10 ו-5.10 מראים "במאזן".
 // Run: node tests/paper-ledger-browser.mjs (Playwright + Chromium; BERMAN_CHROMIUM optional)
 import assert from 'node:assert/strict';
@@ -41,7 +43,7 @@ const L = ${JSON.stringify({ receipts: L.receipts, returns: L.returns, papers: [
 products=testData.products;promos=testData.promos;receipts=L.receipts;returns=L.returns;papers=L.papers;
 todayStr=()=> '2026-10-05';ledgerInvalidate();
 window.fetch=async(url)=>{throw new Error('External network is forbidden in local replay: '+url)};
-window.t={ view:()=>currentView, count:()=>currentLedger().count, history:()=>{ receiptHistoryFilter='all'; setView('receiptsHistory'); }, kinds:()=>currentLedger().items.filter(i=>i.state==='problem'||i.state==='question').map(i=>i.kind+':'+i.key) };
+window.t={ view:()=>currentView, count:()=>currentLedger().count, ledger:()=>{ ledgerInvalidate(); setView('ledger'); }, review:id=>openPaperReview(id), history:()=>{ receiptHistoryFilter='all'; setView('receiptsHistory'); }, kinds:()=>currentLedger().items.filter(i=>i.state==='problem'||i.state==='question').map(i=>i.kind+':'+i.key) };
 setView('receiving');window.t.loaded=true;
 `;
 const css = `.hidden{display:none!important}.flex{display:flex}.grid{display:grid}.flex-1{flex:1}.gap-2{gap:.5rem}.fixed{position:fixed}.bottom-0{bottom:0}.inset-x-0{left:0;right:0}.w-full{width:100%}body{margin:0;font:16px Arial}button,input{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}`;
@@ -73,7 +75,7 @@ try {
   assert.equal((await page.locator('#ledgerBar').innerText()).trim(), '', 'הפס לא מופיע במסך המאזן עצמו');
   const text = await page.locator('#app').innerText();
   assert.match(text, /חויבת פעמיים על לחמניות 10 בשקית ×2 — לבקש זיכוי מהנהג/);
-  assert.match(text, /נראה שזה תיקון לזיכוי של ההחזרה מ-4\.10/);
+  assert.match(text, /נראה שתעודת הזיכוי של ההחזרה מ-4\.10 זיכתה לחם אחיד ברמן במקום אחיד פרוס ברמן, וזה התיקון/);
   assert.deepEqual(await page.evaluate(() => window.t.kinds()), ['chargedTwice:code_1231', 'correctionPair:code_100']);
   // "כן, זה תיקון"
   await page.locator('#app [data-role="ledger-declare-correction"]').click();
@@ -93,6 +95,25 @@ try {
   assert.equal(await page.evaluate(() => window.t.view()), 'paperIntake');
   assert.equal(await page.locator('#paperCamInput').getAttribute('capture'), 'environment');
   assert.equal(await page.locator('#paperGalInput').getAttribute('multiple'), '');
+  // צילום חדש שמתנגש עם נייר שמור באותו מספר — שאלה במאזן, ו"מחק את הצילום החדש" משאיר את השמור
+  await page.evaluate(p142 => { localStorage.setItem('bm_paper_results_v1', JSON.stringify({ capC: { captureId: 'capC', hash: 'hC', at: 1,
+    paper: { ...p142, captureId: 'capC', rows: [p142.rows[0]] }, conflict: { id: p142.id, at: 1 } } })); window.t.ledger(); }, L.papers.p142);
+  assert.match(await page.locator('#app').innerText(), /נקרא אחרת מהנייר עם אותו מספר שכבר שמור/);
+  await page.locator('#app [data-role="paper-conflict-drop"]').click();
+  await page.waitForFunction(() => !document.querySelector('#app [data-role="paper-conflict-drop"]'));
+  assert.ok([...documents.keys()].every(k => !k.includes('/trash/')), 'השמור לא נמחק ולא עבר לסל');
+  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem('bm_paper_results_v1'))).capC.discarded, true);
+  // בדיקת נייר שבענן: בלי שדה מספר לעריכה, עם סוג מסומן
+  await page.evaluate(() => window.t.review('paper_290095142'));
+  assert.equal(await page.evaluate(() => window.t.view()), 'paperReview');
+  assert.equal(await page.locator('#reviewNumber').count(), 0, 'מספר של נייר שבענן לא נערך');
+  assert.match(await page.locator('#app').innerText(), /בדיקת נייר[\s\S]*290095142/);
+  // אין גלילה לצדדים ברוחב טלפון
+  for (const view of ['paperReview', 'ledger']) {
+    if (view === 'ledger') await page.evaluate(() => window.t.ledger());
+    const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert.ok(over <= 1, view + ': גלילה לצדדים ' + over);
+  }
   // כרטיסי התעודות
   await page.evaluate(() => window.t.history());
   const hist = await page.locator('#app').evaluate(el => el.textContent); // הכרטיסים מקופלים (details)
