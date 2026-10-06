@@ -21706,6 +21706,9 @@ function startDraftHandoff() {
       adapter: {
         getDraft: receivingHandoffDraft,
         getPayload: receivingHandoffPayloadNow,
+        // טביעה יציבה של מה שנספר (לא משתנה מעצמה אחרי פתיחה מחדש) — לדעת אם השמירה שנכנסה היא בדיוק מה שבטלפון
+        fingerprint: () => JSON.stringify({ l: receiptList.map(l => [String(l.productId), Number(l.qty) || 0]).sort(), n: receiptNotes.map(n => [n.units, n.lines, n.kind || '']),
+          d: receiptDocDate || '', nd: !!receiptNoDoc, a: receiptAttachTarget ? receiptAttachTarget.id : '' }),
         // ביטול שהענן אישר (הקליטה הייתה של הטלפון הזה) — רק עכשיו תעודות המשלוח שלה יוצאות לסל
         onClosed: meta => receivingDiscardCanceledPapers(meta && meta.paperIds),
         validatePayload: (p, d) => !!(p && p.version === 1 && p.state && p.ui && receivingSessionOf(p.state) === d.sessionId),
@@ -21863,7 +21866,8 @@ async function finishSharedReceipt(id, data) {
         if (r.unknown) { receivingFinishPending = { sessionId: receivingSessionOf({ receiptDraftId, receiptAttachTarget }), opId: id, data, attach: receiptAttachTarget, noDoc: !!(pendingReceipt && pendingReceipt.noDoc) }; showToast('השמירה לא אושרה עדיין — בודק אם התעודה נשמרה בענן…', null, null, 4000); renderSharedReceivingBanner(); return false; }
         showToast({ offline: 'אין חיבור — הקליטה שמורה בטלפון. לחץ "שמור" שוב כשיש רשת.', moved: 'הקליטה הזאת ממשיכה ' + receivingWho((draftHandoff.state().away || {}).by) + '. כדי לסיים כאן — "החזר אותה לכאן" למעלה.',
           saved: 'הקליטה הזאת כבר נשמרה — לא נשמרת פעמיים.', canceled: 'הקליטה הזאת בוטלה בטלפון אחר.', exists: 'התעודה הזאת כבר נשמרה (בטלפון אחר) — לא נשמרת פעמיים.',
-          changed: 'התעודה השתנתה מאז שהתחלת לצרף את הנייר — פתח אותה שוב מההיסטוריה.', busy: 'רגע — פעולה אחרת עוד רצה.' }[r.reason]
+          changed: 'התעודה השתנתה מאז שהתחלת לצרף את הנייר — פתח אותה שוב מההיסטוריה.', busy: 'רגע — פעולה אחרת עוד רצה.',
+          'saved-late': 'התעודה כבר נשמרה מהשמירה הקודמת (שהתשובה שלה התעכבה) — בלי השינויים שעשית אחריה. הם נשמרו בצד בטלפון הזה ("פתח אותה" למעלה).' }[r.reason]
           || 'השמירה בענן נכשלה — הקליטה נשארה פתוחה. נסה שוב.', null, null, 5000);
         renderSharedReceivingBanner();
         return false;

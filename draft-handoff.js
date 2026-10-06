@@ -43,6 +43,8 @@
   const randomId = () => (global.crypto && typeof global.crypto.randomUUID === 'function' ? global.crypto.randomUUID()
     : Date.now().toString(36) + '_' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
   const safeId = id => String(id || '').replace(/[\/\s]/g, '_').slice(0, 300);
+  // טביעה קצרה של התוכן (FNV-1a) — כדי לדעת אם מה שנשמר הוא בדיוק מה שבטלפון
+  const digest = text => { text = String(text == null ? '' : text); let h = 0x811c9dc5; for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16) + ':' + text.length; };
   // השרת דחה את ה-commit (לא נכתב בוודאות) — לא "לא ידוע"
   const DEFINITE = ['aborted', 'failed-precondition', 'already-exists', 'permission-denied', 'invalid-argument', 'not-found', 'out-of-range', 'unauthenticated'];
 
@@ -136,6 +138,24 @@
       setClaim(d.sessionId, 0); return claimFor(d.sessionId);
     }
 
+    // טביעת התוכן שהמשתמש עבד עליו (המתאם יכול לתת טביעה יציבה — בלי שדות שמשתנים לבד; אחרת ה-payload)
+    function fingerprint(d) {
+      try { if (A.fingerprint) return digest(A.fingerprint()); } catch (e) {}
+      return digest(withPayload(d).payload);
+    }
+    // השמירה של הטלפון הזה נכנסה (אולי באיחור), ובטלפון יש תוכן אחר ממה שנשמר — מה שנעשה אחריה נשמר בצד, גלוי
+    function keepLate(sessionId, cur, d) {
+      const by = cur && cur.savedBy;
+      if (!by || by.deviceId !== me() || by.sessionId !== sessionId || !by.fp) return false;
+      try {
+        d = d || draft();
+        if (d.empty || d.sessionId !== sessionId || fingerprint(d) === by.fp) return false;
+        const p = withPayload(d);
+        if (p.payload != null && sidePut(sideEntry(p, 'late')).ok) { notice('late-save', { sessionId }); return true; }
+      } catch (e) {}
+      return false;
+    }
+
     // ---- ענן ----
     const handoffRef = sessionId => fs.doc(db, ...rootPath, 'drafts', 'handoff_' + safeId(app) + '_' + safeId(kind) + '_' + safeId(sessionId));
     const recordRef = recordId => fs.doc(db, ...rootPath, o.recordCollection, safeId(recordId));
@@ -175,7 +195,6 @@
     let started = false, stopped = false, status = 'idle', tooBigNow = false, writing = null, again = false, debounceTimer = null, retryTimer = null;
     let finishing = false, taking = false, checking = null, lastScan = false, scanStartedLocal = null, scanBeat = 0, scanTimer = null, beatTimer = null;
     let watched = new Map(), currentDoc = null, offerDocs = [], offersFromServer = false, unsubQuery = null;
-    let lastFinishSent = null; // מה שנשלח בשמירה האחרונה — לגילוי שינויים שנעשו אחרי ש"לא נשמרה" כשהשמירה נכנסה מאוחר
     let active = null; // המושב שהשרת אישר שהוא של הטלפון הזה (לגילוי טיוטה שנעלמה בלי שמירה/ביטול)
     const closedHere = new Set(); // מושבים שנשמרו / בוטלו / נוקו כאן — לא מוצעים בחזרה עד שהשרת מראה שנסגרו
     const scanSeen = new Map();
@@ -240,13 +259,7 @@
       if (cur.state === 'saved') {
         if (cur.savedBy && cur.savedBy.deviceId === me() && finishing) return;
         // השמירה של הטלפון הזה נכנסה מאוחר (אחרי ש"לא נשמרה"), ובינתיים המשיכו לעבוד כאן — מה שנעשה אחריה נשמר בצד, גלוי
-        if (cur.savedBy && cur.savedBy.deviceId === me() && cur.savedBy.sessionId === sessionId && lastFinishSent && lastFinishSent.sessionId === sessionId) {
-          try {
-            const p = withPayload(d || draft());
-            if (p.payload != null && p.payload !== lastFinishSent.payload && sidePut(sideEntry(p, 'late')).ok) notice('late-save', { sessionId });
-          } catch (e) {}
-          lastFinishSent = null;
-        }
+        if (!awayFor(sessionId)) keepLate(sessionId, cur, d);
         setAway(sessionId, 'saved', cur);
       } else if (cur.state === 'canceled') setAway(sessionId, 'canceled', cur);
       else if (cur.state === 'open' && cur.deviceId !== me()) {
@@ -347,7 +360,7 @@
         }, T.backup);
         const still = draft();
         if (res.away) {
-          if (!still.empty && still.sessionId === d.sessionId) setAway(d.sessionId, res.away, res.doc);
+          if (!still.empty && still.sessionId === d.sessionId) { if (res.away === 'saved' && !awayFor(d.sessionId)) keepLate(d.sessionId, res.doc, still); setAway(d.sessionId, res.away, res.doc); }
           setStatus('idle');
         } else {
           if (claimFor(d.sessionId)) setClaim(d.sessionId, res.gen);
@@ -566,7 +579,7 @@
       if (finishing || taking || checking) return { ok: false, reason: 'busy' };
       const a = awayFor(d0.sessionId); if (a) return { ok: false, reason: a.away };
       finishing = true; emit();
-      try { lastFinishSent = { sessionId: d0.sessionId, payload: withPayload(d0).payload }; } catch (e) { lastFinishSent = null; }
+      const fp = fingerprint(d0);
       // גיבוי שבדרך — מחכים לו (אחרת השמירה מתנגשת בו ונכשלת)
       if (debounceTimer) { timers.clear(debounceTimer); debounceTimer = null; }
       if (writing) { try { await writing; } catch (e) {} }
@@ -577,18 +590,20 @@
         const extra = A.finishReads ? await A.finishReads(t, { sessionId: d.sessionId, recordId }) : null;
         const cur = exists(hs) ? hs.data() : null, rec = exists(rs) ? rs.data() : null;
         const mine = by => by && by.deviceId === me() && by.sessionId === d.sessionId;
-        if (cur && cur.state === 'saved' && mine(cur.savedBy)) return { already: true };
+        // "כבר נשמר" רק אם נשמר בדיוק התוכן הזה; שמירה קודמת שלי עם תוכן אחר (נכנסה באיחור) — לא "הצלחה"
+        const already = by => { if (by.fp == null || by.fp === fp) return { already: true }; throw fault('saved-late', null, { doc: cur }); };
+        if (cur && cur.state === 'saved' && mine(cur.savedBy)) return already(cur.savedBy);
         if (cur && cur.state !== 'open') throw fault(cur.state === 'canceled' ? 'canceled' : 'saved', null, { doc: cur });
         if (cur && cur.deviceId !== me()) throw fault('moved', null, { doc: cur });
         if (!d.expected) {
-          if (rec) { if (mine(rec.savedBy)) return { already: true }; throw fault('exists'); }
+          if (rec) { if (mine(rec.savedBy)) return already(rec.savedBy); throw fault('exists'); }
         } else {
           if (!rec) throw fault('changed');
           // "id" שנכתב לתוך המסמך (שחזור מסל / ביטול מחיקה) — לא שינוי
-          if (!equal(without(rec, 'id'), without(d.expected, 'id'))) { if (mine(rec.savedBy)) return { already: true }; throw fault('changed'); }
+          if (!equal(without(rec, 'id'), without(d.expected, 'id'))) { if (mine(rec.savedBy)) return already(rec.savedBy); throw fault('changed'); }
         }
         const c = claimFor(d.sessionId);
-        const savedBy = { deviceId: me(), sessionId: d.sessionId, gen: cur ? Number(cur.gen) || 1 : (c ? c.gen : 0) };
+        const savedBy = { deviceId: me(), sessionId: d.sessionId, gen: cur ? Number(cur.gen) || 1 : (c ? c.gen : 0), fp };
         t.set(recordRef(recordId), Object.assign({}, data, { savedBy }));
         if (A.finishWrites) A.finishWrites(t, { sessionId: d.sessionId, recordId, savedBy, extra });
         t.set(ref, closedDoc(cur, d, 'saved', savedBy));
@@ -610,6 +625,8 @@
         const code = errorCode(e);
         if (['moved', 'saved', 'canceled'].includes(code)) { setAway(d.sessionId, code, e.doc || null); syncWatches(); }
         if (code === 'exists') { setAway(d.sessionId, 'saved', null); syncWatches(); } // נשמרה ממקום אחר — "נקה" בלי למחוק כלום
+        // השמירה הקודמת שלי נכנסה עם תוכן אחר — מה שבטלפון נשמר בצד (גלוי), והקליטה "נשמרה"
+        if (code === 'saved-late') { const by = (e.doc && e.doc.savedBy) || { deviceId: me(), sessionId: d.sessionId, fp: 'other' }; keepLate(d.sessionId, { savedBy: by }, d); setAway(d.sessionId, 'saved', e.doc || null); syncWatches(); }
         return { ok: false, reason: code };
       } finally { finishing = false; emit(); }
     }

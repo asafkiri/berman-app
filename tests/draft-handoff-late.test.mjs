@@ -82,3 +82,91 @@ test('S1 ping-pong: a "same" side copy of a receipt saved on the other phone is 
   a.h.clear(); await settle();
   assert.deepEqual(a.state().side, [], 'record exists -> not offered (spec 5.8)');   // FAILS on v137
 });
+
+test('V1 already-path: late commit lands, user edited after "not saved", presses Save before snapshot -> ok:true already, new data never written', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'A'); a.start(); await settle();
+  a.newDraft('r1'); a.set('bread', 3); await settle();
+  cloud.commitDelayMs = 1000;
+  const f = await a.h.finish('r1', { items: { ...a.d.items } });
+  cloud.commitDelayMs = 0;
+  assert.equal(f.unknown, true);
+  await settle(450);
+  assert.ok(a.notices.includes('finish-not-saved'));
+  a.client.setOnline(false);
+  a.set('milk', 2);
+  await settle(450);                     // stuck commit lands while A's listener is offline
+  assert.equal(cloud.get(recPath('r1')).items.milk, undefined);
+  a.client.setOnline(true);
+  const g = await a.h.finish('r1', { items: { ...a.d.items } });
+  console.log('second finish ->', JSON.stringify(g), 'record', JSON.stringify(cloud.get(recPath('r1')).items));
+  assert.ok(!(g.ok && !cloud.get(recPath('r1')).items.milk), 'BUG: Save reported ok but milk:2 not in record');
+});
+
+test('V2 restart path: reply lost, app restarted before resolution, edit offline -> "saved, old copy", clear drops edit', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'A'); a.start(); await settle();
+  a.newDraft('r1'); a.set('bread', 3); await settle();
+  cloud.loseReplyAfterCommit = true;
+  const f = await a.h.finish('r1', { items: { ...a.d.items } });
+  cloud.loseReplyAfterCommit = false;
+  assert.equal(f.unknown, true);
+  a.client.setOnline(false);
+  a.h.stop();
+  const a2 = phone(cloud, 'A', { storage: a.storage, cache: a.client.cache, draft: a.d });
+  a2.client.setOnline(false);
+  a2.start(); await settle();
+  console.log('after restart offline', JSON.stringify(a2.state()));
+  a2.set('milk', 2); await settle();
+  a2.client.setOnline(true); a2.h.retry(); await settle(120);
+  console.log('online', JSON.stringify(a2.state().away));
+  a2.h.clear();
+  const kept = a2.debug().side.some(x => JSON.parse(x.payload).items.milk === 2);
+  assert.ok(kept, 'BUG: milk:2 lost after restart-path');
+});
+
+test('V2b restart after lost reply: edit offline, back online, press Save -> ok:true (already) and the edit is silently not saved', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'A'); a.start(); await settle();
+  a.newDraft('r1'); a.set('bread', 3); await settle();
+  cloud.loseReplyAfterCommit = true;
+  const f = await a.h.finish('r1', { items: { ...a.d.items } });
+  cloud.loseReplyAfterCommit = false;
+  assert.equal(f.unknown, true);
+  a.client.setOnline(false); a.h.stop();                 // app killed while "בודק…"
+  const a2 = phone(cloud, 'A', { storage: a.storage, cache: a.client.cache, draft: a.d });
+  a2.client.setOnline(false); a2.start(); await settle();
+  assert.equal(a2.state().readOnly, false);
+  a2.set('milk', 2); await settle();                     // user keeps counting (weak network)
+  a2.client.setOnline(true);
+  const g = await a2.h.finish('r1', { items: { ...a2.d.items } });   // presses Save as soon as there is network
+  console.log('finish after restart ->', JSON.stringify(g), 'record:', JSON.stringify(cloud.get(recPath('r1')).items), 'side:', JSON.stringify(a2.debug().side.map(x => x.reason)));
+  assert.ok(!(g.ok && !cloud.get(recPath('r1')).items.milk), 'BUG: Save reported success but the record lacks milk:2');
+});
+
+test('G1 checking-undo: take whose commit was sent but is stuck past the timeout, while C takes it — side copy of B\'s own draft is removed', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'A'), b = phone(cloud, 'B'), c = phone(cloud, 'C'); [a, b, c].forEach(p => p.start()); await settle();
+  a.newDraft('r1'); a.set('bread', 3); await settle();
+  b.newDraft('b1'); b.set('x', 1); await settle();
+  cloud.commitDelayMs = 400;                 // B's commit is sent, reply later than T.take (250)
+  const pb = b.h.take('r1');
+  await settle(5); cloud.commitDelayMs = 0;
+  assert.equal((await c.h.take('r1')).ok, true);   // C wins meanwhile
+  const rb = await pb;
+  assert.equal(rb.unknown, true, 'B: unknown');
+  await settle(700);
+  assert.equal(b.d.sessionId, 'b1');
+  assert.deepEqual(b.debug().side, [], 'side copy removed after the server said "not yours"');
+});
+
+test('G2 scan start is backed up at once (not after the debounce) — the other phone loses the button immediately', async () => {
+  const cloud = createCloud();
+  const slow = { ...T, debounce: 5000 };
+  const a = phone(cloud, 'A', { timeouts: slow }), b = phone(cloud, 'B'); a.start(); b.start(); await settle();
+  a.newDraft('r1'); a.set('bread', 3); a.h.flush(); await settle();
+  assert.equal(doc(cloud, 'r1').scanRunning, false);
+  a.d.scan = true; a.h.changed(); await settle();
+  assert.equal(doc(cloud, 'r1').scanRunning, true, 'scan flag written immediately');
+  assert.equal(b.state().offers[0].button, false);
+});

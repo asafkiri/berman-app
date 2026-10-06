@@ -10,6 +10,8 @@ const settle = async () => { for (let i = 0; i < 60; i++) await new Promise(res 
 const small = (number = '290095141') => delivery(number, { internalNumber: null, headerText: 'ת.משלוח', docDate: printed(days(0)) });
 const ROOT = 'artifacts/berman-app-classic/public/data/';
 const handoffDoc = (cloud, sid) => cloud.get(ROOT + 'drafts/handoff_berman_receiving_' + sid);
+const online = (r, v) => { r.run('navigator.onLine = ' + !!v); r.client.setOnline(!!v); };
+const banner = r => { r.run(`currentView = 'receiving'; renderSharedReceivingBanner()`); return r.node('sharedReceivingBanner').innerHTML; };
 const record = (cloud, id) => cloud.get(ROOT + 'receipts/' + id);
 function phone(cloud, name, paper = small(), opts = {}) {
   const client = cloud.client({ cache: opts.cache });
@@ -103,7 +105,36 @@ test('KA4 app: save whose reply is lost — "בודק…", read-only, then the s
   // the harness collects timers; run the ones the module set (grace, cap) a few rounds
   for (let round = 0; round < 4; round++) { const cbs = a.callbacks.splice(0); for (const fn of cbs) { try { await fn(); } catch (e) {} } await settle(); }
   assert.equal(a.run('receivingDraftEmpty()'), true, 'closed after the server said saved: ' + a.toasts.slice(-2).join(' | '));
-  assert.match(a.toasts.join(' | '), /התעודה נקלטה ✓/);
+  assert.match(a.toasts.join(' | '), /התעודה נקלטה ✓ · /);
   assert.equal(a.run('currentView'), 'receiptsHistory');
   assert.equal(cloud.transactions - n <= 1, true);
+});
+
+test('V6 שמירה שהתשובה שלה אבדה, האפליקציה נפתחה מחדש והמשתמש שינה כמות ושמר — לא "נקלטה ✓" על התעודה הישנה; השינוי נשמר בצד', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'טלפון א');
+  await readPapers(a); await settle(); await sync(a);
+  const id = a.run('receiptDraftId');
+  cloud.loseReplyAfterCommit = true;
+  a.run(`startReceiptQuantityReview('none'); testConfirms[testConfirms.length - 1].cb();`); await settle(); await settle();
+  cloud.loseReplyAfterCommit = false;
+  assert.ok(record(cloud, id), 'השמירה הראשונה נכנסה לשרת');
+  online(a, false); a.run('draftHandoff.stop()');
+  // נפתחת מחדש: אותו localStorage ואותו מטמון, רשת חלשה
+  const a2 = phone(cloud, 'טלפון א', small(), { storage: a.storage, cache: a.client.cache, noStart: true });
+  online(a2, false); a2.run('startSharedReceiving()'); await settle();
+  assert.equal(a2.run('receivingDraftEmpty()'), false, 'הקליטה עוד פתוחה בטלפון');
+  // המשתמש משנה כמות ושומר (בלי "לא הגיע כלום", שמאפס הכל)
+  a2.run(`receiptList[0].qty = Number(receiptList[0].qty) + 5; saveReceiptDraft(); scheduleReceivingHandoff({ user: true });`); await settle();
+  const want = a2.run('receiptList[0].qty');
+  online(a2, true);
+  a2.run(`pendingReceipt = { lines: receiptList.slice(), status: 'ok', noteParts: [] };`);
+  await a2.run('confirmReceipt()'); await settle(); await settle();
+  const toasts = a2.toasts.join(' | ');
+  assert.doesNotMatch(toasts, /התעודה נקלטה ✓/, 'לא "נקלטה" כשהשינוי לא נכנס');
+  assert.match(toasts, /כבר נשמרה מהשמירה הקודמת/);
+  assert.equal(record(cloud, id).items[0].qty, 0, 'התעודה השמורה לא נדרסה');
+  const side = JSON.parse(a2.storage.get('bm_handoff_receiving_side') || '[]');
+  assert.ok(side.some(x => x.reason === 'late' && JSON.parse(x.payload).state.receiptList[0].qty === want), 'השינוי נשמר בצד');
+  assert.match(banner(a2), /כבר נשמרה/);
 });
