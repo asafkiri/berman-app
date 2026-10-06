@@ -1539,7 +1539,8 @@ function startListeners() {
     papers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     paperClearStaleConflicts();
     ledgerInvalidate();
-    if (currentView === 'ledger' || currentView === 'receiptsHistory') rerender(); else refreshLedgerBar();
+    if (currentView === 'ledger' || currentView === 'receiptsHistory') rerender();
+    else { refreshLedgerBar(); refreshPaperIntake(); } // v131: כרטיס הנייר משקף תשובה שהגיעה מהענן
   }, console.error);
 
   const cfgRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'app');
@@ -13055,7 +13056,7 @@ function paperLedger(opts) {
   recs.forEach(rc => storedReceiptPaperNumbers(rc).forEach(n => { if (!recOfNum.has(n)) recOfNum.set(n, rc.id); }));
   const smallIn = papers.filter(p => states[p.id] === 'in-receipt' && p.kind === 'delivery' && p.small === true && p.docDay && Array.isArray(p.rows))
     .map(p => { const n = paperNumbers(p).find(x => recOfNum.has(x)); return n ? { ...p, recId: recOfNum.get(n) } : null; }).filter(Boolean);
-  const placed = [], orphans = [], asks = {}, askWhy = {};
+  const placed = [], orphans = [], asks = {}, askWhy = {}, askRecs = {};
   const outside = t => t && t.type && !byId.has(t.type + ':' + t.id) && byIdWide.has(t.type + ':' + t.id);
   const exists = t => !t || !t.type || byIdWide.has(t.type + ':' + t.id);
   real.forEach(p => {
@@ -13087,17 +13088,21 @@ function paperLedger(opts) {
     // v130 (סבב 5): נייר זיכוי שנצמד לחוסר שמקורו בנייר "ת.משלוח" קטן, כשלאותו מוצר ובאותה כמות כבר רשום זיכוי
     // במקום אחר (חוסר שסומן "התקבל בזיכוי", או החזרה שזוכתה) — לא ברור על מה הוא: לא נספר עד שבוחרים
     if (p.kind === 'credit' && !(p.attach && p.attach.by === 'user')) {
-      const day = String(p.docDay || ''), alt = [];
+      const day = String(p.docDay || ''), alt = [], altRecs = [];
+      let smallRec = null;
       const amb = (Array.isArray(at.rowTargets) ? at.rowTargets : []).some(t => {
         const r = t && t.type === 'receipt' && (p.rows || [])[t.line]; if (!r) return false;
         const k = paperRowKey(r).key, q = Number(r.qty) || 0;
         if (!smallIn.some(sp => sp.recId === t.id && (sp.rows || []).some(x => x && paperRowKey(x).key === k))) return false;
-        const recReg = baseWide.some(d => d.type === 'receipt' && d.id !== t.id && d.day >= ledgerAddDays(day, -7) && d.day <= ledgerAddDays(day, 1) && d.rows[k] && d.rows[k].credited >= q && d.rows[k].billed - d.rows[k].received >= q);
+        const recReg = baseWide.filter(d => d.type === 'receipt' && d.id !== t.id && d.day >= ledgerAddDays(day, -7) && d.day <= ledgerAddDays(day, 1) && d.rows[k] && d.rows[k].credited >= q && d.rows[k].billed - d.rows[k].received >= q);
         const retReg = baseWide.filter(d => d.type === 'return' && d.day <= day && d.day >= ledgerAddDays(day, -LEDGER_RETURN_WINDOW_DAYS) && d.rows[k] && d.rows[k].cred >= q);
         retReg.forEach(d => { if (alt.indexOf(d.id) === -1) alt.push(d.id); });
-        return recReg || retReg.length > 0;
+        recReg.forEach(d => { if (altRecs.indexOf(d.id) === -1) altRecs.push(d.id); });
+        if (recReg.length || retReg.length) { smallRec = smallRec || t.id; return true; }
+        return false;
       });
-      if (amb) { states[p.id] = 'needs-attach'; asks[p.id] = alt; askWhy[p.id] = 'registered'; return; }
+      // v131: הבחירה אומרת בדיוק לאן — "זה הזיכוי שכבר רשום בקליטה של …" (שם הוא לא נספר פעמיים), או החוסר בקליטה של הנייר הקטן
+      if (amb) { states[p.id] = 'needs-attach'; asks[p.id] = alt; askWhy[p.id] = 'registered'; askRecs[p.id] = { reg: altRecs, small: smallRec }; return; }
     }
     // שורה של חוסר בקליטה מלפני תחילת המאזן — לא נספרת כאן; שאר הנייר כן
     const rowTargets = (Array.isArray(at.rowTargets) ? at.rowTargets : []).map(t => t && outside(t) ? { ...t, outside: true } : t);
@@ -13296,7 +13301,7 @@ function paperLedger(opts) {
   papers.forEach(p => {
     if (states[p.id] === 'unproven') out.unshift({ id: 'paper|' + p.id, kind: 'unproven', state: 'question', paper: p });
     // v130: ממתין (לא שאלה) — לא בשורה האדומה שבקליטה; הבחירה במסך המאזן, למי שרוצה
-    if (states[p.id] === 'needs-attach') out.unshift({ id: 'attach|' + p.id, kind: 'needsAttach', state: 'pending', paper: p, ask: asks[p.id] || [], why: askWhy[p.id] || null });
+    if (states[p.id] === 'needs-attach') out.unshift({ id: 'attach|' + p.id, kind: 'needsAttach', state: 'pending', paper: p, ask: asks[p.id] || [], why: askWhy[p.id] || null, recs: askRecs[p.id] || null });
     if (states[p.id] === 'awaiting-receipt') out.push({ id: 'await|' + p.id, kind: 'deliveryNotReceived', state: String(p.docDay) >= asOf ? 'pending' : 'problem', paper: p,
       sameDay: recs.some(rc => storedReceiptDate(rc) === String(p.docDay)) });
     if (states[p.id] === 'duplicate') out.push({ id: 'dup|' + p.id, kind: 'duplicatePaper', state: 'info', paper: p, of: dupOf[p.id] });
@@ -13536,7 +13541,10 @@ function ledgerItemText(it, lg, papers) {
       const lines = prod.length, top = prod.slice().sort((a, b) => (b.part.sent || 0) - (a.part.sent || 0))[0];
       if (!lines) return { role: 'ledger-attach', label: 'ההחזרה מ-' + ledgerDayShort(lg.docDays[id]) + ' (לפני תחילת המאזן)', paperId: it.paper.id, returnId: id };
       return { role: 'ledger-attach', label: 'ההחזרה מ-' + ledgerDayShort(lg.docDays[id]) + ' · ' + ledgerRowsText(lines) + (top ? ' · ' + top.pr.name + ' ×' + mtxQty(top.part.sent) : ''), paperId: it.paper.id, returnId: id };
-    }).concat([{ role: 'ledger-attach', label: it.why === 'registered' ? 'זיכוי לחוסר בקליטה' : 'לא שייך להחזרה', paperId: it.paper.id, returnId: '' }]) };
+    }).concat(it.why === 'registered' && it.recs
+      ? (it.recs.reg || []).filter(id => (lg.docDays || {})[id]).map(id => ({ role: 'ledger-attach', label: 'זה הזיכוי שכבר רשום בקליטה של ' + ledgerDayShort(lg.docDays[id]), paperId: it.paper.id, returnId: '', receiptId: id }))
+        .concat(it.recs.small && (lg.docDays || {})[it.recs.small] ? [{ role: 'ledger-attach', label: 'זיכוי לחוסר בקליטה של ' + ledgerDayShort(lg.docDays[it.recs.small]) + ' (הנייר הקטן)', paperId: it.paper.id, returnId: '', receiptId: it.recs.small }] : [])
+      : [{ role: 'ledger-attach', label: 'לא שייך להחזרה', paperId: it.paper.id, returnId: '' }]) };
     case 'deliveryNotReceived': {
       // v126: התעודה כבר נקראה — "לקליטה" מכניס אותה כפי שנקראה (בלי קריאה חדשה, בלי להקליד).
       // רק המספרים שמודפסים בתחתית הנייר — סכום השורות שנקראו אינו עוגן, והכמויות לא מוצגות.
@@ -14107,6 +14115,7 @@ async function paperIntakeRun() {
       it.progress = 'קורא נייר ' + n + (left ? ' · עוד ' + left : '') + '… השאר את האפליקציה פתוחה';
       refreshPaperIntake(); receivingRoundRefresh();
       const res = await paperIntakeReadOne(token, item);
+      ledgerInvalidate(); // v131: הכרטיס נבנה מהמאזן — עם הנייר שנקרא עכשיו (בלי זה: "✓ תואם" במקום "לאיזו החזרה?")
       refreshPaperIntake();
       if (item.status === 'delivery') {
         try { await receivingJoinDelivery({ paperId: item.paperId, cap: item.captureId, item, explicit: false }); }
@@ -14751,7 +14760,7 @@ function paperIntakeItemHtml(item) {
       const pre = again ? 'צילום נוסף של נייר שכבר נשמר — ' : '';
       const sub = again && ok && st === 'counted' ? 'הנייר הזה כבר נשמר מצילום קודם — נספר פעם אחת.'
         : !ok ? pre + 'לא נקרא עד הסוף — לא נספר עד שתבדוק ותאשר אותו.'
-        : st === 'needs-attach' ? pre + (paperAttachChoice(p, lgNow).why === 'registered' ? 'נקרא — על מה הזיכוי הזה? בחר כאן (עד אז הוא לא נספר).' : 'נקרא — לאיזו החזרה הוא שייך? בחר כאן (עד אז הוא לא נספר).')
+        : st === 'needs-attach' ? pre + (paperAttachChoice(p, lgNow).why === 'registered' ? 'נקרא — זיכוי כזה כבר רשום. על מה הזיכוי הזה? בחר כאן (עד אז הוא לא נספר).' : 'נקרא — לאיזו החזרה הוא שייך? בחר כאן (עד אז הוא לא נספר).')
         : st === 'duplicate' ? 'זהה לנייר שכבר נספר — נספר פעם אחת.'
         : st === 'in-receipt' ? 'כבר כלול בקליטה — לא נספר פעמיים.'
         : st === 'outside' ? pre + 'מחוץ לתקופת המאזן — לא נספר.'
@@ -14769,7 +14778,7 @@ function paperIntakeItemHtml(item) {
         if (ch.actions.length) {
           tone = 'border-amber-300 bg-amber-50';
           // כל בחירה בשורה משלה (תוויות ארוכות; ברוחב טלפון בלי גלילה לצדדים)
-          actions = ch.actions.map(a => '<button data-role="ledger-attach" data-paper="' + htmlEscape(p.id) + '" data-return="' + htmlEscape(a.returnId || '') + '"' + capAttr +
+          actions = ch.actions.map(a => '<button data-role="ledger-attach" data-paper="' + htmlEscape(p.id) + '" data-return="' + htmlEscape(a.returnId || '') + '"' + (a.receiptId ? ' data-receipt="' + htmlEscape(a.receiptId) + '"' : '') + capAttr +
             ' class="btn-tap w-full min-h-[44px] px-3 py-2 rounded-lg bg-white border border-amber-300 text-amber-900 text-xs font-black text-right break-words">' + htmlEscape(a.label) + '</button>').join('') + actions;
         }
       }
@@ -15020,10 +15029,15 @@ function paperUserAttach(p, returnId) {
   if (at) { delete at.ask; delete at.fit; at.by = 'user'; }
   return at;
 }
-async function setPaperAttach(paperId, returnId) {
+// receiptId (v131): המשתמש בחר קליטה מסוימת — שורות הנייר שהמוצר שלהן בקליטה הזו נספרות שם (הגדול מבין הרישום והנייר)
+async function setPaperAttach(paperId, returnId, receiptId) {
   const found = paperFind(paperId); if (!found) return false;
   const p = cloneSafe(found.paper);
-  const at = paperUserAttach(p, returnId);
+  const rc = receiptId ? receipts.find(x => x && x.id === receiptId) : null;
+  const at = rc ? { type: null, id: null, role: null, by: 'user', rowTargets: (Array.isArray(p.rows) ? p.rows : []).map((r, i) => {
+      const k = r && paperRowKey(r).key;
+      return k && (Array.isArray(rc.items) ? rc.items : []).some(l => l && ledgerLineKey(l).key === k) ? { line: i, type: 'receipt', id: rc.id } : { line: i, type: null, id: null };
+    }) } : paperUserAttach(p, returnId);
   p.attach = at; p.forReturnId = returnId || null;
   const rev = (Number(p.rev) || 1) + 1;
   const onDevice = !!(found.local && !found.local.ackedAt);
@@ -15051,7 +15065,7 @@ function ledgerItemCardHtml(it, lg, all) {
   const t = ledgerItemText(it, lg, all);
   const tone = it.state === 'problem' ? 'border-rose-300 bg-rose-50' : it.state === 'question' ? 'border-amber-300 bg-amber-50' : it.state === 'pending' ? 'border-slate-200 bg-white' : 'border-slate-200 bg-slate-50';
   const icon = it.state === 'problem' ? 'fa-circle-exclamation text-rose-600' : it.state === 'question' ? 'fa-circle-question text-amber-600' : it.state === 'pending' ? 'fa-hourglass-half text-slate-400' : 'fa-circle-info text-slate-400';
-  const acts = (t.actions || []).map(a => '<button data-role="' + a.role + '" data-item="' + htmlEscape(it.id) + '"' + (a.returnId != null ? ' data-return="' + htmlEscape(a.returnId) + '"' : '') + (a.paperId ? ' data-paper="' + htmlEscape(a.paperId) + '"' : '') +
+  const acts = (t.actions || []).map(a => '<button data-role="' + a.role + '" data-item="' + htmlEscape(it.id) + '"' + (a.returnId != null ? ' data-return="' + htmlEscape(a.returnId) + '"' : '') + (a.paperId ? ' data-paper="' + htmlEscape(a.paperId) + '"' : '') + (a.receiptId ? ' data-receipt="' + htmlEscape(a.receiptId) + '"' : '') +
     ' class="btn-tap min-h-[44px] px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-xs font-black">' + htmlEscape(a.label) + '</button>').join('');
   return '<div class="rounded-2xl border ' + tone + ' p-3"><div class="flex gap-2"><i class="fa-solid ' + icon + ' mt-1" aria-hidden="true"></i><div class="flex-1 min-w-0">' +
     '<div class="font-black text-slate-800 text-sm leading-snug">' + htmlEscape(t.text) + '</div>' +
@@ -15136,7 +15150,7 @@ function ledgerDeclarationText(p, lg) {
   return 'תשובה';
 }
 function ledgerShortHash(s) { let h = 0; String(s).split('').forEach(c => { h = ((h << 5) - h + c.charCodeAt(0)) | 0; }); return (h >>> 0).toString(36); }
-async function ledgerAnswer(role, itemId, returnId, paperId) {
+async function ledgerAnswer(role, itemId, returnId, paperId, receiptId) {
   const lg = currentLedger();
   const it = lg.items.find(x => x.id === itemId);
   if (role === 'ledger-declare-correction' && it && it.pair) {
@@ -15151,7 +15165,7 @@ async function ledgerAnswer(role, itemId, returnId, paperId) {
   } else if (role === 'ledger-ack-offset' && it && it.offsetId) {
     await saveLedgerDeclaration('decl_ack_' + ledgerShortHash(it.offsetId), { declare: 'ack-offset', offsetId: it.offsetId });
   } else if (role === 'ledger-attach' && paperId) {
-    await setPaperAttach(paperId, returnId || '');
+    await setPaperAttach(paperId, returnId || '', receiptId || '');
   } else if (role === 'ledger-not-dup' && paperId && returnId) {
     await setPaperDistinct(paperId, returnId);
   }
@@ -15433,7 +15447,7 @@ function paperUiClick(t) {
     return true;
   }
   if (role === 'paper-goto-receiving') { setView('receiving'); return true; }
-  if (role.indexOf('ledger-') === 0) { ledgerAnswer(role, t.dataset.item, t.dataset.return, t.dataset.paper); return true; }
+  if (role.indexOf('ledger-') === 0) { ledgerAnswer(role, t.dataset.item, t.dataset.return, t.dataset.paper, t.dataset.receipt); return true; }
   if (!paperReview) return false;
   const r = paperReview;
   if (role === 'review-kind') { r.paper.kind = t.dataset.kind; r.paper.kindKnown = true; renderPaperReview(); return true; }

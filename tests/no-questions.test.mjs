@@ -12,7 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-import { app, days, delivery, printed, readPapers, receive, state } from './one-button-helpers.mjs';
+import { app, credit, days, delivery, items, printed, readPapers, receive, state, until } from './one-button-helpers.mjs';
 import { runtime, fixture } from './receipt-scan-harness.mjs';
 
 // נייר "ת.משלוח" קטן כפי שהשרת (v7) מחזיר אותו
@@ -187,4 +187,45 @@ test('v131: נייר שברור לאיזו החזרה — בלי שאלה על �
   const r = ledgerApp(L2.receipts.slice().reverse(), L2.returns.slice().reverse(), [L2.papers.p141, L2.papers.p142]);
   r.run(`openPaperIntake({}); paperIntake.items = [{ captureId: 'c142', status: 'saved', paperId: 'paper_290095142' }];`);
   assert.doesNotMatch(r.run(`paperIntakeItemHtml(paperIntake.items[0])`), /data-role="ledger-attach"|לאיזו החזרה/);
+});
+
+test('v131 (סקירה): מיד אחרי הקריאה, כשהנייר עוד רק במכשיר — המסך כבר שואל (לא "✓ תואם")', async () => {
+  // נייר זיכוי 2381 ×1 מ-2.10 — מתאים לכמה החזרות בנתונים של 4–5.10
+  const scan = delivery('290094992', { docType: 'credit', headerText: 'ת.משלוח החזרה יבש', internalNumber: null, totalUnits: 1, printedLines: 1, docDate: '02/10/2026' });
+  const r0 = scan.scan.documents[0].rows[0];
+  scan.scan.documents[0].rows = [{ ...r0, itemCode: '2381', description: 'פיתות פרימיום 10', barcode: '4033033', quantity: 1, lineNumber: 1 }];
+  const r = app(scan);
+  r.context.testL = { receipts: L2.receipts.slice().reverse(), returns: L2.returns.slice().reverse(), products: L2.products };
+  r.run(`products = testL.products; receipts = testL.receipts; returns = testL.returns; papers = []; todayStr = () => '2026-10-05'; ledgerInvalidate();
+    globalThis.__inCreate = 0; { const orig = executePaperCreateTask; executePaperCreateTask = async task => { globalThis.__inCreate++; await new Promise(() => {}); return orig(task); }; }
+    openPaperIntake({}); setView('paperIntake'); paperIntake.items = paperIntake.items.concat(${items(1, 0, '')}); paperIntakeRun();`);
+  await until(() => r.run('globalThis.__inCreate') > 0);
+  const html = String(r.node('app').innerHTML);
+  assert.doesNotMatch(html, /תואם לנייר/);
+  assert.match(html, /לאיזו החזרה הוא שייך\? בחר כאן/);
+  assert.ok((html.match(/data-role="ledger-attach"/g) || []).length >= 3);
+  assert.equal(r.requests.length, 1);
+});
+
+test('v131 (סקירה): זיכוי שכבר רשום בקליטה אחרת — "זה הזיכוי שכבר רשום בקליטה של 3.10" נספר שם, והחוסר של הנייר הקטן נשאר', async () => {
+  const it = (c, qty, noteQty) => ({ productId: 'code_' + c, code: c, name: c, qty, ...(noteQty != null ? { noteQty } : {}) });
+  const recs = [{ id: 'rc_1001', date: '2026-10-01', docDate: '2026-10-01', timestamp: 20, paperDocs: [{ number: '244700001' }, { number: '290095101' }], items: [it('233', 6, 8)] },
+    { id: 'rc_1003', date: '2026-10-03', docDate: '2026-10-03', timestamp: 30, paperDocs: [{ number: '244700002' }], items: [it('233', 3, 5)], shortCreditUnits: [{ productId: 'code_233', qty: 2 }] },
+    { id: 'rc_l0', date: '2026-10-04', docDate: '2026-10-04', timestamp: 40, paperDocs: [{ number: '244700010' }], items: [it('101', 5, 5)] }];
+  const row = (code, qty) => ({ line: 1, itemCode: code, barcode: null, description: '', qty, productId: 'code_' + code });
+  const S = { schema: 1, state: 'accepted', timestamp: 1, id: 'paper_290095101', kind: 'delivery', small: true, number: '290095101', terminalNumber: '290095101', docDay: '2026-10-01', rows: [row('233', 2)] };
+  const C = { schema: 1, rev: 1, state: 'accepted', timestamp: 2, id: 'paper_290095200', kind: 'credit', number: '290095200', terminalNumber: '290095200', docDay: '2026-10-03', rows: [row('233', 2)] };
+  const r = ledgerApp(recs, [], [S, C]);
+  r.context.testWrites = [];
+  r.run(`runCloudTask = async (label, task) => { testWrites.push(JSON.parse(JSON.stringify(task))); return true; };
+    openPaperIntake({}); paperIntake.items = [{ captureId: 'capC', status: 'saved', paperId: 'paper_290095200' }]; setView('paperIntake');`);
+  const card = r.run(`paperIntakeItemHtml(paperIntake.items[0])`);
+  assert.match(card, /זיכוי כזה כבר רשום/);
+  assert.match(card, /data-receipt="rc_1003"[^>]*>זה הזיכוי שכבר רשום בקליטה של 3\.10</);
+  assert.match(card, /data-receipt="rc_1001"[^>]*>זיכוי לחוסר בקליטה של 1\.10 \(הנייר הקטן\)</);
+  await r.run(`paperUiClick({ dataset: { role: 'ledger-attach', paper: 'paper_290095200', return: '', receipt: 'rc_1003' } })`);
+  for (let i = 0; i < 20; i++) await new Promise(res => setImmediate(res));
+  assert.deepEqual(JSON.parse(JSON.stringify(r.context.testWrites.at(-1).data.attach.rowTargets)), [{ line: 0, type: 'receipt', id: 'rc_1003' }]);
+  assert.equal(r.run(`currentLedger().states.paper_290095200`), 'counted');
+  assert.equal(r.run(`currentLedger().products.code_233.net`), 2, 'החוסר של הנייר הקטן ב-1.10 נשאר — לא נספר פעמיים');
 });
