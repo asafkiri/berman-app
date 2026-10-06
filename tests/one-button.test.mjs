@@ -320,6 +320,8 @@ test('הפענוח נקטע בטלפון השני (אין תמונות): "המש
   assert.equal(r.run('receiptPaperScanState'), 'failed'); assert.equal(r.run('aiScanBusy'), false);
   assert.equal(r.requests.length, 0);
   r.run(`aiScanBusy = true; receiptPaperScanState = 'running'`);
+  // הטלפון עורך (המנוע מוכן) — כדי שהבדיקה תגיע לשומר "צלם לפחות עמוד אחד" ולא תיעצר כי הטלפון לקריאה בלבד
+  r.run('canEditSharedReceipt = () => true');
   await r.run('aiScanBusy = false; bermanRunPaperScanInBackground()');
   assert.equal(r.requests.length, 0, 'v125: "צלם לפחות עמוד אחד" — לפני כל בקשה');
   // כבר יש קריאה — "המשך" רק מאמץ אותה

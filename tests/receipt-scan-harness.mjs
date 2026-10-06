@@ -84,6 +84,9 @@ export function runtime({ storage = new Map(), data = fixture(), realCloudTasks 
   });
   if (loadSharedEngine) vm.runInContext(fs.readFileSync(new URL('../shared-receiving.js', import.meta.url), 'utf8'), context,
     { filename: 'shared-receiving.js', timeout: 5000 });
+  // v137: המודול של המעבר בין טלפונים נטען תמיד, כמו בדף (בלי פונקציות Firestore בבדיקה — הוא פשוט לא עולה)
+  const handoffFile = new URL('../draft-handoff.js', import.meta.url);
+  if (fs.existsSync(handoffFile)) vm.runInContext(fs.readFileSync(handoffFile, 'utf8'), context, { filename: 'draft-handoff.js', timeout: 5000 });
   vm.runInContext(moduleSource, context, { filename: 'index.html', timeout: 5000 });
   context.testData = structuredClone(data); context.testWrites = writes; context.testToasts = toasts;
   const run = script => vm.runInContext(script, context, { timeout: 5000 });
