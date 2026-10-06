@@ -75,6 +75,7 @@
       html.dark .text-slate-600 { color:#cbd5e1 !important; }
       html.dark .text-slate-500 { color:#94a3b8 !important; }
       html.dark .text-slate-400 { color:#94a3b8 !important; }
+      html.dark .qc-diff { color:#bfdbfe !important; border-color:#3b82f6 !important; }
       html.dark .bg-rose-50 { background-color:#4c1d2b !important; }
       html.dark .bg-amber-50 { background-color:#422f13 !important; }
       html.dark .bg-emerald-50 { background-color:#123b32 !important; }
@@ -812,11 +813,16 @@ let sharedReceiptSaveTimer = null, sharedReceiptFinalizing = false;
 let sharedReceiptStatus = { ready: false, status: 'loading' }, sharedReceiptLegacy = null;
 let sharedReceiptLastView = 'receiving', sharedReceiptLastUI = {}, sharedReceiptLastError = '';
 let sharedReceiptLastAction = null, sharedReceiptConfirmText = null;
+// v135: קליטה בטלפון הזה בלבד — בלי הסנכרון בלייב בין טלפונים. כשהסנכרון לא עולה, הקליטה לא ננעלת: הספירה נשמרת
+// בטלפון, והתעודה נשמרת ישר לענן בסיום (אותה תעודה, אותו מזהה — שמירה חוזרת לא יוצרת שתיים). נשמר לטלפון הזה.
+const SHARED_RECEIVING_OFF_KEY = 'bm_shared_receiving_off';
+let sharedReceivingOff = false, sharedReceivingStartedAt = 0;
+try { sharedReceivingOff = localStorage.getItem(SHARED_RECEIVING_OFF_KEY) === '1'; } catch (e) {}
 let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '134'; // v134: מסך הניירות — קודם כל הניירות ("צלם עוד נייר" / "זה כל הניירות"), אחר כך הבחירות הידניות
+const APP_VERSION = '135'; // v135: "המשך בטלפון הזה בלבד" כשהסנכרון לא עולה; תיקוני הסקירה של v132–v134
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -6024,7 +6030,7 @@ function receiptQuantityButtonsHtml() {
   if (receiptNoDoc || receiptAttachTarget || receiptPaperScanState !== 'ok' || !aiScanResponse) return '';
   if (receiptUsesManualQuantities()) return '<div class="space-y-3 mb-3">' +
     '<button data-role="rc-quantity-all" class="btn-tap w-full bg-emerald-600 text-white rounded-xl py-4 px-3 font-black text-base">בדקתי ידנית — כל הכמויות תואמות, המשך לקליטה</button>' +
-    '<button data-role="rc-quantity-differences" class="btn-tap w-full bg-white border-2 border-blue-300 text-blue-800 rounded-xl py-4 px-3 font-black text-base">בדקתי ידנית — יש חוסרים או עודפים</button>' +
+    '<button data-role="rc-quantity-differences" class="qc-diff btn-tap w-full bg-white border-2 border-blue-300 text-blue-800 rounded-xl py-4 px-3 font-black text-base">בדקתי ידנית — יש חוסרים או עודפים</button>' +
     '<button data-role="rc-quantity-none" class="btn-tap w-full bg-white border-2 border-rose-300 text-rose-800 rounded-xl py-4 px-3 font-black text-base">לא הגיע כלום — הכל חסר</button></div>';
   // v132: לפני שנספר משהו — זו ההחלטה הראשונה במסך, אז היא פתוחה, ו"לא הגיע כלום" גדול כמו כפתור הספירה
   if (!receiptList.length) return quantityChoicesOpenHtml({ all: 'rc-quantity-all', diff: 'rc-quantity-differences', none: 'rc-quantity-none' }, 'או סרוק את מה שהגיע — למטה');
@@ -6036,7 +6042,7 @@ function receiptQuantityButtonsHtml() {
     '<span>בדקת ידנית את הכמויות מול התעודה?</span><i class="fa-solid fa-chevron-down hist-chevron shrink-0"></i></summary>' +
     '<div class="flex gap-2 mt-2">' +
     '<button data-role="rc-quantity-all" class="btn-tap flex-1 bg-emerald-600 text-white rounded-xl py-2.5 font-black text-sm">כל הכמויות תואמות</button>' +
-    '<button data-role="rc-quantity-differences" class="btn-tap flex-1 bg-white border-2 border-blue-300 text-blue-800 rounded-xl py-2.5 font-black text-sm">יש חוסרים או עודפים</button></div>' +
+    '<button data-role="rc-quantity-differences" class="qc-diff btn-tap flex-1 bg-white border-2 border-blue-300 text-blue-800 rounded-xl py-2.5 font-black text-sm">יש חוסרים או עודפים</button></div>' +
     '<button data-role="rc-quantity-none" class="btn-tap w-full mt-2 bg-white border-2 border-rose-300 text-rose-800 rounded-xl py-2.5 font-black text-sm">לא הגיע כלום — הכל חסר</button></details>';
 }
 // v134: שלוש הבחירות הידניות, פתוחות — במסך הקליטה (לפני ספירה) ובמסך הניירות; roles: { all, diff, none }
@@ -6045,7 +6051,7 @@ function quantityChoicesOpenHtml(roles, hint) {
     '<div class="text-sm font-black text-slate-800 mb-2">בדקת ידנית את הכמויות מול התעודה?</div>' +
     '<div class="grid grid-cols-2 gap-2">' +
     '<button data-role="' + roles.all + '" class="btn-tap min-h-[52px] bg-emerald-600 text-white rounded-2xl py-3 px-2 font-black text-base">כל הכמויות תואמות</button>' +
-    '<button data-role="' + roles.diff + '" class="btn-tap min-h-[52px] bg-white border-2 border-blue-300 text-blue-800 rounded-2xl py-3 px-2 font-black text-base">יש חוסרים או עודפים</button></div>' +
+    '<button data-role="' + roles.diff + '" class="qc-diff btn-tap min-h-[52px] bg-white border-2 border-blue-300 text-blue-800 rounded-2xl py-3 px-2 font-black text-base">יש חוסרים או עודפים</button></div>' +
     '<button data-role="' + roles.none + '" class="btn-tap w-full min-h-[56px] mt-2 bg-rose-600 text-white rounded-2xl py-4 px-3 font-black text-lg flex items-center justify-center gap-2 shadow-md"><i class="fa-solid fa-ban" aria-hidden="true"></i> לא הגיע כלום — הכל חסר</button>' +
     (hint ? '<div class="text-[11px] font-bold text-slate-500 text-center mt-2">' + hint + '</div>' : '') + '</div>';
 }
@@ -6060,12 +6066,24 @@ function receiptPaperDocCount() {
 // (למשל נייר "ת.משלוח" קטן על סחורה שלא הגיעה, או שכבר נספרה — המאזן משייך את החוסר למה שכבר בהיסטוריה)
 function startReceiptQuantityReview(allMatch) {
   const none = allMatch === 'none';
+  // v135: השאלה המשותפת לטלפון השני ("פתח מחדש לאישור") חוזרת על הבחירה הזאת — גם כשנלחצה במסך הניירות
+  // (שם הלחיצה לא נרשמת), ולא על הלחיצה האחרונה שנרשמה במסך הקליטה
+  sharedReceiptLastAction = { id: '', dataset: { role: none ? 'rc-quantity-none' : allMatch ? 'rc-quantity-all' : 'rc-quantity-differences' } };
   if (none) allMatch = false;
   // v132: עוד נייר מהנהג נקרא לקליטה הזאת (אולי עוד תעודת משלוח) — הבחירה חלה על כל הניירות, אז מחכים לו (כמו הסיום)
   if (paperJoinPending.size) paperJoinRetry();
-  const paperReading = receivingPaperReadRunning();
+  // v135: גם תעודה שנקראה ומחכה להיכנס (בלי קליטה מסוימת) — הניסיון החוזר מכניס אותה לקליטה הזאת
+  const paperReading = receivingPaperReadRunning() || (Array.from(paperJoinPending.values()).some(j => !j.item || !j.item.forDraftId || j.item.forDraftId === receiptDraftId) ? 'here' : '');
   if (paperReading) {
     showToast(paperReading === 'other' ? 'נייר מהנהג נקרא עכשיו בטלפון אחר — עוד רגע ואפשר לבחור.' : 'עוד נייר מהנהג נקרא עכשיו — עוד רגע הוא ייכנס לבד, ואז אפשר לבחור.', null, null, 3500);
+    return;
+  }
+  // v135: אימות קריאה ממתין — לא פותחים את מסך ההשוואה (הוא מראה את כמויות הנייר לפני הספירה); מראים כאן רק את
+  // המספרים המסומנים לבדיקה מול הנייר, כמו בסוף ספירה, ואחרי הבדיקה בוחרים שוב
+  if (bermanOcrPendingDocs().length) {
+    rcOcrReviewRevealed = true; rcOcrRevealDraft = receiptDraftId;
+    saveReceiptDraft(); refreshOcrReviewViews();
+    showToast('קודם בדוק מול הנייר את המספרים המסומנים באימות הקריאה — ואז בחר שוב.', null, null, 5000);
     return;
   }
   const paperRows = receiptQuantityPaperRows();
@@ -6097,8 +6115,11 @@ function startReceiptQuantityReview(allMatch) {
   if (none) {
     // ספירה שכבר נעשתה נמחקת — אומרים כמה, כדי שלא יימחק בטעות מה שבאמת הגיע
     const n = receiptPaperDocCount(), counted = receiptList.reduce((a, l) => a + (Number(l && l.qty) || 0), 0);
+    // v135: אילו תעודות — במספר שלהן (כדי שלא יאפס תעודה אחרת מזו שבראש)
+    const nums = (aiScanResponse && aiScanResponse.scan && Array.isArray(aiScanResponse.scan.documents) ? aiScanResponse.scan.documents : []).map(d => receiptPaperNumber(d && (d.docNumber ?? d.invoiceNumber))).filter(Boolean);
+    const which = nums.length ? ' (' + nums.join(', ') + ')' : '';
     showConfirm('לא הגיע כלום?', (counted > 0 ? 'שים לב: כבר נספרו ' + mtxQty(counted) + ' יח׳ — הספירה תימחק. ' : '') +
-      (n > 1 ? 'לא הגיע כלום מכל ' + n + ' התעודות בקליטה: כל השורות שבהן' : 'כל השורות שבתעודה') + ' יירשמו כחוסר (0 התקבלו), והקליטה תישמר. ' +
+      (n > 1 ? 'לא הגיע כלום מכל ' + n + ' התעודות בקליטה' + which + ': כל השורות שבהן' : 'כל השורות שבתעודה' + which) + ' יירשמו כחוסר (0 התקבלו), והקליטה תישמר. ' +
       'אם משהו כן הגיע — סרוק אותו או בחר "יש חוסרים או עודפים". המאזן ישייך את החוסרים למה שכבר חסר או עודף בהיסטוריה, ויראה מה באמת פתוח.', 'לא הגיע כלום — שמור', begin);
     return;
   }
@@ -14620,7 +14641,8 @@ function receivingJoinDelivery(opts) {
   paperJoinActive++;
   const run = paperJoinChain.then(() => receivingJoinDeliveryNow(opts || {}));
   paperJoinChain = run.catch(() => {});
-  run.then(() => { paperJoinActive--; }, () => { paperJoinActive--; });
+  const done = () => { paperJoinActive--; refreshPaperIntake(); }; // v135: מסך הניירות מתעדכן כשהכניסה נגמרה
+  run.then(done, done);
   return run;
 }
 // retry — ניסיון חוזר מהתור: בלי הודעות ובלי מעבר מסך (רק שאלה, אם המשתמש לחץ "לקליטה" בעצמו)
@@ -14944,7 +14966,8 @@ function renderPaperIntake() {
     : it.busy ? '<button data-role="paper-count-now" class="btn-tap w-full min-h-[48px] bg-white border-2 border-blue-300 text-blue-800 rounded-2xl py-3 font-black text-sm mb-3"><i class="fa-solid fa-barcode"></i> יש סחורה לקלוט? התחל לספור עכשיו — תעודת המשלוח תיכנס לבד</button>' : '';
   // v132/v134: בדיקה ידנית — כל הכמויות תואמות, חוסרים או עודפים, לא הגיע כלום — ישר מכאן, כשתעודת המשלוח כבר בקליטה
   // ושום נייר לא נקרא עכשיו (אותן בחירות כמו במסך הקליטה)
-  const manual = !photographing && open && paperManualChoiceReady() ? quantityChoicesOpenHtml({ all: 'paper-quantity-all', diff: 'paper-quantity-differences', none: 'paper-none-arrived' }, '') : '';
+  paperIntakeChoiceShown = paperIntakeChoiceNow();
+  const manual = !photographing && open && paperIntakeChoiceShown ? quantityChoicesOpenHtml({ all: 'paper-quantity-all', diff: 'paper-quantity-differences', none: 'paper-none-arrived' }, '') : '';
   app.innerHTML =
     '<div class="px-1 py-1 mb-3"><h2 class="font-black text-2xl text-slate-800">הניירות מהנהג</h2>' +
       '<div class="text-sm text-slate-600 mt-1">' + (R ? 'תעודת הזיכוי של ההחזרה מ-' + htmlEscape(ledgerDayShort(ledgerReturnDay(R))) + '. ' : '') +
@@ -14960,9 +14983,17 @@ function renderPaperIntake() {
 }
 function refreshPaperIntake() { if (currentView === 'paperIntake') renderPaperIntake(); }
 // v132/v134: אפשר לבחור ישר ממסך הניירות (כל הכמויות תואמות / חוסרים או עודפים / לא הגיע כלום) — אותם תנאים כמו במסך הקליטה
+// v135: האם הבחירות מוצגות עכשיו במסך הניירות — ומה הוצג בציור האחרון (כדי לצייר מחדש רק כשזה משתנה)
+let paperIntakeChoiceShown = null;
+function paperIntakeChoiceNow() { try { return !!(paperIntake && !receivingDraftEmpty() && paperManualChoiceReady() && paperIntakeHasDraftPaper(paperIntake)); } catch (e) { return false; } }
+// v135: הבחירות במסך הניירות — רק כשאחד הניירות שבמסך הזה נמצא בקליטה הפתוחה (אחרת "לא הגיע כלום" היה מאפס תעודה אחרת)
+function paperIntakeHasDraftPaper(it) {
+  const per = aiScanResponse && Array.isArray(aiScanResponse.perDocument) ? aiScanResponse.perDocument : [];
+  return !!(it && it.items.some(x => x && x.paperId && per.some(d => d && d.paperId === x.paperId)));
+}
 function paperManualChoiceReady() {
   return !receiptNoDoc && !receiptAttachTarget && receiptPaperScanState === 'ok' && !!aiScanResponse && !aiScanBusy
-    && !pendingReceipt && !reconcileData && !sharedReceiptFinalizing && canEditSharedReceipt() && !receivingPaperReadRunning();
+    && !pendingReceipt && !reconcileData && !sharedReceiptFinalizing && canEditSharedReceipt() && !receivingPaperReadRunning() && !bermanOcrPendingDocs().length;
 }
 // v131: הכפתורים של "לאיזו החזרה?" לנייר שלא נספר עד שבוחרים — אותם כפתורים כמו במסך המאזן
 function paperAttachChoice(p, lg) {
@@ -15605,6 +15636,10 @@ function paperUiClick(t) {
   if (role === 'paper-goto-receiving') { setView('receiving'); return true; }
   if (role === 'ledger-paper-delete') { deletePaperPhoto(t.dataset.paper || id); return true; } // v132
   // v132: לקליטה, ושם אותה שאלת אישור כמו הכפתור במסך הקליטה
+  if (role === 'paper-none-arrived' || role === 'paper-quantity-all' || role === 'paper-quantity-differences') {
+    // v135: המצב השתנה מאז שהמסך צויר (טלפון אחר, סיכום פתוח) — מציירים מחדש ולא מבצעים
+    if (!paperManualChoiceReady() || !paperIntakeHasDraftPaper(paperIntake)) { refreshPaperIntake(); showToast('הקליטה השתנתה — בדוק שוב ובחר', null, null, 2500); return true; }
+  }
   if (role === 'paper-none-arrived') { setView('receiving'); startReceiptQuantityReview('none'); return true; }
   // v134: "כל הכמויות תואמות" / "יש חוסרים או עודפים" — ישר ממסך הניירות, לקליטה ושם כמו במסך הקליטה
   if (role === 'paper-quantity-all' || role === 'paper-quantity-differences') { setView('receiving'); startReceiptQuantityReview(role === 'paper-quantity-all'); return true; }
@@ -21322,14 +21357,15 @@ function sharedReceiptReadOnlyNotice() {
     : 'ממתין לקבלת הקליטה העדכנית מהענן', null, null, 4200);
 }
 function canEditSharedReceipt() {
+  if (sharedReceivingOff) return !sharedReceiptFinalizing; // v135: טלפון אחד — תמיד אפשר לערוך
   return !!(sharedReceiving && sharedReceiving.ready && sharedReceiving.canEdit !== false && !sharedReceiptStatus.conflict && navigator.onLine && !sharedReceiptFinalizing);
 }
 function scheduleSharedReceiptSave() {
-  if (!sharedReceiptHooksReady || sharedReceiptApplying || !canEditSharedReceipt()) return;
+  if (sharedReceivingOff || !sharedReceiptHooksReady || sharedReceiptApplying || !canEditSharedReceipt()) return; // v135: טלפון אחד — בלי
   clearTimeout(sharedReceiptSaveTimer);
   sharedReceiptSaveTimer = setTimeout(() => {
     sharedReceiptSaveTimer = null;
-    if (sharedReceiptApplying || !canEditSharedReceipt()) return;
+    if (sharedReceiptApplying || !canEditSharedReceipt() || !sharedReceiving) return;
     // A photo-only draft needs an identity before its first OCR request.
     if (!receiptDraftId && (receiptOpened || receiptList.length || receiptNotes.length || aiScanDocuments.some(d => d.pages.length))) receiptDraftId = makeOperationId('receipt');
     sharedReceiving.save(captureSharedReceipt()).catch(sharedReceiptSyncError);
@@ -21343,6 +21379,8 @@ function sharedReceivingStatusChanged(status) {
   sharedReceiptStatus = status;
   if (!status.error) sharedReceiptLastError = '';
   renderSharedReceivingBanner();
+  // v135: מנעול קריאה ששוחרר, קליטה שהשתנתה בטלפון אחר — הכפתורים במסך הניירות מתעדכנים (רק כשהם באמת משתנים)
+  if (currentView === 'paperIntake' && paperIntakeChoiceShown !== paperIntakeChoiceNow()) refreshPaperIntake();
   paperJoinRetry(); // v126: תעודת משלוח שחיכתה לחיבור או לסיום קריאה בטלפון אחר
 }
 function renderSharedReceivingBanner() {
@@ -21351,6 +21389,11 @@ function renderSharedReceivingBanner() {
   el.classList.toggle('hidden', !visible);
   if (!visible) return;
   setSharedReceiptControlsReadOnly();
+  // v135: טלפון אחד — אומרים את זה, ואפשר לחזור לסנכרון
+  if (sharedReceivingOff) {
+    el.innerHTML = '<div class="text-[11px] font-bold text-slate-500">קליטה בטלפון הזה בלבד — בלי סנכרון בלייב. התעודה נשמרת לענן בסיום. <button data-shared-receiving="on" class="underline font-bold mr-1">הפעל סנכרון בין טלפונים</button></div>';
+    return;
+  }
   const st = sharedReceiptStatus, failed = !!(st.error || sharedReceiptLastError);
   const legacy = sharedReceiptLegacy && !sharedReceiptHasWork(sharedReceiving?.payload)
     ? '<button data-shared-receiving="legacy" class="underline font-bold mt-1">שחזור טיוטה קודמת מהמכשיר</button>' : '';
@@ -21365,11 +21408,14 @@ function renderSharedReceivingBanner() {
     : !st.ready ? 'טוען את הקליטה…'
     : st.busy || st.dirty ? 'מסנכרן…' : 'מסונכרן בלייב בכל המכשירים';
   const action = navigator.onLine && failed ? '<button data-shared-receiving="retry" class="underline font-bold mr-2">נסה שוב</button>' : '';
+  // v135: הסנכרון לא עולה או נכשל — אפשר להמשיך בטלפון הזה בלבד (בלי להינעל), והסיבה האמיתית נאמרת
+  const why = failed && sharedReceiptLastError ? '<div class="font-normal mt-0.5">' + htmlEscape(String(sharedReceiptLastError).slice(0, 160)) + '</div>' : '';
+  const solo = navigator.onLine && (failed || (!st.ready && Date.now() - sharedReceivingStartedAt > 6000)) ? '<button data-shared-receiving="off" class="block w-full mt-1.5 rounded-lg border border-amber-300 bg-white text-amber-900 px-3 py-2 font-black text-xs">המשך בטלפון הזה בלבד (בלי סנכרון)</button>' : '';
   const scanExpiresAt = st.scan?.expiresAt || (Number(st.head?.updatedAt) || Date.now()) + 180000;
   const interrupted = aiScanBusy && !sharedReceiptScanToken && scanExpiresAt < Date.now();
   // v126: אין תמונות בקליטה (הניירות נקראו בקליטת הניירות) — ממשיכים בלי הקריאה, בלי לשלם שוב
   const retryScan = interrupted ? '<button data-shared-receiving="scan-retry" class="underline font-bold block mt-1">' + (aiTotalPages() === 0 ? 'קריאת הניירות בטלפון השני נקטעה — המשך בלעדיה' : 'הפענוח נקטע — הפעל שוב מהתמונות השמורות') + '</button>' : '';
-  el.innerHTML = '<div class="text-[11px] font-bold ' + (failed || !navigator.onLine ? 'text-amber-700' : 'text-slate-500') + '">' + message + action + legacy + retryScan + '</div>';
+  el.innerHTML = '<div class="text-[11px] font-bold ' + (failed || !navigator.onLine ? 'text-amber-700' : 'text-slate-500') + '">' + message + action + why + legacy + retryScan + solo + '</div>';
 }
 function setSharedReceiptControlsReadOnly() {
   const readonly = !canEditSharedReceipt();
@@ -21468,7 +21514,9 @@ function applySharedReceipt(payload, meta = {}) {
   paperJoinRetry();
 }
 async function startSharedReceiving() {
+  if (sharedReceivingOff) { renderSharedReceivingBanner(); return; } // v135: טלפון אחד
   if (sharedReceiving || !db || !sharedReceiptHooksReady) return;
+  sharedReceivingStartedAt = Date.now(); setTimeout(renderSharedReceivingBanner, 6500); // v135: לא עלה תוך 6 שניות — מציעים טלפון אחד
   if (!globalThis.BermanSharedReceiving) { sharedReceiptSyncError(new Error('shared_receiving_script_missing')); return; }
   const legacy = captureSharedReceipt();
   let localWasShared = false;
@@ -21488,8 +21536,33 @@ async function startSharedReceiving() {
     scheduleSharedReceiptSave();
   } catch (error) { sharedReceiptSyncError(error); }
 }
+// v135: מעבר לטלפון אחד — מה שעל המסך נשאר (הספירה, הניירות), נשמר בטלפון, והתעודה תישמר לענן בסיום
+function sharedReceivingSolo() {
+  const go = () => {
+    sharedReceivingOff = true;
+    try { localStorage.setItem(SHARED_RECEIVING_OFF_KEY, '1'); } catch (e) {}
+    try { if (sharedReceiving) sharedReceiving.stop(); } catch (e) {}
+    sharedReceiving = null; sharedReceiptLastError = ''; sharedReceiptStatus = { ready: false, status: 'off' };
+    clearTimeout(sharedReceiptSaveTimer); sharedReceiptSaveTimer = null;
+    saveReceiptDraft();
+    logAction('receipt', 'קליטה בטלפון אחד', 'הסנכרון בין טלפונים כובה בטלפון הזה', {});
+    renderSharedReceivingBanner(); setSharedReceiptControlsReadOnly();
+    if (currentView === 'receiving' || currentView === 'reconcile') renderView();
+    showToast('ממשיכים בטלפון הזה ✓', null, null, 2500);
+  };
+  go.allowReadOnly = true; // המסך במצב צפייה (הסנכרון לא עלה) — האישור הזה הוא הדרך החוצה, ולכן לא נחסם
+  showConfirm('להמשיך בטלפון הזה בלבד?', 'הסנכרון בין טלפונים לא עובד עכשיו. הקליטה תמשיך כאן ותישמר בטלפון, והתעודה תישמר לענן כשתסיים. טלפון אחר לא יראה את הספירה בזמן שהיא נעשית.', 'המשך בטלפון הזה', go);
+}
+// v135: חזרה לסנכרון — טיוטה שיש בטלפון ולא בענן מוצעת לשחזור (כמו מעבר מגרסה ישנה)
+async function sharedReceivingTogether() {
+  sharedReceivingOff = false;
+  try { localStorage.removeItem(SHARED_RECEIVING_OFF_KEY); } catch (e) {}
+  logAction('receipt', 'סנכרון קליטה בין טלפונים', 'הסנכרון הופעל שוב בטלפון הזה', {});
+  await startSharedReceiving();
+  renderSharedReceivingBanner();
+}
 async function restoreSharedReceiptLegacy() {
-  if (!canEditSharedReceipt() || !sharedReceiptLegacy) return;
+  if (!sharedReceiving || !canEditSharedReceipt() || !sharedReceiptLegacy) return;
   if (sharedReceiptHasWork(sharedReceiving.payload)) { showToast('כבר קיימת קליטה משותפת — הטיוטה הישנה לא החליפה אותה', null, null, 4500); return; }
   applySharedReceipt(sharedReceiptLegacy, { source: 'legacy' }); sharedReceiptLegacy = null;
   try { await sharedReceiving.save(captureSharedReceipt()); await sharedReceiving.flush(); }
@@ -21497,6 +21570,12 @@ async function restoreSharedReceiptLegacy() {
 }
 async function finishSharedReceipt(id, data) {
   if (!canEditSharedReceipt()) { sharedReceiptReadOnlyNotice(); return false; }
+  // v135: טלפון אחד — התעודה נשמרת ישר לענן, במזהה של הטיוטה (שמירה חוזרת דורסת את אותה תעודה, לא יוצרת שנייה)
+  if (sharedReceivingOff) {
+    sharedReceiptFinalizing = true;
+    try { return await runCloudTask('save receipt', { op: 'set', path: dataPath('receipts', id), data, operationId: id }); }
+    finally { sharedReceiptFinalizing = false; }
+  }
   clearTimeout(sharedReceiptSaveTimer); sharedReceiptSaveTimer = null;
   sharedReceiptFinalizing = true;
   try {
@@ -21538,6 +21617,7 @@ function guardSharedReceiptEvent(event) {
   const role = event.target.closest('[data-role]')?.dataset.role;
   const id = event.target.closest('[id]')?.id;
   if (['rc-history', 'rc-recon-cancel', 'paper-photo', 'ledger-open', 'paper-goto-intake', 'paper-count-now'].includes(role) || ['receiptQuantityClose', 'rs_cancel', 'qty_cancel', 'scanClose', 'confirmCancel'].includes(id)) return;
+  if (id === 'confirmOk' && typeof confirmCb === 'function' && confirmCb.allowReadOnly) return; // v135: "המשך בטלפון הזה בלבד"
   if (['aiOrientationConfirm', 'aiOrientationCancel'].includes(id) && aiOrientationSession?.reviewOnly) return;
   event.preventDefault(); event.stopImmediatePropagation(); sharedReceiptReadOnlyNotice();
 }
@@ -21550,6 +21630,8 @@ function guardSharedReceiptEvent(event) {
 $('sharedReceivingBanner').addEventListener('click', async event => {
   const action = event.target.closest('[data-shared-receiving]')?.dataset.sharedReceiving;
   try {
+    if (action === 'off') { sharedReceivingSolo(); return; }
+    if (action === 'on') { await sharedReceivingTogether(); return; }
     if (action === 'legacy') await restoreSharedReceiptLegacy();
     else if (action === 'cloud' || action === 'local') await sharedReceiving.resolveConflict(action === 'local');
     else if (action === 'retry') {

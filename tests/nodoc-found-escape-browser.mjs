@@ -63,7 +63,7 @@ window.t={
   counted:()=>{receiptList=structuredClone(testData.items);receiptNotes=[];recomputeNoteTotal();receiptNoDoc=true;receiptOpened=true;receiptEntryMode='manual';receiptDocDate='2026-09-09';editingNotes=false;saveReceiptDraft();renderReceiving();},
   photo:()=>{aiScanDocuments[0].pages=[{dataUrl:${JSON.stringify(photo)},orientationConfirmed:true}];renderReceiving();},
   closeScanner:()=>{try{closeScanner()}catch(e){}},
-  regularEmpty:()=>{receiptNotes=[];recomputeNoteTotal();receiptNoDoc=false;editingNotes=true;receiptEntryMode='manual';saveReceiptDraft();renderReceiving();},
+  regularEmpty:()=>{currentView='receiving';receiptNotes=[];recomputeNoteTotal();receiptNoDoc=false;editingNotes=true;receiptEntryMode='manual';saveReceiptDraft();renderReceiving();}, // v135: המשתמש במסך הקליטה (מאז v126 הצילום עובר למסך הניירות)
   paperDone:()=>!aiScanBusy&&receiptPaperScanState!=='running'
 };
 setView('receiving');await startSharedReceiving();window.t.loaded=true;
