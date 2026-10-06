@@ -45,7 +45,7 @@ test('מסך הניירות: "לא הגיע כלום" מתחת ל"לספירה" 
   assert.equal(r.run('testConfirms.length'), 1, 'שאלת אישור אחת');
   assert.equal(r.run('testConfirms[0].title'), 'לא הגיע כלום?');
   assert.match(r.run('testConfirms[0].message'), /^כל השורות שבתעודה יירשמו כחוסר \(0 התקבלו\)/);
-  assert.equal(r.run('testConfirms[0].label'), 'לא הגיע כלום');
+  assert.equal(r.run('testConfirms[0].label'), 'לא הגיע כלום — שמור', 'v133: האישור גם שומר');
   assert.deepEqual(json(r, 'receiptList'), [], 'כלום לא נרשם לפני האישור');
   assert.equal(r.run('receiptQuantityReview'), null);
   r.run('testConfirms[0].cb()');
