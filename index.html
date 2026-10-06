@@ -828,7 +828,10 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '138'; // החזרות בלייב: אירועים עמידים ושליחה אטומית
+const APP_VERSION = '139'; // המאזן מתעדכן אוטומטית אחרי טעינת כל המקורות
+// מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
+let ledgerLoadingSources = null;
+let ledgerFailedSources = new Set();
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -1428,6 +1431,8 @@ function fallbackLocal() {
 // ===== מאזיני Firestore =====
 function startListeners() {
   if (!db) return;
+  ledgerLoadingSources = new Set(['products', 'receipts', 'returns', 'papers', 'config']);
+  ledgerFailedSources = new Set();
   startSharedReceiving();
   const pRef = collection(db, 'artifacts', appId, 'public', 'data', 'products');
   onSnapshot(pRef, (snap) => {
@@ -1475,8 +1480,9 @@ function startListeners() {
     });
     if (changed) saveDraftPassive();
     repainted.forEach(paintOrderUnitButtonById);
+    ledgerSourceLoaded('products');
     rerender();
-  }, console.error);
+  }, e => ledgerSourceFailed('products', e));
 
   const cRef = collection(db, 'artifacts', appId, 'public', 'data', 'contacts');
   onSnapshot(cRef, (snap) => {
@@ -1517,8 +1523,9 @@ function startListeners() {
       if (ea !== eb) return eb.localeCompare(ea);
       return (b.timestamp || 0) - (a.timestamp || 0);
     });
+    ledgerSourceLoaded('returns');
     if (currentView === 'returns' || currentView === 'receiptsHistory') rerender();
-  }, console.error);
+  }, e => ledgerSourceFailed('returns', e));
 
   // הגדרות מחיר מומלץ — קטגוריות רווחיות
   onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'pricing'), (snap) => {
@@ -1552,10 +1559,11 @@ function startListeners() {
       if (ea !== eb) return eb.localeCompare(ea);
       return (b.timestamp || 0) - (a.timestamp || 0);
     });
+    ledgerSourceLoaded('receipts');
     if (currentView === 'receiptsHistory' || currentView === 'receiving' || currentView === 'health') rerender();
     setTimeout(migrateLegacyReceiptOffsets, 0);
     setTimeout(autoOffsetSweep, 0); // v106: קיזוז אוטומטי כשמתגלה זוג מדויק
-  }, console.error);
+  }, e => ledgerSourceFailed('receipts', e));
 
   const prmRef = collection(db, 'artifacts', appId, 'public', 'data', 'promos');
   onSnapshot(prmRef, (snap) => {
@@ -1583,10 +1591,10 @@ function startListeners() {
     papers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     paperClearStaleConflicts();
     try { if (localStorage.getItem(CANCEL_DISCARD_KEY)) receivingDiscardCanceledPapers([]); } catch (e) {} // v137: ביטול שחיכה לרשימת הניירות
-    ledgerInvalidate();
-    if (currentView === 'ledger' || currentView === 'receiptsHistory') rerender();
+    ledgerSourceLoaded('papers');
+    if (currentView === 'receiptsHistory') rerender();
     else { refreshLedgerBar(); refreshPaperIntake(); } // v131: כרטיס הנייר משקף תשובה שהגיעה מהענן
-  }, console.error);
+  }, e => ledgerSourceFailed('papers', e));
 
   const cfgRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'app');
   onSnapshot(cfgRef, (snap) => {
@@ -1596,8 +1604,7 @@ function startListeners() {
     ledgerClosedThrough = dayOk(d.ledgerClosedThrough) ? d.ledgerClosedThrough : '';
     ledgerClosedHistory = (Array.isArray(d.ledgerClosedHistory) ? d.ledgerClosedHistory : []).filter(dayOk);
     minAppVersion = Number(d.minAppVersion) || 0;
-    ledgerInvalidate(); refreshMinVersionBanner(); refreshLedgerBar();
-    if (currentView === 'ledger') renderLedger();
+    ledgerSourceLoaded('config'); refreshMinVersionBanner(); refreshLedgerBar();
     // v128: סגירת חודש שהשתנתה (גם בטלפון אחר) — המרכזת שעל המסך מתעדכנת, בלי כפתור "סגור" ישן
     if (currentView === 'receiptsHistory' && lastRangeData && $('rcRangeResult') && !$('rcRangeResult').classList.contains('hidden')) renderRangeResult(lastRangeData.from, lastRangeData.to);
     const v = Number(d.vatPct), m = Number(d.marginPct);
@@ -1605,7 +1612,7 @@ function startListeners() {
     if (isFinite(m) && m >= 0 && m <= 300) signMarginPct = r2(m);
     if (typeof d.storeName === 'string' && d.storeName.trim()) storeName = d.storeName.trim();
     if (currentView === 'settings') renderSettings();
-  }, console.error);
+  }, e => ledgerSourceFailed('config', e));
 }
 
 // ===== זריעת קטלוג ברמן לענן =====
@@ -13819,6 +13826,26 @@ let ledgerClosedHistory = [];           // v128: config/app.ledgerClosedHistory 
 let minAppVersion = 0;                  // config/app.minAppVersion — גרסה ישנה יותר מבקשת רענון
 let ledgerCache = null;
 let ledgerFullCache = null;               // v128: fullLedger()
+// v139: המאזינים מגיעים בנפרד. עד שכל המקורות הגיעו, אין מסקנה על חוב או על איזון.
+// גם תשובה מהמטמון נחשבת: המאזן נשאר זמין בלי רשת ומתעדכן כשמגיעה תשובה חדשה.
+function ledgerSourcesReady() { return !ledgerLoadingSources || (!ledgerLoadingSources.size && !ledgerFailedSources.size); }
+function ledgerLoadingHtml() {
+  return '<div role="status" class="text-sm font-bold text-slate-500 py-3 mb-3">' +
+    (ledgerFailedSources.size ? 'לא הצלחתי לבדוק את המאזן — נסה לרענן' : 'בודק את המאזן…') + '</div>';
+}
+function ledgerSourceLoaded(name) {
+  if (ledgerLoadingSources) ledgerLoadingSources.delete(name);
+  ledgerFailedSources.delete(name);
+  ledgerInvalidate();
+  refreshOpenIssuesBanner();
+  if (currentView === 'ledger') rerender();
+}
+function ledgerSourceFailed(name, error) {
+  console.error(error);
+  ledgerFailedSources.add(name);
+  refreshOpenIssuesBanner();
+  if (currentView === 'ledger') rerender();
+}
 const PAPER_RESULTS_KEY = 'bm_paper_results_v1';   // תוצאות ששולמו ועוד לא אושרו בענן (וחודש אחרי)
 const PAPER_INFLIGHT_KEY = 'bm_paper_inflight_v1'; // קריאה שנשלחה ועוד לא חזרה — לא נשלחת שוב לבד
 function ledgerInvalidate() { ledgerCache = null; ledgerFullCache = null; }
@@ -15439,6 +15466,10 @@ function ledgerPaperStateLabel(st) {
   return { counted: 'נספר', 'in-receipt': 'כבר בקליטה', 'awaiting-receipt': 'ממתין לקליטה', unproven: 'לבדיקה', 'needs-attach': 'ממתין לשיוך', duplicate: 'כפול — לא נספר', outside: 'מחוץ לתקופה', void: 'בוטל', superseded: 'הוחלף בנייר', orphan: 'יתום', unsupported: 'מגרסה חדשה יותר — רענן את האפליקציה' }[st] || '';
 }
 function renderLedger() {
+  if (!ledgerSourcesReady()) {
+    app.innerHTML = '<h2 class="font-black text-2xl text-slate-800 mb-3">מאזן מול ברמן</h2>' + ledgerLoadingHtml();
+    return;
+  }
   let lg;
   try { lg = currentLedger(); }
   catch (e) {
@@ -15683,6 +15714,7 @@ function paperCardInHistory(p, lg, all, isOpenCard) {
 }
 // הפס שמתחת לכותרת: צילום נייר ומצב המאזן, בכל מסכי העבודה
 function refreshLedgerBar() {
+  refreshOpenIssuesBanner();
   const el = document.getElementById('ledgerBar'); if (!el) return;
   // v126: המקום האחד לכל נייר מהנהג — באותו מקום בכל מסך עבודה (גם בקליטה, במאזן ובמסך הניירות)
   const show = ['receiving', 'returns', 'manage', 'receiptsHistory', 'ledger', 'paperIntake'].indexOf(currentView) !== -1;
@@ -15735,6 +15767,16 @@ function openIssuesList() {
   return out.sort((a, b) => (rank[a.state] || 0) - (rank[b.state] || 0));
 }
 function openIssuesBannerHtml(opts) {
+  const compact = !!(opts && opts.compact);
+  return '<div id="openIssuesBanner" data-compact="' + (compact ? '1' : '0') + '">' + openIssuesBannerContentHtml({ compact }) + '</div>';
+}
+// מעדכנים רק את ההתראה, גם כשהמשתמש מקליד. לא מחליפים את מסך הספירה או את השדה הפעיל.
+function refreshOpenIssuesBanner() {
+  const el = document.getElementById('openIssuesBanner');
+  if (el) el.innerHTML = openIssuesBannerContentHtml({ compact: el.dataset.compact === '1' });
+}
+function openIssuesBannerContentHtml(opts) {
+  if (!ledgerSourcesReady()) return ledgerLoadingHtml();
   opts = opts || {};
   const list = openIssuesList();
   if (!list.length) return '';

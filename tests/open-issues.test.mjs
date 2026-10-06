@@ -54,7 +54,8 @@ test('קליטה פתוחה מלפני תחילת המאזן — המשפט או
 
 test('אין מה לטפל — אין שורה', () => {
   const r = app([], { receipts: [{ id: 'rc_ok', date: '2026-10-04', timestamp: 1, items: [{ productId: 'code_101', name: 'x', qty: 3, noteQty: 3 }] }], returns: [] });
-  assert.equal(r.run('openIssuesBannerHtml({})'), '');
+  assert.equal(r.run('openIssuesBannerContentHtml({})'), '');
+  assert.equal(r.run('openIssuesBannerHtml({})'), '<div id="openIssuesBanner" data-compact="0"></div>');
   r.run(`setView('receiving')`);
   assert.doesNotMatch(r.node('app').innerHTML, /לטיפול מול ברמן/);
 });
