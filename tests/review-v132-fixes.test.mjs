@@ -85,8 +85,16 @@ test('לחיצה כשהמצב השתנה מאז הציור (סיכום נפתח,
 test('מסך הניירות מצויר מחדש כשמצב הקליטה המשותפת משתנה וכשהכנסה של תעודה נגמרת', async () => {
   const r = await ready();
   r.run(`globalThis.__renders = 0; const __orig = renderPaperIntake; renderPaperIntake = () => { globalThis.__renders++; return __orig(); };`);
+  // שינוי במצב המשותף שלא משנה כלום במסך — בלי ציור (בלי הבהוב)
   r.run(`sharedReceivingStatusChanged({ status: 'synced' })`);
-  assert.ok(r.run('globalThis.__renders') >= 1, 'מצב משותף');
+  assert.equal(r.run('globalThis.__renders'), 0, 'שום דבר לא השתנה');
+  // נייר נקרא בטלפון אחר (מנעול) — הבחירות יורדות; המנעול שוחרר — חוזרות
+  r.run(`globalThis.__lease = scanLeaseOther; scanLeaseOther = () => true; sharedReceivingStatusChanged({ status: 'synced' })`);
+  assert.equal(r.run('globalThis.__renders'), 1, 'צויר מחדש');
+  assert.doesNotMatch(r.node('app').innerHTML, /data-role="paper-none-arrived"/);
+  r.run(`scanLeaseOther = globalThis.__lease; sharedReceivingStatusChanged({ status: 'synced' })`);
+  assert.equal(r.run('globalThis.__renders'), 2);
+  assert.match(r.node('app').innerHTML, /data-role="paper-none-arrived"/, 'והכפתור חזר');
   const before = r.run('globalThis.__renders');
   // הכנסה של תעודה (כבר בקליטה) — כשנגמרת
   await r.run(`receivingJoinDelivery({ paperId: 'paper_290095141', cap: 'cap0', item: paperIntake.items[0], explicit: false })`);
