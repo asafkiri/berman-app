@@ -1512,6 +1512,7 @@ function startListeners() {
   const rcQ = query(rcRef, orderBy('timestamp', 'desc'), limit(100));
   onSnapshot(rcQ, (snap) => {
     receipts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (draftHandoff) draftHandoff.tidy(); // v137: עותקים בצד של תעודות שכבר נשמרו — יורדים
     ledgerInvalidate(); refreshLedgerBar();
     // v22: תעודה שהוקלדה באיחור יושבת במקומה לפי תאריך הנייר, לא לפי רגע ההקלדה
     receipts.sort((a, b) => {
@@ -6586,7 +6587,7 @@ function refreshReconcile() { if (currentView === 'reconcile') renderReconcile()
 // למסך שאינו מוצג ויימחק את מה שהמשתמש רואה.
 function refreshScanHost() {
   // v137: קריאה בתשלום התחילה או נגמרה — הגיבוי מתעדכן מיד (בזמן קריאה, טלפון אחר לא מקבל "המשך")
-  const scanFlag = !!(aiScanBusy || aiAnalyzeBusy || receiptPaperScanState === 'running');
+  const scanFlag = !!(aiScanBusy || aiAnalyzeBusy || aiScanWaitingForPaper || receiptPaperScanState === 'running');
   if (scanFlag !== receivingScanFlagSent) { receivingScanFlagSent = scanFlag; scheduleReceivingHandoff(); }
   if (currentView === 'reconcile') renderReconcile();
   else if (currentView === 'receiving') renderReceiving();
@@ -10498,13 +10499,14 @@ async function aiRunInvoiceScan({ background = false, onStarted = null } = {}) {
   // v125: קריאת נייר מברמן שרצה עכשיו בטלפון הזה מסתיימת קודם (שתי העלאות במקביל מפילות את הקו)
   if (paperUploadBusy) {
     const waitSession = aiScanSession;
-    aiScanWaitingForPaper = true;
+    aiScanWaitingForPaper = true; refreshScanHost(); // v137: נחשב "קריאה רצה" — טלפון אחר לא מקבל "המשך" באמצע
     showToast('ממתין שקריאת הנייר מברמן תסתיים — הקליטה תיקרא מיד אחריה', null, null, 4000);
     try { for (let w = 0; paperUploadBusy && w < 1200; w++) await paperSleep(500); }
     finally { aiScanWaitingForPaper = false; }
-    if (paperUploadBusy) { showToast('קריאת הניירות מברמן עוד רצה — לחץ שוב כדי לקרוא את התעודה', null, null, 4500); return; }
+    if (paperUploadBusy) { showToast('קריאת הניירות מברמן עוד רצה — לחץ שוב כדי לקרוא את התעודה', null, null, 4500); refreshScanHost(); return; }
     if (waitSession !== aiScanSession) return;
     if (aiScanBusy) return;
+    if (!canEditSharedReceipt()) { sharedReceiptReadOnlyNotice(); refreshScanHost(); return; } // v137: בזמן ההמתנה הקליטה עברה לטלפון אחר — לא קוראים בתשלום
   }
   if (aiScanDocuments.length > 4) { showToast('ניתן לפענח עד 4 תעודות בפעולה אחת', null, null, 3200); return; }
   if (aiTotalPages() > 8) { showToast('ניתן לפענח עד 8 עמודים בפעולה אחת', null, null, 3200); return; }
@@ -21123,8 +21125,10 @@ app.addEventListener('click', (e) => {
     showConfirm('ביטול תעודה', 'לבטל את התעודה הנוכחית? כל הפריטים שנסרקו יימחקו' + (dropPapers.length ? ', וגם ' + paperPhotosText(dropPapers) + ' (לסל המחזור — אפשר לשחזר)' : '') + '.', 'בטל תעודה', () => {
     // רק מה שנאמר בשאלה, ורק אם הוא עוד בקליטה הזאת
     const still = receiptDraftDeliveryPapers().filter(p => dropPapers.some(d => d.id === p.id));
-    still.forEach(p => { paperDiscard(p, true).then(() => { refreshLedgerBar(); if (currentView === 'receiving') renderReceiving(); }).catch(e => console.error('paper discard failed', e)); });
-    if (sharedReceivingOff && draftHandoff) draftHandoff.cancel(); // v137: בענן — "בוטלה" (בטלפון אחר לא יוצע להמשיך אותה)
+    // v137: בענן — "בוטלה" (בטלפון אחר לא יוצע להמשיך אותה). הניירות יוצאים לסל רק כשהענן אישר שהקליטה הייתה של הטלפון
+    // הזה — אחרת (טלפון אחר כבר לקח אותה) הם שייכים לקליטה שממשיכה שם
+    if (sharedReceivingOff && draftHandoff) draftHandoff.cancel({ paperIds: still.map(p => p.id) });
+    else still.forEach(p => { paperDiscard(p, true).then(() => { refreshLedgerBar(); if (currentView === 'receiving') renderReceiving(); }).catch(e => console.error('paper discard failed', e)); });
     rcMultiPhotoWanted = false; paperJoinPending.clear(); receiptList = []; receiptQuantityReview = null; receiptCountingMode = 'scan'; receiptNotes = []; receiptDocDate = null; receiptDraftId = null; receiptEntryMode = 'photo'; receiptAnchorSource = null; receiptPaperScanState = ''; receiptPaperScanProblems = []; recomputeNoteTotal(); receiptOpened = false; editingNotes = false; reconcileData = null; receiptDupConfirmed = false; receiptLinesConfirmed = false; receiptNoDoc = false; receiptAttachTarget = null; resetAiInvoiceScan(); saveReceiptDraft(); setView('receiving'); }); } // v25: ביטול תעודה משחרר גם את צילומי הסריקה
   else if (role === 'rc-note-add') { const en = readNoteEntry(true); if (en === false) return; if (en) { receiptNotes.push(en); noteEntryKind = 'charge'; recomputeNoteTotal(); saveReceiptDraft(); } refreshReceipt(); const inp = $('rcNoteInput'); if (inp) inp.focus(); }
   // v51: הבורר אינו בונה את המסך מחדש — רק מסמן את עצמו. כך אפשר להקליד
@@ -21590,13 +21594,13 @@ function receivingSessionOf(st) {
   return s.receiptDraftId || null;
 }
 function receivingHandoffPayload() {
-  const p = captureSharedReceipt();
-  // התמונות נשארות בטלפון; הקריאה, העוגנים והספירה עוברים
-  p.state.aiScanDocuments = (p.state.aiScanDocuments || []).map(d => ({ ...d, pages: [] }));
+  // מצב הקליטה — בלי לשכפל את התמונות (הן נשארות בטלפון; הקריאה, העוגנים והספירה עוברים)
+  const state = {}, bindings = sharedReceiptBindings();
+  Object.keys(bindings).forEach(key => { state[key] = bindings[key][0](); });
+  state.aiScanDocuments = (state.aiScanDocuments || []).map(d => ({ ...d, pages: [] }));
   // סיכום פתוח — שייך לטלפון הזה; בטלפון השני הוא נבנה מחדש
-  p.state.pendingReceipt = null;
-  p.ui = { view: 'receiving', forms: {} };
-  return p;
+  state.pendingReceipt = null;
+  return sharedReceiptEncode({ version: 1, state, ui: { view: 'receiving', forms: {} } });
 }
 function receivingHandoffSummary() {
   const units = receiptList.reduce((a, l) => a + (Number(l && l.qty) || 0), 0);
@@ -21604,12 +21608,15 @@ function receivingHandoffSummary() {
     .map(d => receiptPaperNumber(d && (d.docNumber ?? d.invoiceNumber))).filter(Boolean);
   return { lines: receiptList.length, units, paperUnits: receiptNoteUnits != null ? receiptNoteUnits : null, docs, attach: receiptAttachTarget ? receiptAttachTarget.label || '' : '' };
 }
+// זול — נקרא בכל לחיצה (השומר, השורה העליונה). ה-payload נבנה רק בגיבוי ובהעברה (receivingHandoffPayloadNow)
 function receivingHandoffDraft() {
   if (!receiptDraftId || receivingDraftEmpty()) return { empty: true };
   return { sessionId: receivingSessionOf({ receiptDraftId, receiptAttachTarget }), recordId: receiptDraftId, empty: false,
-    payload: JSON.stringify(receivingHandoffPayload()), summary: receivingHandoffSummary(),
-    scanRunning: !!(aiScanBusy || aiAnalyzeBusy || receiptPaperScanState === 'running'),
+    scanRunning: !!(aiScanBusy || aiAnalyzeBusy || aiScanWaitingForPaper || receiptPaperScanState === 'running'),
     expected: receiptAttachTarget ? receiptAttachTarget.expectedReceipt || null : null };
+}
+function receivingHandoffPayloadNow() {
+  return { payload: JSON.stringify(receivingHandoffPayload()), summary: receivingHandoffSummary() };
 }
 // הקליטה מהענן נכנסת לטלפון הזה ("המשך אותה כאן" / "החזר" / "פתח אותה")
 function receivingHandoffApply(p, meta) {
@@ -21628,8 +21635,18 @@ function receivingHandoffEmpty() {
   receiptDraftId = null; saveReceiptDraft();
   if (currentView === 'receiving') renderReceiving();
 }
+// v132/v137: תעודות המשלוח של קליטה שבוטלה — לסל (רק אם הן עוד לא בתעודה שנשמרה)
+function receivingDiscardCanceledPapers(ids) {
+  (ids || []).forEach(id => {
+    const p = papers.find(x => x && x.id === id);
+    if (!p || p.deleted || paperInSavedReceipt(p)) return;
+    paperDiscard(p, true).then(() => { refreshLedgerBar(); if (currentView === 'receiving') renderReceiving(); }).catch(e => console.error('paper discard failed', e));
+  });
+}
 function receivingHandoffNotice(code) {
   const text = { 'take-done': 'הקליטה עברה לטלפון הזה ✓', 'take-failed': 'הקליטה לא הועברה. נסה שוב.',
+    'cancel-declined': 'הקליטה שביטלת ממשיכה בטלפון אחר — שם היא לא בוטלה, והניירות שלה לא נמחקו.',
+    'late-save': 'השמירה הקודמת נכנסה לענן באיחור. מה שספרת אחריה לא נכנס לתעודה — הוא נשמר בצד (למעלה, "פתח אותה").',
     'finish-not-saved': 'התעודה לא נשמרה בענן — הקליטה פתוחה, ואפשר לשמור שוב.', 'apply-failed': 'הגיבוי בענן לא תקין — הקליטה לא הועברה.' }[code];
   if (text) showToast(text, null, null, 4000);
 }
@@ -21671,6 +21688,15 @@ function migrateV136Handoff() {
   });
   if (changed) saveCloudFailedWrites();
 }
+// טלפון שעוד פתוח על v136 מציע "המשך אותה כאן" לפי המסמך הישן drafts/receiving_handoff — סוגרים אותו פעם אחת
+// (v136 לא מציע מסמך סגור, ולא נוגע בקליטה שלו עצמו בגללו)
+function retireV136HandoffDoc() {
+  try {
+    if (localStorage.getItem('bm_v136_handoff_retired') || !navigator.onLine) return;
+    setDoc(doc(db, ...dataPath('drafts', 'receiving_handoff')), { schema: 1, closed: true, draftId: null, deviceId: 'v137', payload: null, updatedAt: Date.now(), writtenBy: APP_VERSION })
+      .then(() => { try { localStorage.setItem('bm_v136_handoff_retired', '1'); } catch (e) {} }).catch(() => {});
+  } catch (e) {}
+}
 function startDraftHandoff() {
   if (draftHandoff || !db || !globalThis.DraftHandoff) return;
   const fsApi = draftHandoffFs(); if (!fsApi) return;
@@ -21679,6 +21705,9 @@ function startDraftHandoff() {
       rootPath: ['artifacts', appId, 'public', 'data'], recordCollection: 'receipts', appVersion: APP_VERSION, maxScanMs: RECEIVING_SCAN_MAX_MS,
       adapter: {
         getDraft: receivingHandoffDraft,
+        getPayload: receivingHandoffPayloadNow,
+        // ביטול שהענן אישר (הקליטה הייתה של הטלפון הזה) — רק עכשיו תעודות המשלוח שלה יוצאות לסל
+        onClosed: meta => receivingDiscardCanceledPapers(meta && meta.paperIds),
         validatePayload: (p, d) => !!(p && p.version === 1 && p.state && p.ui && receivingSessionOf(p.state) === d.sessionId),
         applyPayload: (text, meta) => receivingHandoffApply(JSON.parse(text), meta),
         emptyDraft: receivingHandoffEmpty,
@@ -21696,6 +21725,7 @@ function startDraftHandoff() {
       } });
     migrateV136Handoff();
     draftHandoff.start();
+    retireV136HandoffDoc();
   } catch (e) { console.warn('draft handoff failed to start', e); draftHandoff = null; }
 }
 function scheduleReceivingHandoff(opts) { if (sharedReceivingOff && draftHandoff && !sharedReceiptApplying) draftHandoff.changed(opts); }
@@ -21723,9 +21753,11 @@ function receivingHandoffBlockedText(st) {
   if (st.checking === 'finish') return 'בודק אם התעודה נשמרה בענן — רגע.';
   if (st.checking === 'take') return 'בודק אם הקליטה עברה לטלפון הזה — רגע.';
   const a = st.away;
-  if (a && a.away === 'moved') return 'הקליטה הזאת ממשיכה ' + receivingWho(a.by) + '. כדי לעבוד עליה כאן — "החזר אותה לכאן" למעלה.';
-  if (a && a.away === 'saved') return 'הקליטה הזאת כבר נשמרה — כאן היא עותק ישן. "נקה אותה מהטלפון הזה" למעלה.';
-  if (a && a.away === 'canceled') return 'הקליטה הזאת בוטלה ' + receivingWho(a.by) + '. "נקה" למעלה.';
+  // השורה העליונה מוצגת רק במסך הקליטה — ממסך אחר אומרים לאן ללכת
+  const where = currentView === 'receiving' || currentView === 'reconcile' ? 'למעלה' : 'במסך הקליטה';
+  if (a && a.away === 'moved') return 'הקליטה הזאת ממשיכה ' + receivingWho(a.by) + '. צלם וצרף שם — או "החזר אותה לכאן" ' + where + '.';
+  if (a && a.away === 'saved') return 'הקליטה הזאת כבר נשמרה — כאן היא עותק ישן. "נקה אותה מהטלפון הזה" ' + where + '.';
+  if (a && a.away === 'canceled') return 'הקליטה הזאת בוטלה ' + receivingWho(a.by) + '. "נקה" ' + where + '.';
   return 'רגע…';
 }
 function receivingHandoffBannerHtml() {
@@ -21739,7 +21771,10 @@ function receivingHandoffBannerHtml() {
   let html = '';
   const a = st.away;
   if (a && a.away === 'moved') html += box('amber', 'הקליטה הזאת ממשיכה ' + receivingWho(a.by) + (a.at ? ' (מ-' + receivingHandoffWhen(a.at) + ')' : '') + '. כאן היא לקריאה בלבד.' +
-    (st.canTakeBack ? btn('handoff-take', 'החזר אותה לכאן', 'amber', st.sessionId) : btn('handoff-drop', 'נקה אותה מהטלפון הזה', 'amber')));
+    (a.localAhead ? '<div class="font-normal mt-1">בטלפון הזה יש ספירה שלא הגיעה לשם — ב"החזר" היא תישמר בצד, ואפשר לפתוח אותה.</div>' : '') +
+    (st.canTakeBack ? btn('handoff-take', 'החזר אותה לכאן', 'amber', st.sessionId)
+      : st.scanThere ? '<div class="font-normal mt-1">קריאת הנייר רצה שם — עוד רגע אפשר להחזיר אותה לכאן.</div>'
+      : btn('handoff-drop', 'נקה אותה מהטלפון הזה', 'amber')));
   else if (a && a.away === 'saved') html += box('emerald', 'הקליטה הזאת כבר נשמרה — כאן היא עותק ישן.' + btn('handoff-drop', 'נקה אותה מהטלפון הזה', 'emerald'));
   else if (a && a.away === 'canceled') html += box('slate', 'הקליטה הזאת בוטלה ' + receivingWho(a.by) + '.' + btn('handoff-drop', 'נקה', 'slate'));
   for (const o of st.offers || []) {
@@ -21750,14 +21785,19 @@ function receivingHandoffBannerHtml() {
   }
   for (const x of st.side || []) {
     const what = receivingHandoffWhat(x.summary), when = receivingHandoffWhen(x.savedAt);
-    html += box('slate', 'קליטה שנשמרה בצד בטלפון הזה' + (when || what ? ' (' + [when, what].filter(Boolean).join(' · ') + ')' : '') + '.' + btn('side-open', 'פתח אותה', 'slate', x.sessionId));
+    const head = x.reason === 'late' ? 'מה שנספר אחרי שמירה שנכנסה באיחור (לא נכנס לתעודה) — נשמר בצד'
+      : x.sessionId === st.sessionId ? 'הגרסה הקודמת של הקליטה הזאת (מהטלפון הזה) נשמרה בצד'
+      : x.reason === 'canceled' ? 'קליטה שבוטלה בטלפון אחר — העותק מהטלפון הזה נשמר בצד' : 'קליטה שנשמרה בצד בטלפון הזה';
+    html += box('slate', head + (when || what ? ' (' + [when, what].filter(Boolean).join(' · ') + ')' : '') + '.' +
+      btn('side-open', x.sessionId === st.sessionId ? 'החלף לגרסה הזאת' : 'פתח אותה', 'slate', x.sessionId));
   }
   const s = st.status;
   const text = a ? '' : st.legacy ? '' : s === 'failed' ? 'הגיבוי לענן מתעכב — הקליטה שמורה בטלפון, וננסה שוב לבד.'
     : s === 'blocked' ? 'הגיבוי לענן לא אפשרי — הקליטה שמורה בטלפון הזה.'
+    : s === 'too-big' ? 'הקליטה גדולה מדי לגיבוי בענן — היא שמורה בטלפון הזה.'
     : s === 'saving' ? 'מגבה לענן…'
     : s === 'saved' && st.sessionId ? 'הקליטה מגובה בענן — אפשר להמשיך אותה גם בטלפון אחר.' : '';
-  if (text) html += '<div class="text-[11px] font-bold ' + (s === 'failed' || s === 'blocked' ? 'text-amber-700' : 'text-slate-500') + '">' + text + '</div>';
+  if (text) html += '<div class="text-[11px] font-bold ' + (s === 'failed' || s === 'blocked' || s === 'too-big' ? 'text-amber-700' : 'text-slate-500') + '">' + text + '</div>';
   return html;
 }
 // "המשך אותה כאן" / "החזר אותה לכאן"
@@ -21770,7 +21810,8 @@ async function receivingHandoffTake(sessionId) {
     showToast({ offline: 'אין חיבור — הקליטה לא הועברה. נסה שוב כשיש רשת.', saved: 'הקליטה הזאת כבר נשמרה.', canceled: 'הקליטה הזאת בוטלה.',
       gone: 'הקליטה כבר לא פתוחה בענן.', 'too-big-move': 'הקליטה גדולה מדי להעברה — סיים אותה בטלפון שבו היא פתוחה.',
       'side-full': 'יש בטלפון 3 קליטות שמורות בצד — פתח וסיים אחת קודם.', storage: 'אין מקום בטלפון לשמור בצד את הקליטה שפתוחה כאן — סיים או בטל אותה קודם.',
-      invalid: 'הגיבוי בענן לא תקין — הקליטה לא הועברה.', busy: 'רגע — פעולה אחרת עוד רצה.' }[r.reason] || 'הקליטה לא הועברה. נסה שוב.', null, null, 4500);
+      invalid: 'הגיבוי בענן לא תקין — הקליטה לא הועברה.', busy: 'רגע — פעולה אחרת עוד רצה.',
+      'scan-running': 'קריאת הנייר רצה שם — עוד רגע אפשר להמשיך כאן.', 'scan-running-here': 'קריאת הנייר רצה בקליטה שפתוחה כאן — חכה שתסתיים.' }[r.reason] || 'הקליטה לא הועברה. נסה שוב.', null, null, 4500);
     renderSharedReceivingBanner();
   };
   const st = draftHandoff.state();
@@ -21792,12 +21833,14 @@ function receivingHandoffDropLocal() {
   };
   go.allowReadOnly = true;
   showConfirm('לנקות את העותק הישן?', a && a.away === 'saved' ? 'הקליטה הזאת כבר נשמרה. העותק שבטלפון הזה יוסר — התעודה השמורה והניירות שלה לא משתנים.'
+    : a && a.away === 'canceled' ? 'הקליטה בוטלה בטלפון אחר. העותק שבטלפון הזה יוסר מהמסך ויישמר בצד. הניירות לא נמחקים.'
     : 'העותק שבטלפון הזה יוסר מהמסך ויישמר בצד (אפשר לפתוח אותו אחר כך). הניירות לא נמחקים.', 'נקה', go);
 }
 function receivingHandoffOpenSide(sessionId) {
   if (!draftHandoff) return;
   const r = draftHandoff.openSide(sessionId);
-  if (!r.ok) showToast(r.reason === 'side-full' ? 'יש בטלפון 3 קליטות שמורות בצד — פתח וסיים אחת קודם.' : 'לא נפתחה.', null, null, 3500);
+  if (!r.ok) showToast(r.reason === 'side-full' ? 'יש בטלפון 3 קליטות שמורות בצד — פתח וסיים אחת קודם.'
+    : r.reason === 'scan-running-here' ? 'קריאת הנייר רצה בקליטה שפתוחה כאן — חכה שתסתיים.' : 'לא נפתחה.', null, null, 3500);
   else if (currentView !== 'receiving') setView('receiving');
 }
 async function restoreSharedReceiptLegacy() {
@@ -21818,7 +21861,7 @@ async function finishSharedReceipt(id, data) {
         const r = await draftHandoff.finish(id, data);
         if (r.ok) { logCloudActionIfNeeded('save receipt', { op: 'set', path: dataPath('receipts', id), data, operationId: id }); return true; }
         if (r.unknown) { receivingFinishPending = { sessionId: receivingSessionOf({ receiptDraftId, receiptAttachTarget }), opId: id, data, attach: receiptAttachTarget, noDoc: !!(pendingReceipt && pendingReceipt.noDoc) }; showToast('השמירה לא אושרה עדיין — בודק אם התעודה נשמרה בענן…', null, null, 4000); renderSharedReceivingBanner(); return false; }
-        showToast({ offline: 'אין חיבור — הקליטה שמורה בטלפון. לחץ "שמור" שוב כשיש רשת.', moved: receivingHandoffBlockedText({ away: { away: 'moved', by: (draftHandoff.state().away || {}).by } }),
+        showToast({ offline: 'אין חיבור — הקליטה שמורה בטלפון. לחץ "שמור" שוב כשיש רשת.', moved: 'הקליטה הזאת ממשיכה ' + receivingWho((draftHandoff.state().away || {}).by) + '. כדי לסיים כאן — "החזר אותה לכאן" למעלה.',
           saved: 'הקליטה הזאת כבר נשמרה — לא נשמרת פעמיים.', canceled: 'הקליטה הזאת בוטלה בטלפון אחר.', exists: 'התעודה הזאת כבר נשמרה (בטלפון אחר) — לא נשמרת פעמיים.',
           changed: 'התעודה השתנתה מאז שהתחלת לצרף את הנייר — פתח אותה שוב מההיסטוריה.', busy: 'רגע — פעולה אחרת עוד רצה.' }[r.reason]
           || 'השמירה בענן נכשלה — הקליטה נשארה פתוחה. נסה שוב.', null, null, 5000);

@@ -158,7 +158,9 @@ try {
   // הגיבוי לענן — בשקט, בלי לחכות לו
   for (let i = 0; i < 100 && !handoffDoc(draftId); i++) await new Promise(r => setTimeout(r, 50));
   assert.equal(handoffDoc(draftId).state, 'open'); assert.equal(handoffDoc(draftId).gen, 1); assert.ok(handoffDoc(draftId).payload.length > 100);
-  assert.equal([...documents.keys()].filter(k => k.endsWith('/drafts/receiving_handoff')).length, 0, 'לא המסמך האחד של v136');
+  // המסמך האחד של v136 — רק סימן "סגור" (כדי שטלפון שעוד על v136 לא יציע ממנו)
+  const old = [...documents.entries()].filter(([k]) => k.endsWith('/drafts/receiving_handoff')).map(([, v]) => v);
+  assert.ok(old.every(v => v.closed === true && v.draftId === null), 'לא המסמך האחד של v136: ' + JSON.stringify(old));
   await a.locator('#app [data-role="paper-count-now"]').click();
   await a.waitForFunction(() => window.t.state().view === 'receiving');
   await a.locator('#sharedReceivingBanner', { hasText: 'הקליטה מגובה בענן' }).waitFor();

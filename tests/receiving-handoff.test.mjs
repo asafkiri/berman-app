@@ -230,8 +230,12 @@ test('קליטה שהייתה פתוחה לפני העדכון — לא נתבע
   a.run('saveReceiptDraft()'); await sync(a);
   assert.equal(handoffDoc(cloud, id), null, 'שמירה אוטומטית לא תובעת');
   assert.doesNotMatch(banner(a), /מגובה/);
-  // עריכה של המשתמש: אירוע על מסך הקליטה (המאזין הכללי של המסמך)
+  // לחיצה של המשתמש בלי שינוי בתוכן (למשל ניווט) — לא תובעת: אולי בטלפון אחר יש עותק חדש יותר מהסנכרון הישן
   const target = { closest: sel => (sel === '#app' ? {} : null) };
+  a.events.get('click')({ type: 'click', target }); await sync(a);
+  assert.equal(handoffDoc(cloud, id), null, 'לחיצה בלי שינוי — לא נתבעת');
+  // עריכה אמיתית של המשתמש: אירוע על מסך הקליטה + התוכן השתנה
+  a.run(`receiptList = [{ productId: products[0].id, name: products[0].name, barcode: products[0].barcode, qty: 1 }]; saveReceiptDraft();`);
   a.events.get('input')({ type: 'input', target }); await sync(a);
   assert.equal(handoffDoc(cloud, id).deviceName, 'טלפון א', 'עריכה של המשתמש — נתבעת ומגובה');
 });
@@ -324,4 +328,50 @@ test('קליטה שמגיעה מטלפון אחר עם קריאה "רצה": בל
   assert.equal(b.run('receiptPaperScanState'), 'failed');
   assert.match(b.run('receiptPaperScanProblems[0]'), /לא הסתיימה בטלפון השני/);
   assert.equal(b.requests.length, 0);
+});
+
+test('ביטול: תעודות המשלוח של הקליטה יוצאות לסל רק אחרי שהענן אישר שהיא של הטלפון הזה; הקליטה לא מוצעת בחזרה', async () => {
+  const cloud = createCloud();
+  const a = await startOnA(cloud);
+  a.run(`globalThis.__discarded = []; paperDiscard = async p => { __discarded.push(p.id); return { ok: true }; };`);
+  online(a, false);
+  a.click('rc-cancel'); a.run('testConfirms[testConfirms.length - 1].cb()'); await settle();
+  assert.equal(a.run('receivingDraftEmpty()'), true);
+  assert.deepEqual(json(a, '__discarded'), [], 'עוד לא — הענן לא אישר');
+  assert.doesNotMatch(banner(a), /המשך אותה כאן/, 'הקליטה שבוטלה לא מוצעת בחזרה');
+  online(a, true); await sync(a); await settle();
+  assert.deepEqual(json(a, '__discarded'), ['paper_290095141'], 'אחרי האישור — לסל');
+});
+
+test('צירוף נייר לתעודה ששוחזרה (יש בה שדה id) — נשמר, במושב צירוף משלו', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'טלפון א');
+  const rec = { schemaVersion: 2, timestamp: Date.now() - 86400000, date: '2026-10-05', docDate: '2026-10-05', noDoc: true, status: 'open', units: 3, count: 1,
+    items: [{ productId: 'x', name: 'לחם', barcode: '1', qty: 3 }], operationId: 'rc1', id: 'rc1' };
+  cloud.put(ROOT + 'receipts/rc1', rec);
+  a.context.__rec = rec; a.run(`receipts = [JSON.parse(JSON.stringify(__rec))];`);
+  a.run(`reopenReceiptForDoc('rc1')`);
+  assert.match(a.run('receiptAttachTarget.sessionId'), /^edit_rc1_/);
+  a.run(`pendingReceipt = { lines: receiptList.slice(), status: 'ok', noteParts: [], noDoc: false };`);
+  await a.run('confirmReceipt()'); await settle();
+  const saved = record(cloud, 'rc1');
+  assert.match(saved.savedBy.sessionId, /^edit_rc1_/, 'נשמר — בלי "התעודה השתנתה"');
+  assert.doesNotMatch(a.toasts.join(' | '), /השתנתה/);
+});
+
+test('טיוטה שהתרוקנה (למשל הצילום בוטל) — לא נשארת "קליטה פתוחה" בענן; השומר לא בונה את הקליטה בכל לחיצה', async () => {
+  const cloud = createCloud();
+  const a = await startOnA(cloud);
+  const id = a.run('receiptDraftId');
+  // השומר והשורה העליונה — בלי לבנות את ה-payload (התמונות לא משוכפלות בכל לחיצה)
+  a.run(`globalThis.__pc = 0; const __o = receivingHandoffPayload; receivingHandoffPayload = () => { __pc++; return __o(); };`);
+  for (let i = 0; i < 20; i++) a.run('canEditSharedReceipt()');
+  a.run('renderSharedReceivingBanner()');
+  assert.equal(a.run('__pc'), 0);
+  a.run(`receiptList = []; receiptNotes = []; recomputeNoteTotal(); receiptOpened = false; aiScanDocuments = []; aiScanResponse = null; receiptAttachTarget = null; saveReceiptDraft();`);
+  assert.equal(a.run('receiptDraftId'), id, 'המזהה נשאר (כמו בביטול צילום)');
+  await sync(a); await settle();
+  assert.equal(handoffDoc(cloud, id).openKey, null, 'חונה');
+  const b = phone(cloud, 'טלפון ב'); await settle();
+  assert.doesNotMatch(banner(b), /יש קליטה פתוחה/);
 });

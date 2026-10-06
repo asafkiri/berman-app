@@ -11,7 +11,7 @@ import { createCloud, memoryStorage } from './fake-firestore.mjs';
 const source = fs.readFileSync(new URL('../draft-handoff.js', import.meta.url), 'utf8');
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const settle = async (ms = 40) => { for (let i = 0; i < 6; i++) { await new Promise(r => setImmediate(r)); } await wait(ms); for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r)); };
-const T = { backup: 250, take: 250, finish: 250, close: 250, read: 250, debounce: 5, retry: 60, grace: 10, settleCap: 400 };
+const T = { backup: 250, take: 250, finish: 250, close: 250, read: 250, debounce: 5, retry: 60, grace: 10, settleCap: 400, scanBeat: 60 };
 const j = x => JSON.parse(JSON.stringify(x)); // ערכים מהקשר אחר (vm) — להשוואה
 const docPath = sid => 'root/drafts/handoff_test_receiving_' + sid;
 const recPath = id => 'root/records/' + id;
@@ -23,12 +23,13 @@ function phone(cloud, name, opts = {}) {
   const storage = opts.storage || memoryStorage();
   const ctx = vm.createContext({ console, TextEncoder, crypto: globalThis.crypto, setTimeout, clearTimeout });
   vm.runInContext(source, ctx);
-  const p = { name, client, storage, notices: [], finished: [], applied: [],
+  const p = { name, client, storage, notices: [], finished: [], applied: [], closed: [], payloadCalls: 0,
     d: opts.draft ? JSON.parse(JSON.stringify(opts.draft)) : { sessionId: null, recordId: null, items: {}, scan: false, expected: null, big: '' } };
   const adapter = {
-    getDraft: () => ({ sessionId: p.d.sessionId, recordId: p.d.recordId || p.d.sessionId, empty: !p.d.sessionId,
-      payload: p.d.sessionId ? JSON.stringify({ v: 1, sessionId: p.d.sessionId, recordId: p.d.recordId, items: p.d.items, expected: p.d.expected, big: p.d.big }) : null,
-      summary: { lines: Object.keys(p.d.items).length }, scanRunning: !!p.d.scan, expected: p.d.expected }),
+    getDraft: () => ({ sessionId: p.d.sessionId, recordId: p.d.recordId || p.d.sessionId, empty: !p.d.sessionId, scanRunning: !!p.d.scan, expected: p.d.expected }),
+    getPayload: () => { p.payloadCalls++; return { payload: JSON.stringify({ v: 1, sessionId: p.d.sessionId, recordId: p.d.recordId, items: p.d.items, expected: p.d.expected, big: p.d.big }),
+      summary: { lines: Object.keys(p.d.items).length } }; },
+    onClosed: meta => p.closed.push(meta),
     validatePayload: (x, doc) => x && x.v === 1 && x.sessionId === doc.sessionId,
     applyPayload: text => { const x = JSON.parse(text); p.applied.push(x.sessionId); p.d = { sessionId: x.sessionId, recordId: x.recordId, items: x.items, scan: false, expected: x.expected || null, big: x.big || '' }; p.h && p.h.changed(); },
     emptyDraft: () => { p.d = { sessionId: null, recordId: null, items: {}, scan: false, expected: null, big: '' }; p.h && p.h.changed(); },
@@ -143,6 +144,7 @@ test('שני טלפונים לוחצים "המשך" יחד — רק אחד מח�
   await settle(); cloud.commitGate = null; release();
   const [f, t] = await Promise.all([pf, pt]); await settle();
   assert.equal([f.ok, t.ok].filter(Boolean).length, 1);
+  assert.ok(!f.unknown && !t.unknown, 'התנגשות היא כשל ודאי — לא "בודק…"');
   if (f.ok) { assert.equal(doc(cloud, 'r1').state, 'saved'); assert.ok(cloud.get(recPath('r1'))); }
   else { assert.equal(doc(cloud, 'r1').deviceName, 'א'); assert.equal(cloud.get(recPath('r1')), null); }
   // ובלי שער: מי שלחץ שני — לוקח מהראשון, והראשון רואה "עברה" (לעולם לא שניים מחזיקים)
@@ -277,6 +279,7 @@ test('הצעה בזמן קריאה: הכפתור מופיע כשהקריאה נ�
   assert.equal(b.state().offers[0].button, true, 'הקריאה נגמרה');
   a.d.scan = true; a.h.changed(); await settle();
   assert.equal(b.state().offers[0].button, false);
+  a.client.setOnline(false); // המחזיק נעלם באמצע הקריאה — בלי "דופק", החלון נגמר
   await settle(260);
   assert.equal(b.state().offers[0].button, true, 'עבר החלון');
 });
@@ -410,4 +413,175 @@ test('שתי אפליקציות על אותו שורש — לא רואות זו 
   const p1 = phone(cloud, 'ד', { storage: full }), p2 = phone(cloud, 'ה', { storage: (() => { const s = memoryStorage(); s.full = true; return s; })() });
   assert.notEqual(p1.h.deviceId(), p2.h.deviceId());
   assert.ok(!/unknown/.test(p1.h.deviceId()));
+});
+
+
+const emptyDraft = () => ({ sessionId: null, recordId: null, items: {}, scan: false, expected: null, big: '' });
+
+test('"שמור" בזמן שגיבוי בדרך — מחכה לו ונשמר (לא "בודק…"); state() זול — בלי לבנות את ה-payload', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'א'); a.start(); await settle();
+  a.newDraft('r1'); a.set('bread', 3); await settle();
+  let release; cloud.commitGate = new Promise(r => { release = r; });
+  a.set('bread', 4); await settle(); // הגיבוי קרא וממתין ל-commit
+  const pf = a.h.finish('r1', { items: { bread: 4 } });
+  await settle(); cloud.commitGate = null; release();
+  const f = await pf; await settle();
+  assert.equal(f.ok, true, JSON.stringify(f));
+  assert.deepEqual(cloud.get(recPath('r1')).items, { bread: 4 });
+  // state() / readOnly בכל לחיצה — בלי payload
+  a.newDraft('r2'); a.set('x', 1); await settle();
+  const before = a.payloadCalls;
+  for (let i = 0; i < 50; i++) a.h.state();
+  assert.equal(a.payloadCalls, before, 'state() לא בונה payload');
+});
+
+test('ביטול: הקליטה שבוטלה לא מוצעת בחזרה (גם כשהסגירה עוד לא נשלחה), ו"המשך" עליה נדחה', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'א'); a.start(); await settle();
+  a.newDraft('r1'); a.set('bread', 3); await settle();
+  a.client.setOnline(false);
+  a.h.cancel({ paperIds: ['p1'] }); a.d = emptyDraft(); a.h.changed(); await settle();
+  assert.deepEqual(a.state().offers, [], 'לא מוצעת');
+  a.client.setOnline(true);
+  const t = await a.h.take('r1');
+  assert.equal(t.ok, false); assert.equal(t.reason, 'canceled');
+  a.h.retry(); await settle(120);
+  assert.equal(doc(cloud, 'r1').state, 'canceled');
+  assert.deepEqual(j(a.closed), [{ paperIds: ['p1'] }], 'הניירות יוצאים רק אחרי שהענן אישר');
+});
+
+test('ביטול של קליטה שטלפון אחר כבר לקח — לא נסגרת, הניירות לא נמחקים, והמשתמש יודע', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'א'), b = phone(cloud, 'ב'); a.start(); b.start(); await settle();
+  a.newDraft('r1'); a.set('bread', 3); await settle();
+  a.client.setOnline(false); // א' לא שמע שהקליטה עברה
+  await b.h.take('r1'); await settle();
+  a.h.cancel({ paperIds: ['p1'] }); a.d = emptyDraft(); a.h.changed();
+  a.client.setOnline(true); a.h.retry(); await settle(120);
+  assert.equal(doc(cloud, 'r1').state, 'open'); assert.equal(doc(cloud, 'r1').deviceName, 'ב');
+  assert.deepEqual(a.closed, []);
+  assert.ok(a.notices.includes('cancel-declined'));
+});
+
+test('טיוטה מלפני המנגנון שבוטלה — הביטול מקומי בלבד (לא סוגר עותק שאולי פתוח בטלפון אחר)', async () => {
+  const cloud = createCloud();
+  const legacy = { sessionId: 'old1', recordId: 'old1', items: { bread: 2 }, scan: false, expected: null, big: '' };
+  const a = phone(cloud, 'א', { draft: legacy }); a.start(); await settle();
+  a.h.cancel({ paperIds: ['p9'] }); a.d = emptyDraft(); a.h.changed(); a.h.retry(); await settle(120);
+  assert.equal(doc(cloud, 'old1'), null, 'לא נוצר מסמך "בוטלה"');
+  assert.deepEqual(a.closed, [], 'הניירות לא נמחקים');
+  // ולחיצה בלי שינוי לא תובעת
+  const b = phone(cloud, 'ב', { draft: legacy }); b.start(); await settle();
+  b.h.changed({ user: true }); await settle();
+  assert.equal(doc(cloud, 'old1'), null);
+});
+
+test('טיוטה שהתרוקנה בלי שמירה או ביטול — יורדת מההצעות ("חונה"), וחוזרת כשממשיכים בה', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'א'), b = phone(cloud, 'ב'); a.start(); b.start(); await settle();
+  a.newDraft('r1'); a.set('bread', 3); await settle();
+  assert.equal(b.state().offers.length, 1);
+  const keep = a.d; a.d = emptyDraft(); a.h.changed(); a.h.retry(); await settle(120);
+  assert.equal(doc(cloud, 'r1').state, 'open'); assert.equal(doc(cloud, 'r1').openKey, null, 'חונה — לא מבוטלת');
+  assert.equal(b.state().offers.length, 0, 'לא מוצעת');
+  a.d = keep; a.set('bread', 5); await settle(80);
+  assert.equal(doc(cloud, 'r1').openKey, 'test:receiving');
+  assert.equal(b.state().offers.length, 1, 'חזרה');
+});
+
+test('קריאה בתשלום אצל המחזיק — "החזר" לא מוצע, ו"המשך" ישיר נדחה לפי השרת; קריאה בטיוטה שפתוחה כאן — "המשך" אחרת נדחה', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'א'), b = phone(cloud, 'ב'); a.start(); b.start(); await settle();
+  a.newDraft('r1'); a.set('bread', 3); await settle();
+  await b.h.take('r1'); await settle();
+  b.d.scan = true; b.h.changed(); await settle();
+  const st = a.state();
+  assert.equal(st.away.away, 'moved'); assert.equal(st.canTakeBack, false); assert.equal(st.scanThere, true);
+  const t = await a.h.take('r1');
+  assert.equal(t.ok, false); assert.equal(t.reason, 'scan-running');
+  assert.equal(doc(cloud, 'r1').deviceName, 'ב');
+  // טלפון ג' שלא ראה את ההצעה — גם נדחה
+  const c = phone(cloud, 'ג'); c.start(); await settle();
+  assert.equal((await c.h.take('r1')).reason, 'scan-running');
+  // קריאה רצה בטיוטה שפתוחה כאן — לא מחליפים אותה
+  b.d.scan = false; b.h.changed(); await settle();
+  c.newDraft('c1'); c.d.scan = true; c.h.changed(); await settle();
+  assert.equal((await c.h.take('r1')).reason, 'scan-running-here');
+});
+
+test('קריאה ארוכה עם "דופק" — החלון בטלפון השני מתחיל מחדש בכל דופק, ולא נפתח באמצע', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'א'), b = phone(cloud, 'ב', { maxScanMs: 150 }); a.start(); b.start(); await settle();
+  a.newDraft('r1'); a.set('bread', 3); await settle();
+  a.d.scan = true; a.h.changed(); await settle();
+  for (let i = 0; i < 5; i++) { await settle(50); assert.equal(b.state().offers[0].button, false, 'עדיין רצה — ' + i); }
+  a.client.setOnline(false); // המחזיק נעלם באמצע (סוללה) — אחרי החלון הכפתור חוזר
+  await settle(300);
+  assert.equal(b.state().offers[0].button, true);
+});
+
+test('עריכה של רשומה ששוחזרה (יש בה שדה id) — נשמרת; רשומה שנשמרה ממקום אחר ("exists") — "נשמרה" + "נקה" בלי עותק', async () => {
+  const cloud = createCloud();
+  cloud.put(recPath('r1'), { id: 'r1', items: { a: 1 }, n: 1 });
+  const a = phone(cloud, 'א'); a.start(); await settle();
+  a.newDraft('edit_r1_x', { items: { a: 1 }, n: 1 }, 'r1'); a.set('paper', 1); await settle();
+  assert.equal((await a.h.finish('r1', { items: { a: 1 }, n: 2 })).ok, true);
+  assert.equal(cloud.get(recPath('r1')).n, 2);
+  // "exists"
+  a.d = emptyDraft(); a.h.changed();
+  a.newDraft('r5'); a.set('b', 1); await settle();
+  cloud.put(recPath('r5'), { items: { b: 9 } });
+  const f = await a.h.finish('r5', { items: { b: 1 } });
+  assert.equal(f.reason, 'exists');
+  assert.equal(a.state().away.away, 'saved'); assert.equal(a.state().readOnly, true);
+  assert.equal(a.h.clear().ok, true); assert.deepEqual(a.debug().side, []);
+});
+
+test('עותקים בצד: של רשומה שכבר נשמרה — יורדים לבד; הגרסה הקודמת של אותה טיוטה — גלויה כשהיא פתוחה, ואפשר להחליף אליה', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'א'), b = phone(cloud, 'ב'); a.start(); b.start(); await settle();
+  a.newDraft('r1'); a.set('bread', 3); await settle();
+  await b.h.take('r1'); await settle(); b.set('bread', 7); await settle();
+  a.d.items.bread = 9; // ספירה מקומית שלא עברה
+  assert.equal(a.state().away.localAhead, true, 'הטלפון יודע שיש בו ספירה שלא הגיעה');
+  await a.h.take('r1'); await settle();
+  assert.equal(a.d.items.bread, 7);
+  let st = a.state();
+  assert.equal(st.side.length, 1); assert.equal(st.side[0].sessionId, 'r1', 'הגרסה הקודמת גלויה');
+  assert.equal(a.h.openSide('r1').ok, true); await settle();
+  assert.equal(a.d.items.bread, 9, 'הוחלף לגרסה המקומית');
+  assert.equal(JSON.parse(a.debug().side[0].payload).items.bread, 7, 'והשנייה בצד');
+  // רשומה שנשמרה — העותק יורד
+  cloud.put(recPath('r1'), { items: {} }); a.h.tidy();
+  assert.deepEqual(a.state().side, []);
+});
+
+test('גדולה מדי — הסטטוס אומר את זה (לא "מגובה")', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'א'); a.start(); await settle();
+  a.newDraft('r1'); a.d.big = 'ש'.repeat(500000); a.set('bread', 3); await settle();
+  assert.equal(a.state().status, 'too-big'); assert.equal(a.state().tooBig, true);
+});
+
+test('מניחים את הטלפון (pagehide / מעבר לרקע) — הגיבוי יוצא מיד, בלי לחכות להשהיה', async () => {
+  const cloud = createCloud();
+  const client = cloud.client();
+  const listeners = {}, docListeners = {};
+  const ctx = vm.createContext({ console, TextEncoder, crypto: globalThis.crypto, setTimeout, clearTimeout,
+    addEventListener: (t, fn) => { listeners[t] = fn; },
+    document: { visibilityState: 'visible', addEventListener: (t, fn) => { docListeners[t] = fn; } } });
+  vm.runInContext(source, ctx);
+  let d = { sessionId: null, items: {} };
+  const h = ctx.DraftHandoff.create({ app: 'test', kind: 'receiving', prefix: 'tt', db: client.db, fs: client.fs, rootPath: ['root'], recordCollection: 'records',
+    storage: memoryStorage(), isOnline: client.isOnline, timeouts: { ...T, debounce: 60000 },
+    adapter: { getDraft: () => ({ sessionId: d.sessionId, recordId: d.sessionId, empty: !d.sessionId }),
+      getPayload: () => ({ payload: JSON.stringify({ v: 1, sessionId: d.sessionId, items: d.items }), summary: {} }) } });
+  alive.push(h); h.start(); await settle();
+  d = { sessionId: 'r1', items: { a: 1 } }; h.changed({ user: true }); await settle();
+  assert.equal(doc(cloud, 'r1'), null, 'ההשהיה ארוכה — עוד לא');
+  listeners.pagehide(); await settle();
+  assert.deepEqual(JSON.parse(doc(cloud, 'r1').payload).items, { a: 1 }, 'pagehide — מיד');
+  d.items.a = 2; h.changed(); ctx.document.visibilityState = 'hidden'; docListeners.visibilitychange(); await settle();
+  assert.deepEqual(JSON.parse(doc(cloud, 'r1').payload).items, { a: 2 }, 'מעבר לרקע — מיד');
 });
