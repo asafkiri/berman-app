@@ -12975,7 +12975,7 @@ function paperAttach(p, base, others, all, start) {
   // נייר קטן שכל שורותיו הן בדיוק חוסר שעוד לא זוכה בקליטה — זיכוי לחוסר, לא להחזרה
   if (!p.forReturnId && rows.length && rows.length <= 2 && rows.every(r => nearRecs(r.k, -1).some(d => recRoom(d, r.k, -1, true) === r.q)))
     return { type: null, id: null, role: null, rowTargets: rows.map(r => targetRow(r, -1)), by: 'auto' };
-  let R = null, ask = null, askFit = false, tied = [], ranked = [];
+  let R = null, ask = null, askFit = false, periodOnly = false;
   if (p.forReturnId) {
     const f = rets.find(d => d.id === p.forReturnId);
     // צולם מכרטיס ההחזרה — רק אם רוב שורותיו באמת נשלחו בה; אחרת לפי הציון. המשתמש בחר אותה בשאלה — תמיד
@@ -12989,19 +12989,14 @@ function paperAttach(p, base, others, all, start) {
     const cands = rets.filter(d => d.day <= day && d.day >= ledgerAddDays(day, -LEDGER_RETURN_WINDOW_DAYS)).map(score).filter(c => c.score > 0)
       .sort((a, b) => cmp(a, b) || b.d.day.localeCompare(a.d.day));
     const top = cands[0], next = cands[1];
-    ranked = cands;
     if (top && top.score * 2 >= rows.length && !(next && cmp(top, next) === 0)) R = top.d;
+    // v130: ניצחה רק בגלל שהיא בתקופת המאזן (בכל השאר שוות) — נספרת שם כמו קודם, אבל אינה ראיה לתיקון של ברמן
+    if (R && next && cmp(top, next) === inR(next.d) - inR(top.d)) periodOnly = true;
     else if (cands.length) ask = cands.slice(0, 4).map(c => c.d.id);
     // fit: המועמדת המובילה מכסה לפחות חצי משורות הנייר (השאלה בגלל תיקו) — אחרת השורות נספרות לפי היעדים שלהן
     if (ask) askFit = !!(top && top.score * 2 >= rows.length);
-    // v130: המועמדות שבאמת שוות למובילה — רק מביניהן בוחרים לבד (לעולם לא מועמדת שמדורגת נמוך יותר)
-    if (ask && askFit) tied = cands.filter(c => cmp(top, c) === 0).map(c => c.d.id);
   }
-  // v130 (סבב 3): בלי החזרה אחת — שורה שמתאימה להחזרה מועמדת הולכת אליה כזיכוי משלים (max מול הרישום),
-  // לא לחוסר בקליטה: אחרת אותן יחידות נספרות פעמיים (ברישום של ההחזרה ובנייר) וחוסר אמיתי בקליטה נסגר
-  // (רק החזרה מתקופת המאזן — החזרה מחודש שנסגר אינה בספירה, ושם השורה נספרת על החוסר בקליטה כמו קודם)
-  const retRow = r => { const c = ask && ranked.find(x => (!start || x.d.day >= start) && onR(x.d, r.k) && r.q <= left(x.d, r.k)); return c ? { line: r.i, type: 'return', id: c.d.id } : null; };
-  if (!R) return { type: null, id: null, role: null, rowTargets: rows.map(r => retRow(r) || targetRow(r, -1)), by: 'auto', ...(ask ? { ask, fit: askFit, tied } : {}) };
+  if (!R) return { type: null, id: null, role: null, rowTargets: rows.map(r => targetRow(r, -1)), by: 'auto', ...(ask ? { ask, fit: askFit } : {}) };
   const keysOnR = Object.keys(R.rows).filter(k => R.rows[k].sent > 0);
   const covered = new Set(rows.filter(r => onR(R, r.k)).map(r => r.k));
   const hasMain = (others || []).some(o => o.attach && o.attach.type === 'return' && o.attach.id === R.id && o.attach.role === 'main');
@@ -13017,7 +13012,7 @@ function paperAttach(p, base, others, all, start) {
     used[d.id + '|' + row.k] = (used[d.id + '|' + row.k] || 0) + row.q;
     return { line: row.i, type: 'receipt', id: d.id };
   };
-  return { type: 'return', id: R.id, role, rowTargets: rows.map(r => covered.has(r.k) ? { line: r.i, type: 'return', id: R.id } : allocTarget(r)), by: 'auto' };
+  return { type: 'return', id: R.id, role, rowTargets: rows.map(r => covered.has(r.k) ? { line: r.i, type: 'return', id: R.id } : allocTarget(r)), by: 'auto', ...(periodOnly ? { tiePick: true } : {}) };
 }
 // מזהה קיזוז שבוטל: xo2|קליטה|קליטה|מוצר (או מוצר~מוצר) — השוואה מדויקת, לא חיפוש תת-מחרוזת
 function ledgerOffsetIdMatches(id, a, b, key) {
@@ -13072,18 +13067,15 @@ function paperLedger(opts) {
       const all = (Array.isArray(at.ask) ? at.ask : []).filter(id => byIdWide.has('return:' + id));
       // כל המועמדות מלפני תחילת המאזן — הנייר שייך לשם; לא נספר כאן כזיכוי בלי שיוך.
       // אחרת שואלים, גם עם ההחזרות שלפני (תשובה כזו מוציאה את הנייר מהמאזן)
-      // v130: בלי שאלה — רק בשוויון אמיתי בראש: הראשונה מבין השוות שבתקופת המאזן ([שנה] בבדיקת הנייר).
-      // השוות כולן לפני תחילת המאזן — הנייר שייך לשם ("מחוץ לתקופה"), לא למועמדת נמוכה יותר שבתקופה.
-      // נייר שרוב שורותיו לא מתאימות לאף החזרה — נספר לפי היעדים של השורות (בלי שיוך)
-      const pick = at.fit ? (Array.isArray(at.tied) ? at.tied : []).find(id => byId.has('return:' + id)) : null;
-      if (pick) at = paperAttach({ ...p, forReturnId: pick, userPick: true }, baseWide, placed, real, opts.tieStart || start);
-      // נבחרה לבד מבין שוות — לא ראיה לתיקון של ברמן (בהחזרה אחרת מהשוות הנייר היה "ראשי")
-      if (pick && at.type === 'return') at = { ...at, tiePick: true };
+      // v130: לא מנחשים ולא שואלים בקליטה — נייר כזה לא נספר עד שבוחרים לו החזרה ("פרטים" במאזן / "שנה"
+      // בבדיקת הנייר). ניחוש היה סופר יחידות פעמיים מול זיכוי שכבר רשום (בקליטה, בפיצול זיכוי) ומעלים חוסר אמיתי;
+      // נייר שלא נספר — לכל היותר משאיר פער גלוי. במאזן הוא "ממתין", לא שאלה.
+      if (all.length && all.some(id => byId.has('return:' + id))) { states[p.id] = 'needs-attach'; asks[p.id] = all; return; }
       // נייר שרוב שורותיו שייכות להחזרה מלפני תחילת המאזן — לשם; נייר של חוסרים בקליטה שרק חלק ממנו
       // משותף להחזרות ישנות — נספר לפי היעדים של השורות (קליטה מלפני ההתחלה — לא נספרת)
       const onRecs = (Array.isArray(at.rowTargets) ? at.rowTargets : []).every(t => t && t.type === 'receipt' && byId.has('receipt:' + t.id));
-      if (!pick && at.fit && !onRecs) { states[p.id] = 'outside'; return; }
-      at = { ...at, ask: undefined, tied: undefined };
+      if (at.fit && !onRecs) { states[p.id] = 'outside'; return; }
+      at = { ...at, ask: undefined };
     }
     if (outside(at)) { states[p.id] = 'outside'; return; }
     // שורה של חוסר בקליטה מלפני תחילת המאזן — לא נספרת כאן; שאר הנייר כן
@@ -13157,7 +13149,9 @@ function paperLedger(opts) {
   const unexplained = (k, q, day, recId) => {
     const lo = ledgerAddDays(day, -7), hi = ledgerAddDays(day, 1);
     const net = (gaps[k] || []).reduce((a, z) => a + z.gap, 0);
-    return net >= q && !(gaps[k] || []).some(z => z.type === 'receipt' && z.id !== recId && z.gap < 0 && z.day >= lo && z.day <= hi);
+    // (גם קליטה מלפני תחילת המאזן — חודש שנסגר — בתוך החלון: עודף שם הוא אותה ראיה)
+    const before = baseWide.some(d => d.type === 'receipt' && d.id !== recId && d.day < start && d.day >= lo && d.day <= hi && d.rows[k] && d.rows[k].received > d.rows[k].billed);
+    return net >= q && !before && !(gaps[k] || []).some(z => z.type === 'receipt' && z.id !== recId && z.gap < 0 && z.day >= lo && z.day <= hi);
   };
   loose.forEach(x => { if (x.sign > 0 && !answered(x.p, x.k) && unexplained(x.k, x.q, String(x.p.docDay), null)) corrCands.push({ cp: x.p, k: x.k, q: x.q, recId: null, line: x.line }); });
   smallIn.forEach(sp => sp.rows.forEach((r, line) => {
@@ -13275,7 +13269,8 @@ function paperLedger(opts) {
   const out = grouped;
   papers.forEach(p => {
     if (states[p.id] === 'unproven') out.unshift({ id: 'paper|' + p.id, kind: 'unproven', state: 'question', paper: p });
-    if (states[p.id] === 'needs-attach') out.unshift({ id: 'attach|' + p.id, kind: 'needsAttach', state: 'question', paper: p, ask: asks[p.id] || [] });
+    // v130: ממתין (לא שאלה) — לא בשורה האדומה שבקליטה; הבחירה במסך המאזן, למי שרוצה
+    if (states[p.id] === 'needs-attach') out.unshift({ id: 'attach|' + p.id, kind: 'needsAttach', state: 'pending', paper: p, ask: asks[p.id] || [] });
     if (states[p.id] === 'awaiting-receipt') out.push({ id: 'await|' + p.id, kind: 'deliveryNotReceived', state: String(p.docDay) >= asOf ? 'pending' : 'problem', paper: p,
       sameDay: recs.some(rc => storedReceiptDate(rc) === String(p.docDay)) });
     if (states[p.id] === 'duplicate') out.push({ id: 'dup|' + p.id, kind: 'duplicatePaper', state: 'info', paper: p, of: dupOf[p.id] });
@@ -13495,7 +13490,7 @@ function ledgerItemText(it, lg, papers) {
       detail: LEDGER_PHOTO_HINT.trim(), actions: [{ role: 'ledger-ack-offset', label: 'אין נייר — לקזז' }] };
     case 'netted': return { text: nm(it.key) + ': עודף ב-' + ledgerDayShort(it.over.day) + ' וחוסר ב-' + ledgerDayShort(it.short.day) + ' התקזזו', actions: [] };
     case 'unproven': return { text: paperLabel(it.paper) + ' לא נקרא עד הסוף — לבדוק', actions: [{ role: 'ledger-paper-open', label: 'לבדיקה', paperId: it.paper.id }] };
-    case 'needsAttach': return { text: 'לאיזו החזרה שייך ' + paperLabel(it.paper) + '?', actions: (it.ask || []).filter(id => (lg.docDays || {})[id]).map(id => {
+    case 'needsAttach': return { text: paperLabel(it.paper) + ' מתאים לכמה החזרות — לא נספר עד שתבחר לאיזו', detail: 'כדי לא לספור זיכוי פעמיים, נייר שלא ברור לאיזו החזרה הוא שייך לא נספר. אפשר לבחור כאן.', actions: (it.ask || []).filter(id => (lg.docDays || {})[id]).map(id => {
       const prod = Object.keys(lg.products).map(k => lg.products[k]).map(pr => ({ pr, part: pr.parts.find(z => z.type === 'return' && z.id === id) })).filter(z => z.part);
       const lines = prod.length, top = prod.slice().sort((a, b) => (b.part.sent || 0) - (a.part.sent || 0))[0];
       if (!lines) return { role: 'ledger-attach', label: 'ההחזרה מ-' + ledgerDayShort(lg.docDays[id]) + ' (לפני תחילת המאזן)', paperId: it.paper.id, returnId: id };
@@ -14666,7 +14661,7 @@ function paperAttachText(p, fixed) {
 function paperAttachShown(p, lg) {
   try { lg = lg || currentLedger(); } catch (e) { return ''; }
   if (!p || !lg) return '';
-  if (lg.states[p.id] === 'needs-attach') return 'לא ברור לאיזו החזרה הוא שייך — ענה במאזן';
+  if (lg.states[p.id] === 'needs-attach') return 'מתאים לכמה החזרות — לא נספר עד שבוחרים לאיזו (במאזן או ב"שנה")';
   const placed = (lg.placed || []).find(x => x.id === p.id);
   const fixed = (lg.autoDeclared || []).filter(d => d.standsFor && d.standsFor.chargePaperId === p.id && lg.states[d.id] === 'counted').map(d => d.standsFor.line);
   return placed ? paperAttachText(placed, fixed) : '';

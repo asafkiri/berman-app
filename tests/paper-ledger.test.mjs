@@ -165,20 +165,22 @@ test('נייר שכבר נכלל בקליטה, תעודת משלוח שלא נק
 });
 
 // v130: בלי "לאיזו החזרה?" — המאזן לפי מוצר לא תלוי בבחירה; [שנה] נשאר בבדיקת הנייר
-test('נייר זיכוי שמתאים לכמה החזרות — משויך לבד להחזרה מתקופת המאזן, בלי שאלה; המאזן לא משתנה; בחירה של המשתמש נשמרת', () => {
+test('נייר זיכוי שמתאים לכמה החזרות — לא נספר עד שבוחרים (בלי שאלה בקליטה: "ממתין" במאזן); בחירה של המשתמש נשמרת', () => {
   const p = paper({ id: 'paper_amb', kind: 'credit', number: '290094992', docDay: '2026-10-02', rows: [row(1, '2381', 1)] });
   const lg = ledger([p]);
-  assert.equal(lg.states[p.id], 'counted');
-  assert.ok(!lg.items.some(i => i.kind === 'needsAttach' || i.state === 'question'));
-  const at = lg.placed.find(x => x.id === p.id).attach;
-  assert.equal(at.type, 'return'); assert.ok(lg.docDays[at.id] >= '2026-09-01');
-  assert.deepEqual(nets(lg), nets(ledger([])), 'נייר משלים על שורה שאושרה — לא מזכה פעמיים');
+  assert.equal(lg.states[p.id], 'needs-attach');
+  assert.ok(!lg.items.some(i => i.state === 'question'), 'לא שאלה');
+  const it = lg.items.find(i => i.kind === 'needsAttach');
+  assert.equal(it.state, 'pending');
+  const t = ledgerItemText(it, lg, [p]);
+  assert.equal(t.text, 'נייר הזיכוי 94992 מ-2.10 מתאים לכמה החזרות — לא נספר עד שתבחר לאיזו');
+  assert.ok(t.actions.slice(0, -1).every(a => /^ההחזרה מ-\d+\.\d+ · (שורה אחת|\d+ שורות) · /.test(a.label)), 'כל כפתור אומר גם כמה שורות ומה הגדול שבהן');
+  assert.deepEqual(nets(lg), nets(ledger([])), 'לא נספר — לא משנה כלום');
   const chosen = { ...p, attach: { type: 'return', id: R1001, role: 'side', rowTargets: [{ line: 0, type: 'return', id: R1001 }], by: 'user' } };
   const lc = ledger([chosen]);
   assert.equal(lc.states[p.id], 'counted');
   assert.equal(lc.placed.find(x => x.id === p.id).attach.id, R1001);
 });
-
 test('חודש שנסגר מול החשבונית יוצא מהמאזן', () => {
   const lg = ledger([P.p141, P.p142], { closedThrough: '2026-10-04' });
   assert.equal(lg.start, '2026-10-05');
@@ -337,14 +339,13 @@ test('נייר מוקדם לחודש: כל ההחזרות המתאימות לפ�
   const lg = ledger([p]);
   assert.equal(lg.states[p.id], 'outside');
   assert.equal(lg.products.code_233.net, 1, 'החוסר של 4.10 על 233 נשאר');
-  // v130 (סקירה 2): בחודש סגור, כשההחזרות שמתאימות הכי טוב (בשוויון) כולן לפני הסגירה — הנייר שייך לשם ("מחוץ
-  // לתקופה"), גם כשיש בתקופה החזרה שמתאימה פחות טוב: לא מצמידים אותה לבד (זה היה בולע את החוסר שלה)
+  // בחודש סגור, כשגם החזרה מהתקופה מועמדת — לא מנחשים: לא נספר עד שבוחרים (הבחירה כוללת את ההחזרות שלפני)
   const q = paper({ id: 'paper_290094800', kind: 'credit', number: '290094800', numerator: '94800', docDay: '2026-10-01', rows: [row(1, '2381', 2)] });
   const lc = ledger([q], { closedThrough: '2026-09-30' });
-  assert.equal(lc.states[q.id], 'outside');
+  assert.equal(lc.states[q.id], 'needs-attach');
   assert.deepEqual(nets(lc), nets(ledger([], { closedThrough: '2026-09-30' })));
-  const full = ledger([q]);
-  assert.ok(full.docDays[full.placed.find(x => x.id === q.id).attach.id] < '2026-10-01', 'במאזן המלא — לאחת ההחזרות של ספטמבר, כמו במאזן החי');
+  const labels = ledgerItemText(lc.items.find(i => i.kind === 'needsAttach'), lc, [q]).actions.map(a => a.label);
+  assert.ok(labels.some(l => /לפני תחילת המאזן/.test(l)), labels.join(' / '));
 });
 
 test('החלפה (100 במקום 101) לא בולעת חוסר אחר של 101 בקליטה; אחרי "מקבל" החוסר נשאר על הקליטה שלו', () => {
@@ -438,17 +439,12 @@ test('תיקון שמזוהה לבד סוגר את ההחזרה; החלפה פת
 
 // v130 (סקירה 2): נייר שרוב שורותיו לא מתאימות לאף החזרה — בלי שאלה ובלי לנחש החזרה: כל שורה לפי היעד שלה.
 // 458 שלא נמצא לו מקום — "ברמן זיכתה שלא החזרת — לבדוק" (התראה, לא בליעה); בחירה של המשתמש נשמרת וסוגרת
-test('נייר מעורב (רוב השורות חוסרים בקליטה) — בלי שיוך מנוחש; שורה שמתאימה להחזרה — אליה; בחירה של המשתמש נשמרת', () => {
+test('נייר מעורב (רוב השורות חוסרים בקליטה) — לא נספר עד שבוחרים, והחוסרים נשארים גלויים; בחירה של המשתמש נשמרת', () => {
   const rows = [row(1, '233', 1), row(2, '1231', 2), row(3, '458', 2)];
   const p = paper({ id: 'paper_290090238', kind: 'credit', number: '290090238', numerator: '90238', docDay: '2026-10-05', rows });
   const lg = ledger([p]);
-  assert.equal(lg.states[p.id], 'counted', 'בלי שאלה');
-  assert.equal(lg.placed.find(x => x.id === p.id).attach.type, null);
-  // סבב 3: שורה שמתאימה להחזרה מתקופת המאזן — אליה, כזיכוי משלים (max מול הרישום): 458 להחזרה של 4.10 (בלי
-  // התראת שווא), ו-233 להחזרה שבה נשלח — החוסר של 233 בקליטה של 4.10 נשאר גלוי (לא נסגר על ניחוש)
-  const t = lg.placed.find(x => x.id === p.id).attach.rowTargets;
-  assert.deepEqual([t[2].type, t[2].id], ['return', R1004]);
-  assert.ok(!lg.items.some(i => i.kind === 'creditedNotReturned'));
+  assert.equal(lg.states[p.id], 'needs-attach');
+  assert.deepEqual(nets(lg), nets(ledger([])));
   assert.ok(brief(lg).some(b => b[0] === 'chargedNotReceived' && b[1] === 'code_233'), '233 — עדיין לבקש');
   const base = api.ledgerDocBase(F.receipts.filter(r => storedReceiptDate(r) >= '2026-09-21'), F.returns.filter(r => ledgerReturnDay(r) >= '2026-09-21' && ledgerReturnDay(r) <= '2026-10-05'));
   const at = api.paperAttach({ ...p, forReturnId: R1004, userPick: true }, base, [], [p], '2026-09-01');
@@ -550,19 +546,16 @@ test('סקירה 4+5: נייר ראשי שחסרה בו שורה (שאושרה �
 });
 
 // סבב 2: התפקיד לפי הכיסוי גם בבחירה לבד — בחירה לא נכונה נותנת לכל היותר התראת שווא (220), ולא מעלימה כלום
-test('סקירה 6: החזרה שנבחרה לבד בשוויון — התפקיד לפי הכיסוי; שום מוצר לא "נסגר" לעומת המצב בלי הנייר', () => {
+test('סקירה 6: נייר שמתאים בשוויון לכמה החזרות — לא נספר (לא מנחשים), ושום מוצר לא משתנה', () => {
   const R1 = { id: 'ret_r1', date: '2026-10-02', docDate: '2026-10-02', timestamp: 11, credited: true, items: [{ productId: 'code_450', code: '450', name: 'חלה', qty: 2 }, { productId: 'code_349', code: '349', name: 'z', qty: 4 }] };
   const R2 = { id: 'ret_r2', date: '2026-10-03', docDate: '2026-10-03', timestamp: 12, credited: true, items: [{ productId: 'code_450', code: '450', name: 'חלה', qty: 2 }, { productId: 'code_220', code: '220', name: 'y', qty: 1 }] };
   const rets = F.returns.concat([R1, R2]);
   const p = paper({ id: 'paper_290095000', kind: 'credit', number: '290095000', terminalNumber: '290095000', docDay: '2026-10-03', rows: [row(1, '450', 2)] });
   const base = paperLedger({ recs: F.receipts, rets, papers: [], from: '2026-09-01', asOf: '2026-10-05' });
   const lg = paperLedger({ recs: F.receipts, rets, papers: [p], from: '2026-09-01', asOf: '2026-10-05' });
-  assert.equal(lg.placed.find(x => x.id === p.id).attach.role, 'main', '1 מתוך 2 שורות — ראשי לפי הכיסוי');
-  const nb = nets(base), nl = nets(lg);
-  Object.keys(nb).forEach(k => assert.ok((nl[k] || 0) >= nb[k], k + ': לא נסגר בגלל הבחירה'));
-  assert.ok(lg.items.some(i => i.state === 'pending' && (i.keys || []).some(k => k.key === 'code_220')), '220 — ממתין (התראת שווא אפשרית, בטוחה)');
+  assert.equal(lg.states[p.id], 'needs-attach');
+  assert.deepEqual(nets(lg), nets(base));
 });
-
 // ===== v130 — סבב סקירה 2 =====
 const RC1002 = 'receipt_83b2692c-09e3-467f-91c0-05eddd06bc38';
 // 2.10: החזרה של 2387 ×q, נייר הזיכוי שלה (95201), ובמספר הבא נייר "ת.משלוח" קטן (95202) על 458 ×q שלא הגיעו
@@ -641,7 +634,7 @@ test('סבב 2 ו: בחודש סגור לא מצמידים נייר לבד לה�
   const recs = F.receipts.concat([{ id: 'rc_oct_short349', date: '2026-10-02', docDate: '2026-10-02', timestamp: 42, items: [{ productId: 'code_349', code: '349', name: 'z', qty: 0, noteQty: 1 }] }]);
   const p = paper({ id: 'paper_290095400', kind: 'credit', number: '290095400', terminalNumber: '290095400', docDay: '2026-10-01', rows: [row(1, '450', 2), row(2, '349', 1)] });
   const live = paperLedger({ recs, rets, papers: [p], from: '2026-09-01', closedThrough: '2026-09-30', asOf: '2026-10-05' });
-  assert.equal(live.states[p.id], 'outside');
+  assert.ok(['outside', 'needs-attach'].includes(live.states[p.id]), 'לא נספר בתקופה');
   assert.ok(brief(live).some(b => b[1] === 'code_349' && b[2] === 1), 'החוסר של 349 ב-2.10 נשאר');
 });
 
@@ -653,11 +646,11 @@ test('סבב 2 ז: כרטיס הנייר — רק השורה שזוהתה כתי
 });
 
 // ===== v130 — סבב סקירה 3 =====
-test('סבב 3 א: נייר זיכוי שהשיוך שלו נבחר לבד מבין החזרות שוות — לא ראיה לתיקון; החיוב הסמוך נשאר "לבקש זיכוי"', () => {
+test('סבב 3 א: נייר זיכוי שמתאים בשוויון לכמה החזרות — לא ראיה לתיקון; החיוב הסמוך נשאר "לבקש זיכוי"', () => {
   const C = paper({ id: 'paper_290095210', kind: 'credit', number: '290095210', terminalNumber: '290095210', docDay: '2026-10-02', rows: [row(1, '2387', 2)] });
   const ch = paper({ id: 'paper_290095211', kind: 'charge', number: '290095211', terminalNumber: '290095211', docDay: '2026-10-02', rows: [row(1, '1244', 2)] });
   const lg = ledger([C, ch]);
-  assert.ok(lg.placed.find(x => x.id === C.id).attach.tiePick, 'נבחר מבין שוות (2387 ×2 הוחזר ב-24.9, 28.9, 29.9 ו-1.10)');
+  assert.equal(lg.states[C.id], 'needs-attach', 'מתאים בשוויון (2387 ×2 הוחזר ב-24.9, 28.9, 29.9 ו-1.10) — לא נספר');
   assert.deepEqual(lg.autoDeclared, []);
   assert.ok(brief(lg).some(b => b[1] === 'code_1244' && b[2] === 2), '1244 ×2 — לבקש זיכוי');
   // אותו דבר בנייר "ת.משלוח" קטן שנקלט (0 מתוך 2)
@@ -668,15 +661,14 @@ test('סבב 3 א: נייר זיכוי שהשיוך שלו נבחר לבד מב�
   assert.ok(brief(ls).some(b => b[1] === 'code_1244' && b[2] === 2));
 });
 
-test('סבב 3 ב: נייר זיכוי בלי החזרה אחת — שורת ההחזרה (שזוכתה ברישום) לא נספרת שוב על חוסר בקליטה; החוסר נשאר', () => {
+test('סבב 3 ב: נייר זיכוי בלי החזרה אחת — לא נספר עד שבוחרים, ולכן לא נספר פעמיים; החוסר בקליטה נשאר', () => {
   const R = { id: 'ret_510', date: '2026-10-05', docDate: '2026-10-05', timestamp: 50, credited: true, items: [{ productId: 'code_220', code: '220', name: 'y', qty: 3 }] };
   const rc = { id: 'rc_510b', date: '2026-10-05', docDate: '2026-10-05', timestamp: 51, paperDocs: [{ number: '244799993' }], items: [
     { productId: 'code_220', code: '220', name: 'y', qty: 1, noteQty: 4 }, { productId: 'code_649', code: '649', name: 'a', qty: 0, noteQty: 2 }, { productId: 'code_3604', code: '3604', name: 'b', qty: 0, noteQty: 1 }] };
   const p = paper({ id: 'paper_290095300', kind: 'credit', number: '290095300', terminalNumber: '290095300', docDay: '2026-10-05', rows: [row(1, '649', 2), row(2, '3604', 1), row(3, '220', 3)] });
   const lg = paperLedger({ recs: F.receipts.concat([rc]), rets: F.returns.concat([R]), papers: [p], from: '2026-09-01', asOf: '2026-10-05' });
-  assert.deepEqual(lg.placed.find(x => x.id === p.id).attach.rowTargets[2], { line: 2, type: 'return', id: 'ret_510' });
+  assert.equal(lg.states[p.id], 'needs-attach', 'סבב 4: לא נספר עד שבוחרים — לא מנחשים לאן שורת ההחזרה');
   assert.ok(brief(lg).some(b => b[1] === 'code_220' && b[2] === 3), 'החוסר של 220 ×3 בקליטה נשאר');
-  assert.equal(lg.products.code_649.net, 0); assert.equal(lg.products.code_3604.net, 0);
 });
 
 test('סבב 3 ג: "כן, זה תיקון" ישן על נייר חיוב בלי נומרטור — שורת הזיכוי שהסבירה אותו חסומה גם כאן', () => {
@@ -698,4 +690,61 @@ test('סבב 3 ד: נייר חיוב ישן ששורה בו הגיעה בחלק�
   const lg = paperLedger({ recs: F.receipts.concat([rc]), rets: F.returns.concat([R]), papers: [C, ch], from: '2026-09-01', asOf: '2026-10-05' });
   assert.deepEqual(lg.autoDeclared, []);
   assert.equal(lg.products.code_450.net, 2, 'הגיעו 2 מתוך 4 — 2 לבקש');
+});
+
+// ===== v130 — סבב סקירה 4: לא מנחשים לאיזו החזרה; נייר שלא ברור — לא נספר =====
+test('סבב 4 א: אחרי סגירת חודש, נייר שניצח רק כי ההחזרה בתקופה — לא ראיה לתיקון; החיוב נשאר', () => {
+  const C = paper({ id: 'paper_290095210', kind: 'credit', number: '290095210', terminalNumber: '290095210', docDay: '2026-10-02', rows: [row(1, '2387', 2)] });
+  const ch = paper({ id: 'paper_290095211', kind: 'charge', number: '290095211', terminalNumber: '290095211', docDay: '2026-10-02', rows: [row(1, '1244', 2)] });
+  for (const extra of [{ closedThrough: '2026-09-30' }, {}]) {
+    const lg = ledger([C, ch], extra);
+    assert.deepEqual(lg.autoDeclared, [], JSON.stringify(extra));
+    assert.ok(brief(lg).some(b => b[1] === 'code_1244' && b[2] === 2), JSON.stringify(extra) + ': 1244 ×2 — לבקש זיכוי');
+  }
+});
+
+test('סבב 4 ב: שני ניירות זיכוי זהים ושתי החזרות שוות — אף אחד לא "נדחף" להחזרה השנייה והופך לראיה לתיקון', () => {
+  const A = { id: 'ret_a', date: '2026-10-03', docDate: '2026-10-03', timestamp: 21, credited: true, items: [{ productId: 'code_3604', code: '3604', name: 'x', qty: 2 }] };
+  const B = { id: 'ret_b', date: '2026-10-02', docDate: '2026-10-02', timestamp: 22, credited: true, items: ['3604', '349', '220', '119'].map(c => ({ productId: 'code_' + c, code: c, name: c, qty: 2 })) };
+  // שני ניירות אמיתיים (כל מספר תואם לנומרטור שלו) — לא צילום כפול
+  const mk = n => paper({ id: 'paper_2900' + n, kind: 'credit', number: '2900' + n, terminalNumber: '2900' + n, numerator: n, docDay: '2026-10-03', rows: [row(1, '3604', 2)] });
+  const ch = paper({ id: 'paper_290095233', kind: 'charge', number: '290095233', terminalNumber: '290095233', numerator: '95233', docDay: '2026-10-03', rows: [row(1, '1244', 2)] });
+  const lg = paperLedger({ recs: F.receipts, rets: F.returns.concat([A, B]), papers: [mk('95231'), mk('95232'), ch], from: '2026-09-01', asOf: '2026-10-05' });
+  assert.deepEqual([lg.states.paper_290095231, lg.states.paper_290095232], ['needs-attach', 'needs-attach']);
+  assert.deepEqual(lg.autoDeclared, []);
+  assert.ok(brief(lg).some(b => b[1] === 'code_1244' && b[2] === 2));
+});
+
+test('סבב 4 ג: זיכוי שכבר רשום על חוסר בקליטה + החזרה שעוד לא זוכתה + הנייר עצמו — לא נספר פעמיים; החסר בהחזרה נשאר', () => {
+  // מוצרים שלא מופיעים בהחזרות של התקופה (רק בהחזרה הזו) — כמו בממצא
+  const rc = { id: 'rc_s1', date: '2026-10-02', docDate: '2026-10-02', timestamp: 31, paperDocs: [{ number: '244799995' }],
+    items: [{ productId: 'code_9101', code: '9101', name: 'a', qty: 2, noteQty: 5 }, { productId: 'code_9102', code: '9102', name: 'b', qty: 0, noteQty: 1 }, { productId: 'code_9103', code: '9103', name: 'c', qty: 0, noteQty: 1 }],
+    shortCreditUnits: [{ productId: 'code_9101', qty: 3, noteNumber: '290095400' }, { productId: 'code_9102', qty: 1, noteNumber: '290095400' }, { productId: 'code_9103', qty: 1, noteNumber: '290095400' }] };
+  const R = { id: 'ret_s1', date: '2026-09-27', docDate: '2026-09-27', timestamp: 32, credited: false, items: [{ productId: 'code_9101', code: '9101', name: 'a', qty: 3 }] };
+  const p = paper({ id: 'paper_290095400', kind: 'credit', number: '290095400', terminalNumber: '290095400', docDay: '2026-10-02', rows: [row(1, '9101', 3), row(2, '9102', 1), row(3, '9103', 1)] });
+  const run = ps => paperLedger({ recs: F.receipts.concat([rc]), rets: F.returns.concat([R]), papers: ps, from: '2026-09-01', asOf: '2026-10-05' });
+  const before = run([]).products.code_9101.net, after = run([p]);
+  assert.equal(before, 3, 'לפני הצילום: 9101 ×3 בהחזרה שלא זוכתה');
+  assert.equal(after.products.code_9101.net, 3, 'אחרי הצילום — עדיין 3');
+  assert.ok(after.items.some(i => (i.keys || [{ key: i.key }]).some(k => k.key === 'code_9101') && i.state !== 'info'), 'ומוצג');
+});
+
+test('סבב 4 ד: זיכוי רשום על חוסר + נייר של שורה אחת + שתי החזרות שוות שלא זוכו — לא נספר; החסר בהחזרות נשאר', () => {
+  const rc = { id: 'rc_S', date: '2026-10-03', docDate: '2026-10-03', timestamp: 33, paperDocs: [{ number: '244799996' }],
+    items: [{ productId: 'code_450', code: '450', name: 'חלה', qty: 0, noteQty: 2 }], shortCreditUnits: [{ productId: 'code_450', qty: 2, noteNumber: '290095500' }] };
+  const two = (id, d) => ({ id, date: d, docDate: d, timestamp: 34, credited: false, items: [{ productId: 'code_450', code: '450', name: 'חלה', qty: 2 }] });
+  const rets = F.returns.concat([two('ret_A', '2026-10-01'), two('ret_B', '2026-10-02')]);
+  const p = paper({ id: 'paper_290095500', kind: 'credit', number: '290095500', terminalNumber: '290095500', docDay: '2026-10-03', rows: [row(1, '450', 2)] });
+  const run = ps => paperLedger({ recs: F.receipts.concat([rc]), rets, papers: ps, from: '2026-09-01', asOf: '2026-10-05' });
+  assert.equal(run([p]).products.code_450.net, run([]).products.code_450.net, 'הצילום לא סוגר את מה שחסר בהחזרות');
+});
+
+test('סבב 4 ה: עודף בקליטה מחודש שנסגר (בתוך החלון) — גם הוא חוסם "תיקון" במאזן החי', () => {
+  const R = { id: 'ret_9l', date: '2026-10-01', docDate: '2026-10-01', timestamp: 6, credited: true, items: ['220', '349', '119', '233'].map(c => ({ productId: 'code_' + c, code: c, name: c, qty: 4 })) };
+  const C = paper({ id: 'paper_290095221', kind: 'credit', number: '290095221', terminalNumber: '290095221', docDay: '2026-10-02', forReturnId: 'ret_9l', rows: [row(1, '220', 4)] });
+  const ch = paper({ id: 'paper_290095220', kind: 'charge', number: '290095220', terminalNumber: '290095220', docDay: '2026-10-02', rows: [row(1, '450', 4)] });
+  const rc = { id: 'rc_s4e', date: '2026-09-30', docDate: '2026-09-30', timestamp: 9, paperDocs: [{ number: '244799997' }], items: [{ productId: 'code_450', code: '450', name: 'חלה', qty: 12, noteQty: 10 }] };
+  const lg = paperLedger({ recs: F.receipts.concat([rc]), rets: F.returns.concat([R]), papers: [C, ch], from: '2026-09-01', closedThrough: '2026-09-30', asOf: '2026-10-05' });
+  assert.deepEqual(lg.autoDeclared, []);
+  assert.ok(brief(lg).some(b => b[1] === 'code_450'), '450 — לבקש');
 });
