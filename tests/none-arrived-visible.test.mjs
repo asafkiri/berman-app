@@ -22,6 +22,7 @@ async function smallInReceiving() {
   await readPapers(r);
   assert.equal(r.run('receiptPaperScanState'), 'ok', 'הנייר הקטן נכנס לקליטה');
   assert.equal(r.run('currentView'), 'paperIntake');
+  r.click('paper-all-in'); // v134: קודם "זה כל הניירות"
   return r;
 }
 
@@ -34,10 +35,11 @@ test('מסך הניירות: "לא הגיע כלום" מתחת ל"לספירה" 
   assert.ok(none > count, '"לא הגיע כלום" מתחת ל"לספירה"');
   assert.ok(none < html.indexOf('id="paperIntakeList"'), 'מעל כרטיסי הניירות');
   assert.match(html, /data-role="paper-none-arrived"[^>]*>(<i[^>]*><\/i> )?לא הגיע כלום — הכל חסר<\/button>/);
+  // v134: בתוך שלוש הבחירות — לפחות בגודל של "לספירה" (רוחב מלא, גובה 56 מול 48)
   const big = btnClasses(html, 'paper-count-now'), mine = btnClasses(html, 'paper-none-arrived');
-  for (const c of ['w-full', 'min-h-[48px]', 'rounded-2xl', 'py-3', 'font-black']) {
-    assert.ok(big.includes(c), '"לספירה": ' + c); assert.ok(mine.includes(c), '"לא הגיע כלום" באותו גודל: ' + c);
-  }
+  for (const c of ['w-full', 'rounded-2xl', 'font-black']) { assert.ok(big.includes(c), '"לספירה": ' + c); assert.ok(mine.includes(c), '"לא הגיע כלום": ' + c); }
+  assert.ok(big.includes('min-h-[48px]') && mine.includes('min-h-[56px]'), 'לא קטן מ"לספירה"');
+  assert.ok(mine.includes('bg-rose-600') && mine.includes('text-white'), 'מלא, לא רק מסגרת');
   assert.ok(!mine.some(c => /^text-(xs|sm|\[)/.test(c)), 'לא בכתב קטן');
   const before = r.requests.length;
   r.click('paper-none-arrived');
@@ -58,7 +60,7 @@ test('מסך הניירות: "לא הגיע כלום" מתחת ל"לספירה" 
 });
 
 test('מסך הניירות: בלי תעודה בקליטה, כשעוד נייר נקרא, בלי נייר, בבדיקה, ובטלפון שרק צופה — אין "לא הגיע כלום"', async () => {
-  const has = r => { r.run('renderPaperIntake()'); return /data-role="paper-none-arrived"/.test(r.node('app').innerHTML); };
+  const has = r => { r.run('if (paperIntake) paperIntake.allIn = true; renderPaperIntake()'); return /data-role="paper-none-arrived"/.test(r.node('app').innerHTML); };
   // לפני שנקרא משהו — אין קליטה
   const empty = app(small());
   empty.run(`openPaperIntake({}); setView('paperIntake')`);

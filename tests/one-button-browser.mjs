@@ -116,7 +116,10 @@ try{
   assert.match(await a.locator('#app').innerText(),/הניירות מהנהג/);
   assert.equal(await a.locator('#app [data-role="paper-run"]').count(),0,'בלי "קרא" — הקריאה כבר רצה');
   await a.screenshot({path:'/tmp/berman-one-button-tray.png',fullPage:true});
-  // בזמן הקריאה: "התחל לספור עכשיו"
+  // v134: קודם "זה כל הניירות" (עד אז: "צלם עוד נייר"), ואז — בזמן הקריאה: "התחל לספור עכשיו"
+  await role(a,'paper-all-in').waitFor({state:'visible'});
+  assert.equal(await a.locator('#app [data-role="paper-count-now"]').count(),0,'עוד מצלמים');
+  await role(a,'paper-all-in').click();
   await role(a,'paper-count-now').waitFor({state:'visible'});
   await role(a,'paper-count-now').click();
   // הספירה נפתחת מיד, בשני הטלפונים: "קורא…"
