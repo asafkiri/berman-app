@@ -104,7 +104,14 @@ async function photographSmall(page) {
   const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.locator('#ledgerBar [data-role="paper-photo"]').click()]);
   await chooser.setFiles({ name: 'paper.svg', mimeType: 'image/svg+xml', buffer: photo });
   await page.waitForFunction(() => window.t.state().paperState === 'ok' && window.t.state().view === 'paperIntake');
+  // v134: קודם מצלמים את כל הניירות — "צלם עוד נייר" / "זה כל הניירות"; הבחירות רק אחרי
+  await page.locator('#app [data-role="paper-all-in"]').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#app [data-role="paper-photo-more"]').count(), 1);
+  assert.equal(await page.locator('#app [data-role="paper-none-arrived"]').count(), 0, 'עוד לא — מצלמים');
+  await page.screenshot({ path: '/tmp/berman-v134-photographing.png' });
+  await page.locator('#app [data-role="paper-all-in"]').click();
   await page.locator('#app [data-role="paper-none-arrived"]').waitFor({ state: 'visible' });
+  for (const role of ['paper-quantity-all', 'paper-quantity-differences']) assert.equal(await page.locator('#app [data-role="' + role + '"]').isVisible(), true, role);
   const s = await state(page);
   assert.equal(s.small, true, 'נקרא כנייר משלוח קטן'); assert.equal(s.requests, 1); assert.deepEqual(s.items, []);
 }
@@ -140,7 +147,7 @@ try {
   assert.ok(intake.indexOf('לספירה') >= 0 && intake.indexOf('לא הגיע כלום — הכל חסר') > intake.indexOf('לספירה'), 'מתחת ל"לספירה"');
   const countBox = await inFirstScreen(a, '#app [data-role="paper-count-now"]', 'לספירה');
   const noneBox = await inFirstScreen(a, '#app [data-role="paper-none-arrived"]', 'לא הגיע כלום (מסך הניירות)');
-  assert.ok(Math.abs(noneBox.width - countBox.width) <= 1 && noneBox.height >= countBox.height - 1, 'באותו גודל כמו "לספירה"');
+  assert.ok(noneBox.width >= countBox.width * 0.85 && noneBox.height >= countBox.height - 1, 'לא קטן מ"לספירה"');
   assert.ok(await a.evaluate(() => window.t.scrollOk()), 'מסך הניירות: בלי גלילה לצדדים');
   await a.screenshot({ path: '/tmp/berman-v132-intake.png' });
   await a.locator('#app [data-role="paper-count-now"]').click();

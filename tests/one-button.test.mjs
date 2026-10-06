@@ -483,10 +483,16 @@ test('מקום אחד: המצלמה רק בפס העליון — בקליטה, �
   r.run(`setView('receiving')`); noCamera(r.node('app').innerHTML, 'ספירה');
   r.run(`receiptNoDoc = true; receiptNotes = []; recomputeNoteTotal(); receiptList = [{ productId: 'code_101', name: 'x', barcode: '', qty: 1 }]; renderReceiving();`);
   noCamera(r.node('app').innerHTML, 'קליטה בלי נייר'); assert.match(r.node('app').innerHTML, /מצאתי את התעודה\? צלם אותה בכפתור "צלם נייר מהנהג" למעלה/);
-  // מסך הניירות: "קרא" אחד, בלי מצלמה משלו
+  // מסך הניירות: "קרא" אחד, בלי מצלמה משלו. v134: בזמן שמצלמים — "צלם עוד נייר" אחד, שפותח את אותה מצלמה של
+  // כל האפליקציה (הקלט הקבוע שמחוץ למסך; בלי שדה קובץ במסך)
   r.run(`openPaperIntake({}); paperIntake.items = paperIntake.items.concat(${items(1, 5, '')}); renderPaperIntake();`);
   const tray = r.node('app').innerHTML;
   noCamera(tray, 'מסך הניירות'); assert.match(tray, /data-role="paper-run"/); assert.doesNotMatch(tray, /paper-run-receive/);
+  assert.equal((tray.match(/data-role="paper-photo-more"/g) || []).length, 1, 'v134: "צלם עוד נייר" אחד');
+  r.run(`globalThis.__cam = 0; paperOpenCamera = () => { globalThis.__cam++; };`); r.click('paper-photo-more');
+  assert.equal(r.run('globalThis.__cam'), 1, 'אותה מצלמה');
+  r.click('paper-all-in');
+  assert.doesNotMatch(r.node('app').innerHTML, /paper-photo-more/, 'אחרי "זה כל הניירות" — רק הכפתור בפס');
   assert.match(r.node('ledgerBar').innerHTML, /צלם נייר מהנהג/);
 });
 
