@@ -75,6 +75,7 @@
       html.dark .text-slate-600 { color:#cbd5e1 !important; }
       html.dark .text-slate-500 { color:#94a3b8 !important; }
       html.dark .text-slate-400 { color:#94a3b8 !important; }
+      html.dark .qc-diff { color:#bfdbfe !important; border-color:#3b82f6 !important; }
       html.dark .bg-rose-50 { background-color:#4c1d2b !important; }
       html.dark .bg-amber-50 { background-color:#422f13 !important; }
       html.dark .bg-emerald-50 { background-color:#123b32 !important; }
@@ -6024,7 +6025,7 @@ function receiptQuantityButtonsHtml() {
   if (receiptNoDoc || receiptAttachTarget || receiptPaperScanState !== 'ok' || !aiScanResponse) return '';
   if (receiptUsesManualQuantities()) return '<div class="space-y-3 mb-3">' +
     '<button data-role="rc-quantity-all" class="btn-tap w-full bg-emerald-600 text-white rounded-xl py-4 px-3 font-black text-base">בדקתי ידנית — כל הכמויות תואמות, המשך לקליטה</button>' +
-    '<button data-role="rc-quantity-differences" class="btn-tap w-full bg-white border-2 border-blue-300 text-blue-800 rounded-xl py-4 px-3 font-black text-base">בדקתי ידנית — יש חוסרים או עודפים</button>' +
+    '<button data-role="rc-quantity-differences" class="qc-diff btn-tap w-full bg-white border-2 border-blue-300 text-blue-800 rounded-xl py-4 px-3 font-black text-base">בדקתי ידנית — יש חוסרים או עודפים</button>' +
     '<button data-role="rc-quantity-none" class="btn-tap w-full bg-white border-2 border-rose-300 text-rose-800 rounded-xl py-4 px-3 font-black text-base">לא הגיע כלום — הכל חסר</button></div>';
   // v132: לפני שנספר משהו — זו ההחלטה הראשונה במסך, אז היא פתוחה, ו"לא הגיע כלום" גדול כמו כפתור הספירה
   if (!receiptList.length) return quantityChoicesOpenHtml({ all: 'rc-quantity-all', diff: 'rc-quantity-differences', none: 'rc-quantity-none' }, 'או סרוק את מה שהגיע — למטה');
@@ -6036,7 +6037,7 @@ function receiptQuantityButtonsHtml() {
     '<span>בדקת ידנית את הכמויות מול התעודה?</span><i class="fa-solid fa-chevron-down hist-chevron shrink-0"></i></summary>' +
     '<div class="flex gap-2 mt-2">' +
     '<button data-role="rc-quantity-all" class="btn-tap flex-1 bg-emerald-600 text-white rounded-xl py-2.5 font-black text-sm">כל הכמויות תואמות</button>' +
-    '<button data-role="rc-quantity-differences" class="btn-tap flex-1 bg-white border-2 border-blue-300 text-blue-800 rounded-xl py-2.5 font-black text-sm">יש חוסרים או עודפים</button></div>' +
+    '<button data-role="rc-quantity-differences" class="qc-diff btn-tap flex-1 bg-white border-2 border-blue-300 text-blue-800 rounded-xl py-2.5 font-black text-sm">יש חוסרים או עודפים</button></div>' +
     '<button data-role="rc-quantity-none" class="btn-tap w-full mt-2 bg-white border-2 border-rose-300 text-rose-800 rounded-xl py-2.5 font-black text-sm">לא הגיע כלום — הכל חסר</button></details>';
 }
 // v134: שלוש הבחירות הידניות, פתוחות — במסך הקליטה (לפני ספירה) ובמסך הניירות; roles: { all, diff, none }
@@ -6045,7 +6046,7 @@ function quantityChoicesOpenHtml(roles, hint) {
     '<div class="text-sm font-black text-slate-800 mb-2">בדקת ידנית את הכמויות מול התעודה?</div>' +
     '<div class="grid grid-cols-2 gap-2">' +
     '<button data-role="' + roles.all + '" class="btn-tap min-h-[52px] bg-emerald-600 text-white rounded-2xl py-3 px-2 font-black text-base">כל הכמויות תואמות</button>' +
-    '<button data-role="' + roles.diff + '" class="btn-tap min-h-[52px] bg-white border-2 border-blue-300 text-blue-800 rounded-2xl py-3 px-2 font-black text-base">יש חוסרים או עודפים</button></div>' +
+    '<button data-role="' + roles.diff + '" class="qc-diff btn-tap min-h-[52px] bg-white border-2 border-blue-300 text-blue-800 rounded-2xl py-3 px-2 font-black text-base">יש חוסרים או עודפים</button></div>' +
     '<button data-role="' + roles.none + '" class="btn-tap w-full min-h-[56px] mt-2 bg-rose-600 text-white rounded-2xl py-4 px-3 font-black text-lg flex items-center justify-center gap-2 shadow-md"><i class="fa-solid fa-ban" aria-hidden="true"></i> לא הגיע כלום — הכל חסר</button>' +
     (hint ? '<div class="text-[11px] font-bold text-slate-500 text-center mt-2">' + hint + '</div>' : '') + '</div>';
 }
@@ -6060,12 +6061,24 @@ function receiptPaperDocCount() {
 // (למשל נייר "ת.משלוח" קטן על סחורה שלא הגיעה, או שכבר נספרה — המאזן משייך את החוסר למה שכבר בהיסטוריה)
 function startReceiptQuantityReview(allMatch) {
   const none = allMatch === 'none';
+  // v135: השאלה המשותפת לטלפון השני ("פתח מחדש לאישור") חוזרת על הבחירה הזאת — גם כשנלחצה במסך הניירות
+  // (שם הלחיצה לא נרשמת), ולא על הלחיצה האחרונה שנרשמה במסך הקליטה
+  sharedReceiptLastAction = { id: '', dataset: { role: none ? 'rc-quantity-none' : allMatch ? 'rc-quantity-all' : 'rc-quantity-differences' } };
   if (none) allMatch = false;
   // v132: עוד נייר מהנהג נקרא לקליטה הזאת (אולי עוד תעודת משלוח) — הבחירה חלה על כל הניירות, אז מחכים לו (כמו הסיום)
   if (paperJoinPending.size) paperJoinRetry();
-  const paperReading = receivingPaperReadRunning();
+  // v135: גם תעודה שנקראה ומחכה להיכנס (בלי קליטה מסוימת) — הניסיון החוזר מכניס אותה לקליטה הזאת
+  const paperReading = receivingPaperReadRunning() || (Array.from(paperJoinPending.values()).some(j => !j.item || !j.item.forDraftId || j.item.forDraftId === receiptDraftId) ? 'here' : '');
   if (paperReading) {
     showToast(paperReading === 'other' ? 'נייר מהנהג נקרא עכשיו בטלפון אחר — עוד רגע ואפשר לבחור.' : 'עוד נייר מהנהג נקרא עכשיו — עוד רגע הוא ייכנס לבד, ואז אפשר לבחור.', null, null, 3500);
+    return;
+  }
+  // v135: אימות קריאה ממתין — לא פותחים את מסך ההשוואה (הוא מראה את כמויות הנייר לפני הספירה); מראים כאן רק את
+  // המספרים המסומנים לבדיקה מול הנייר, כמו בסוף ספירה, ואחרי הבדיקה בוחרים שוב
+  if (bermanOcrPendingDocs().length) {
+    rcOcrReviewRevealed = true; rcOcrRevealDraft = receiptDraftId;
+    saveReceiptDraft(); refreshOcrReviewViews();
+    showToast('קודם בדוק מול הנייר את המספרים המסומנים באימות הקריאה — ואז בחר שוב.', null, null, 5000);
     return;
   }
   const paperRows = receiptQuantityPaperRows();
@@ -6097,8 +6110,11 @@ function startReceiptQuantityReview(allMatch) {
   if (none) {
     // ספירה שכבר נעשתה נמחקת — אומרים כמה, כדי שלא יימחק בטעות מה שבאמת הגיע
     const n = receiptPaperDocCount(), counted = receiptList.reduce((a, l) => a + (Number(l && l.qty) || 0), 0);
+    // v135: אילו תעודות — במספר שלהן (כדי שלא יאפס תעודה אחרת מזו שבראש)
+    const nums = (aiScanResponse && aiScanResponse.scan && Array.isArray(aiScanResponse.scan.documents) ? aiScanResponse.scan.documents : []).map(d => receiptPaperNumber(d && (d.docNumber ?? d.invoiceNumber))).filter(Boolean);
+    const which = nums.length ? ' (' + nums.join(', ') + ')' : '';
     showConfirm('לא הגיע כלום?', (counted > 0 ? 'שים לב: כבר נספרו ' + mtxQty(counted) + ' יח׳ — הספירה תימחק. ' : '') +
-      (n > 1 ? 'לא הגיע כלום מכל ' + n + ' התעודות בקליטה: כל השורות שבהן' : 'כל השורות שבתעודה') + ' יירשמו כחוסר (0 התקבלו), והקליטה תישמר. ' +
+      (n > 1 ? 'לא הגיע כלום מכל ' + n + ' התעודות בקליטה' + which + ': כל השורות שבהן' : 'כל השורות שבתעודה' + which) + ' יירשמו כחוסר (0 התקבלו), והקליטה תישמר. ' +
       'אם משהו כן הגיע — סרוק אותו או בחר "יש חוסרים או עודפים". המאזן ישייך את החוסרים למה שכבר חסר או עודף בהיסטוריה, ויראה מה באמת פתוח.', 'לא הגיע כלום — שמור', begin);
     return;
   }
@@ -14620,7 +14636,8 @@ function receivingJoinDelivery(opts) {
   paperJoinActive++;
   const run = paperJoinChain.then(() => receivingJoinDeliveryNow(opts || {}));
   paperJoinChain = run.catch(() => {});
-  run.then(() => { paperJoinActive--; }, () => { paperJoinActive--; });
+  const done = () => { paperJoinActive--; refreshPaperIntake(); }; // v135: מסך הניירות מתעדכן כשהכניסה נגמרה
+  run.then(done, done);
   return run;
 }
 // retry — ניסיון חוזר מהתור: בלי הודעות ובלי מעבר מסך (רק שאלה, אם המשתמש לחץ "לקליטה" בעצמו)
@@ -14944,7 +14961,7 @@ function renderPaperIntake() {
     : it.busy ? '<button data-role="paper-count-now" class="btn-tap w-full min-h-[48px] bg-white border-2 border-blue-300 text-blue-800 rounded-2xl py-3 font-black text-sm mb-3"><i class="fa-solid fa-barcode"></i> יש סחורה לקלוט? התחל לספור עכשיו — תעודת המשלוח תיכנס לבד</button>' : '';
   // v132/v134: בדיקה ידנית — כל הכמויות תואמות, חוסרים או עודפים, לא הגיע כלום — ישר מכאן, כשתעודת המשלוח כבר בקליטה
   // ושום נייר לא נקרא עכשיו (אותן בחירות כמו במסך הקליטה)
-  const manual = !photographing && open && paperManualChoiceReady() ? quantityChoicesOpenHtml({ all: 'paper-quantity-all', diff: 'paper-quantity-differences', none: 'paper-none-arrived' }, '') : '';
+  const manual = !photographing && open && paperManualChoiceReady() && paperIntakeHasDraftPaper(it) ? quantityChoicesOpenHtml({ all: 'paper-quantity-all', diff: 'paper-quantity-differences', none: 'paper-none-arrived' }, '') : '';
   app.innerHTML =
     '<div class="px-1 py-1 mb-3"><h2 class="font-black text-2xl text-slate-800">הניירות מהנהג</h2>' +
       '<div class="text-sm text-slate-600 mt-1">' + (R ? 'תעודת הזיכוי של ההחזרה מ-' + htmlEscape(ledgerDayShort(ledgerReturnDay(R))) + '. ' : '') +
@@ -14960,9 +14977,14 @@ function renderPaperIntake() {
 }
 function refreshPaperIntake() { if (currentView === 'paperIntake') renderPaperIntake(); }
 // v132/v134: אפשר לבחור ישר ממסך הניירות (כל הכמויות תואמות / חוסרים או עודפים / לא הגיע כלום) — אותם תנאים כמו במסך הקליטה
+// v135: הבחירות במסך הניירות — רק כשאחד הניירות שבמסך הזה נמצא בקליטה הפתוחה (אחרת "לא הגיע כלום" היה מאפס תעודה אחרת)
+function paperIntakeHasDraftPaper(it) {
+  const per = aiScanResponse && Array.isArray(aiScanResponse.perDocument) ? aiScanResponse.perDocument : [];
+  return !!(it && it.items.some(x => x && x.paperId && per.some(d => d && d.paperId === x.paperId)));
+}
 function paperManualChoiceReady() {
   return !receiptNoDoc && !receiptAttachTarget && receiptPaperScanState === 'ok' && !!aiScanResponse && !aiScanBusy
-    && !pendingReceipt && !reconcileData && !sharedReceiptFinalizing && canEditSharedReceipt() && !receivingPaperReadRunning();
+    && !pendingReceipt && !reconcileData && !sharedReceiptFinalizing && canEditSharedReceipt() && !receivingPaperReadRunning() && !bermanOcrPendingDocs().length;
 }
 // v131: הכפתורים של "לאיזו החזרה?" לנייר שלא נספר עד שבוחרים — אותם כפתורים כמו במסך המאזן
 function paperAttachChoice(p, lg) {
@@ -15605,6 +15627,10 @@ function paperUiClick(t) {
   if (role === 'paper-goto-receiving') { setView('receiving'); return true; }
   if (role === 'ledger-paper-delete') { deletePaperPhoto(t.dataset.paper || id); return true; } // v132
   // v132: לקליטה, ושם אותה שאלת אישור כמו הכפתור במסך הקליטה
+  if (role === 'paper-none-arrived' || role === 'paper-quantity-all' || role === 'paper-quantity-differences') {
+    // v135: המצב השתנה מאז שהמסך צויר (טלפון אחר, סיכום פתוח) — מציירים מחדש ולא מבצעים
+    if (!paperManualChoiceReady() || !paperIntakeHasDraftPaper(paperIntake)) { refreshPaperIntake(); showToast('הקליטה השתנתה — בדוק שוב ובחר', null, null, 2500); return true; }
+  }
   if (role === 'paper-none-arrived') { setView('receiving'); startReceiptQuantityReview('none'); return true; }
   // v134: "כל הכמויות תואמות" / "יש חוסרים או עודפים" — ישר ממסך הניירות, לקליטה ושם כמו במסך הקליטה
   if (role === 'paper-quantity-all' || role === 'paper-quantity-differences') { setView('receiving'); startReceiptQuantityReview(role === 'paper-quantity-all'); return true; }
@@ -21343,6 +21369,7 @@ function sharedReceivingStatusChanged(status) {
   sharedReceiptStatus = status;
   if (!status.error) sharedReceiptLastError = '';
   renderSharedReceivingBanner();
+  refreshPaperIntake(); // v135: מנעול קריאה ששוחרר, קליטה שהשתנתה בטלפון אחר — הכפתורים במסך הניירות מתעדכנים
   paperJoinRetry(); // v126: תעודת משלוח שחיכתה לחיבור או לסיום קריאה בטלפון אחר
 }
 function renderSharedReceivingBanner() {

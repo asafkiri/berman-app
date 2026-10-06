@@ -45,7 +45,7 @@ test('מסך הניירות: "לא הגיע כלום" ← "לא הגיע כלו�
   r.click('paper-none-arrived');
   const ask = r.run('testConfirms[testConfirms.length - 1]');
   assert.equal(ask.title, 'לא הגיע כלום?');
-  assert.match(ask.message, /^כל השורות שבתעודה יירשמו כחוסר \(0 התקבלו\), והקליטה תישמר\./);
+  assert.match(ask.message, /^כל השורות שבתעודה \(290095141\) יירשמו כחוסר \(0 התקבלו\), והקליטה תישמר\./);
   assert.equal(ask.label, 'לא הגיע כלום — שמור');
   assert.deepEqual(savedReceipts(r), [], 'כלום לא נשמר לפני האישור');
   r.run('testConfirms[testConfirms.length - 1].cb()'); await settle();
@@ -57,7 +57,7 @@ test('מסך הקליטה: אותו דבר — וגם כשכבר נספר משה
   const rows = json(r, 'receiptQuantityPaperRows()'), before = r.requests.length;
   r.run(`receiptList = [{ productId: products[0].id, name: products[0].name, barcode: products[0].barcode, qty: 2 }]; saveReceiptDraft(); setView('receiving')`);
   r.click('rc-quantity-none');
-  assert.match(r.run('testConfirms[testConfirms.length - 1].message'), /^שים לב: כבר נספרו 2 יח׳ — הספירה תימחק\. כל השורות שבתעודה יירשמו כחוסר \(0 התקבלו\), והקליטה תישמר\./);
+  assert.match(r.run('testConfirms[testConfirms.length - 1].message'), /^שים לב: כבר נספרו 2 יח׳ — הספירה תימחק\. כל השורות שבתעודה \(290095141\) יירשמו כחוסר \(0 התקבלו\), והקליטה תישמר\./);
   r.run('testConfirms[testConfirms.length - 1].cb()'); await settle();
   assertSavedNothingArrived(r, rows, before);
 });
