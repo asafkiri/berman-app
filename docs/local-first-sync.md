@@ -108,10 +108,11 @@
 | מפתח | מה |
 |---|---|
 | `{p}_device_id` | מזהה אקראי קבוע לטלפון. אם אי אפשר לשמור אותו, משתמשים במזהה אקראי בזיכרון לריצה הזאת. **לעולם לא ערך קבוע** כמו `'device-unknown'` |
-| `{p}_handoff_claim` | `{sessionId, gen}`. `gen: 0` = הטיוטה נוצרה כאן והבעלות עוד לא אושרה. **אין claim בכלל** = טיוטה שנשארה מהסנכרון הישן |
-| `{p}_handoff_away` | `{sessionId, away: 'moved'/'saved'/'canceled', by, gen}`. נשמר כשהשרת אמר. נמחק רק ב"החזר", ב"פתח אותה" או ב"נקה" |
-| `{p}_handoff_side` | עותקים בצד (סעיף 5.8) |
-| `{p}_handoff_close` | ביטולים שעוד לא נסגרו בענן: `[{sessionId, gen}]` |
+| `{p}_handoff_{kind}_claim` | `{sessionId, gen}`. `gen: 0` = הטיוטה נוצרה כאן והבעלות עוד לא אושרה. **אין claim** לטיוטה שהייתה פתוחה כשהמודול עלה לראשונה בטלפון (`…_legacy`) |
+| `{p}_handoff_{kind}_away` | `{sessionId, away: 'moved'/'saved'/'canceled', by, gen}`. נשמר כשהשרת אמר. נמחק רק ב"החזר", ב"פתח אותה" או ב"נקה" |
+| `{p}_handoff_{kind}_side` | עותקים בצד (סעיף 5.8) |
+| `{p}_handoff_{kind}_close` | ביטולים שעוד לא נסגרו בענן |
+| `{p}_handoff_{kind}_legacy` | נכתב פעם אחת, כשהמודול עולה לראשונה בטלפון: מזהה הטיוטה שהייתה פתוחה אז, אם הייתה (סעיף 5.3) |
 
 גם ה-claim וה-away נשמרים בזיכרון. אם localStorage נכשל, לא ממציאים claim חדש בכל פעם.
 
@@ -151,7 +152,7 @@
   - `sessionId = recordId = draftId`, וה-claim הוא `{sessionId, gen: 0}`.
   - יצירת המסמך קורית בגיבוי הראשון (5.4).
   - המזהים נשמרים **בתוך** הטיוטה המקומית. בברמן: `receiptDraftId` ב-`saveReceiptDraft`. אם אין באפליקציה מזהה טיוטה, יוצרים אותו בשינוי הראשון.
-- **טיוטה מהסנכרון הישן** (אין claim):
+- **טיוטה מלפני המנגנון** (הטיוטה שהייתה פתוחה כשהמודול עלה לראשונה בטלפון — `…_legacy`; כל טיוטה אחרת בלי claim נוצרה כאן):
   - ביום העדכון אותה טיוטה, עם אותו מזהה, נמצאת בכל טלפון שהיה פתוח. כל עותק מעודכן עד הרגע שבו הטלפון נסגר.
   - לכן היא **לא נתבעת בפתיחת האפליקציה.**
   - היא נתבעת בגיבוי הראשון שאחרי **עריכה של המשתמש בטלפון הזה**, רק אם עוד אין לה מסמך. אם כבר יש מסמך של טלפון אחר, המצב הוא "עברה" רגיל.
@@ -172,8 +173,8 @@
 - **הטרנזקציה:** קוראים את המסמך.
   - **המסמך לא קיים, ומותר ליצור** (claim עם `gen: 0`, או טיוטה ישנה שנערכה): יוצרים `{gen: 1, deviceId: אני, state: 'open', …}`.
   - **המסמך קיים ו-`state !== 'open'`:** המצב הוא away `saved`/`canceled`. שומרים אותו ועוצרים.
-  - **המסמך קיים, אבל `deviceId` אחר או `gen` אחר משלי:** המצב הוא away `moved`. שומרים ועוצרים.
-    - **חריג:** claim עם `gen: 0` והמסמך כבר שלי ב-`gen: 1`. זו יצירה שהתשובה שלה אבדה, ולכן מאמצים אותה.
+  - **המסמך קיים, עם `deviceId` אחר:** המצב הוא away `moved`. שומרים ועוצרים.
+  - **המסמך קיים עם ה-`deviceId` שלי:** הוא שלי, ומאמצים את ה-`gen` שבו. כך יצירה או "המשך" שהתשובה שלהם אבדה לא נתקעים.
   - **המסמך שלי:**
     - אם ה-`payload`, ה-`summary` ודגלי הקריאה זהים למה שבמסמך, לא כותבים. ההשוואה היא מול השרת, לא מול זיכרון.
     - אחרת כותבים אותם עם `updatedAt`.
@@ -380,23 +381,37 @@
 - כמה סוגי טיוטה יש?
 - מה ה-`projectId` ושורש הנתונים, והאם הם משותפים לאפליקציה אחרת?
 
-**המתאם של `draft-handoff.js`** (השמות המדויקים בראש הקובץ):
-- **זהות:**
-  - `app`, `kind`, `prefix`, `deviceName()`;
-  - `paths` (`handoffDoc(sessionId)`, `openQuery()`, `recordDoc(recordId)`);
-  - פונקציות Firestore.
-- **הטיוטה:**
-  - `getDraft()` מחזיר `{sessionId, recordId, empty, payload, summary, scanRunning, expected}`;
-  - `applyPayload(payload)`;
-  - `emptyDraft()`;
-  - `finishWrites(tx, ctx)` — הכתיבות של הסיום בתוך הטרנזקציה.
-- **אירועים ותצוגה:**
-  - `onState(state)` — לשורה העליונה ולשומר;
-  - `userEdit()` — סימון של עריכה מאירוע של המשתמש;
-  - `maxScanMs`.
-- **ה-payload כשאין באפליקציה capture/apply** (בברמן הם קיימים בגלל הסנכרון הישן):
-  - ה-payload הוא אובייקט הטיוטה המקומית שהאפליקציה כבר שומרת, בלי תמונות.
-  - apply: כותבים אותו למפתח הטיוטה, מריצים את פונקציית השחזור הקיימת, ומציירים מחדש.
+**`draft-handoff.js` — איך יוצרים ומחברים** (פירוט מלא בראש הקובץ):
+```js
+const h = DraftHandoff.create({
+  app: 'berman', kind: 'receiving', prefix: 'bm',             // שם האפליקציה, סוג הטיוטה, קידומת המפתחות בטלפון
+  db, fs: { doc, collection, query, where, onSnapshot, runTransaction, getDocFromServer },
+  rootPath: ['artifacts', appId, 'public', 'data'], recordCollection: 'receipts',
+  appVersion: APP_VERSION, maxScanMs,                           // כמה זמן קריאה בתשלום יכולה לרוץ, כולל ניסיונות
+  adapter: {
+    getDraft,          // → { sessionId, recordId, empty, payload (מחרוזת, בלי תמונות), summary, scanRunning, expected }
+    validatePayload,   // (אובייקט, מסמך) → האם ה-payload שייך למושב
+    applyPayload,      // (מחרוזת, meta) — מחיל את הטיוטה בטלפון (בברמן applySharedReceipt), שומר ומצייר
+    emptyDraft,        // מרוקן את הטיוטה בטלפון ("נקה")
+    recordSaved,       // (recordId) → לניקוי עותקים בצד בלבד (לא להחלטה)
+    deviceName, onChange /* (state) — שורה עליונה ושומר */, onNotice /* (code) — הודעות */,
+    finishedLate,      // (sessionId) — שמירה שהתשובה שלה לא הגיעה, והשרת אמר שנשמרה
+    log, finishWrites /* (tx, ctx) — כתיבות נוספות בסיום, באותה טרנזקציה */, finishReads
+  } });
+h.start();                    // איפה שמתחילים את שאר המאזינים
+h.changed({ user });          // אחרי כל שמירה מקומית; user: true כשהשינוי נולד מאירוע של המשתמש
+await h.finish(recordId, data);    // במקום set עיוור — { ok } / { unknown } / { reason }
+await h.take(sessionId);      // "המשך" / "החזר"
+h.cancel();                   // לפני שמרוקנים טיוטה שבוטלה
+h.clear(); h.openSide(sessionId); h.importSide(entry); h.state(); h.stop();
+```
+`h.state()` מחזיר את מה שהשורה העליונה והשומר צריכים: `readOnly`, `away`, `checking`, `canTakeBack`, `offers`, `side`, `status`.
+בברמן החיבור כולו נמצא ב-`index.html`, בבלוק "v137: קליטה בטלפון, גיבוי בענן ומעבר בין טלפונים". הוא כולל את
+`receivingHandoffDraft`, `receivingHandoffApply`, `receivingHandoffBannerHtml`, `finishSharedReceipt` ו-`migrateV136Handoff`.
+
+**ה-payload כשאין באפליקציה capture/apply** (בברמן הם קיימים בגלל הסנכרון הישן):
+- ה-payload הוא אובייקט הטיוטה המקומית שהאפליקציה כבר שומרת, בלי תמונות.
+- apply: כותבים אותו למפתח הטיוטה, מריצים את פונקציית השחזור הקיימת, ומציירים מחדש.
 
 ## 10. בדיקות
 
