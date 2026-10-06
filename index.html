@@ -12973,6 +12973,12 @@ function paperAttach(p, base, others, all, start) {
       share: fit.length / lineCount(d), open: rows.filter(r => open(d, r.k)).length };
   };
   // נייר קטן שכל שורותיו הן בדיוק חוסר שעוד לא זוכה בקליטה — זיכוי לחוסר, לא להחזרה
+  // v130 (סבב 5): הזיכוי הזה כבר נרשם בקליטה ("התקבל בזיכוי" עם מספר הנייר) — שורותיו לשם (max מול הרישום),
+  // לא לחוסר אחר שעוד פתוח (אחרת אותן יחידות נספרות פעמיים וחוסר אמיתי נסגר)
+  const ownNums = paperNumbers(p);
+  const regRec = p.kind === 'credit' && !p.forReturnId && ownNums.length
+    ? recs.find(d => d.doc && (Array.isArray(d.doc.shortCreditUnits) ? d.doc.shortCreditUnits : []).some(x => x && ownNums.indexOf(receiptPaperNumber(x.noteNumber)) !== -1)) : null;
+  if (regRec) return { type: null, id: null, role: null, rowTargets: rows.map(r => regRec.rows[r.k] ? { line: r.i, type: 'receipt', id: regRec.id } : targetRow(r, -1)), by: 'auto' };
   if (!p.forReturnId && rows.length && rows.length <= 2 && rows.every(r => nearRecs(r.k, -1).some(d => recRoom(d, r.k, -1, true) === r.q)))
     return { type: null, id: null, role: null, rowTargets: rows.map(r => targetRow(r, -1)), by: 'auto' };
   let R = null, ask = null, askFit = false, periodOnly = false;
@@ -13049,7 +13055,7 @@ function paperLedger(opts) {
   recs.forEach(rc => storedReceiptPaperNumbers(rc).forEach(n => { if (!recOfNum.has(n)) recOfNum.set(n, rc.id); }));
   const smallIn = papers.filter(p => states[p.id] === 'in-receipt' && p.kind === 'delivery' && p.small === true && p.docDay && Array.isArray(p.rows))
     .map(p => { const n = paperNumbers(p).find(x => recOfNum.has(x)); return n ? { ...p, recId: recOfNum.get(n) } : null; }).filter(Boolean);
-  const placed = [], orphans = [], asks = {};
+  const placed = [], orphans = [], asks = {}, askWhy = {};
   const outside = t => t && t.type && !byId.has(t.type + ':' + t.id) && byIdWide.has(t.type + ':' + t.id);
   const exists = t => !t || !t.type || byIdWide.has(t.type + ':' + t.id);
   real.forEach(p => {
@@ -13078,6 +13084,21 @@ function paperLedger(opts) {
       at = { ...at, ask: undefined };
     }
     if (outside(at)) { states[p.id] = 'outside'; return; }
+    // v130 (סבב 5): נייר זיכוי שנצמד לחוסר שמקורו בנייר "ת.משלוח" קטן, כשלאותו מוצר ובאותה כמות כבר רשום זיכוי
+    // במקום אחר (חוסר שסומן "התקבל בזיכוי", או החזרה שזוכתה) — לא ברור על מה הוא: לא נספר עד שבוחרים
+    if (p.kind === 'credit' && !(p.attach && p.attach.by === 'user')) {
+      const day = String(p.docDay || ''), alt = [];
+      const amb = (Array.isArray(at.rowTargets) ? at.rowTargets : []).some(t => {
+        const r = t && t.type === 'receipt' && (p.rows || [])[t.line]; if (!r) return false;
+        const k = paperRowKey(r).key, q = Number(r.qty) || 0;
+        if (!smallIn.some(sp => sp.recId === t.id && (sp.rows || []).some(x => x && paperRowKey(x).key === k))) return false;
+        const recReg = baseWide.some(d => d.type === 'receipt' && d.id !== t.id && d.day >= ledgerAddDays(day, -7) && d.day <= ledgerAddDays(day, 1) && d.rows[k] && d.rows[k].credited >= q && d.rows[k].billed - d.rows[k].received >= q);
+        const retReg = baseWide.filter(d => d.type === 'return' && d.day <= day && d.day >= ledgerAddDays(day, -LEDGER_RETURN_WINDOW_DAYS) && d.rows[k] && d.rows[k].cred >= q);
+        retReg.forEach(d => { if (alt.indexOf(d.id) === -1) alt.push(d.id); });
+        return recReg || retReg.length > 0;
+      });
+      if (amb) { states[p.id] = 'needs-attach'; asks[p.id] = alt; askWhy[p.id] = 'registered'; return; }
+    }
     // שורה של חוסר בקליטה מלפני תחילת המאזן — לא נספרת כאן; שאר הנייר כן
     const rowTargets = (Array.isArray(at.rowTargets) ? at.rowTargets : []).map(t => t && outside(t) ? { ...t, outside: true } : t);
     if (rowTargets.length && rowTargets.every(t => t && t.outside)) { states[p.id] = 'outside'; return; }
@@ -13142,7 +13163,12 @@ function paperLedger(opts) {
   // שורה של נייר חיוב — כשלא נצמדה לעודף; שורה של נייר "ת.משלוח" קטן שנקלט — כשחסרה בקליטה שלו בכל הכמות,
   // ואין לאותו מוצר עודף בקליטה סמוכה (עודף כזה — הנייר חייב אותו, לא תיקון)
   const autoDeclared = [];
-  const pairCtx = { placed, docOf: (t, id) => byId.get(t + ':' + id), mainOf };
+  // ספק באותו יום (נייר זיכוי שממתין לבחירה או שלא נקרא עד הסוף) או החזרה שאולי הנייר הראשי שלה ממתין — אין "תיקון"
+  const pendingRets = new Set([].concat(...Object.keys(asks).map(id => asks[id] || [])));
+  const unsureDays = new Set(papers.filter(p => (p.kind === 'credit' || p.kind == null) && (states[p.id] === 'needs-attach' || states[p.id] === 'unproven')).map(p => String(p.docDay || '')));
+  const regNotes = new Set();
+  baseWide.forEach(d => { if (d.type === 'receipt' && d.doc) (Array.isArray(d.doc.shortCreditUnits) ? d.doc.shortCreditUnits : []).forEach(x => { const n = x && receiptPaperNumber(x.noteNumber); if (n) regNotes.add(n); }); });
+  const pairCtx = { placed, docOf: (t, id) => byId.get(t + ':' + id), mainOf, pendingRets, unsureDays, regNotes, recs: baseWide.filter(d => d.type === 'receipt') };
   const answered = (cp, k) => declared.some(d => d.declare === 'correction' && d.standsFor && d.standsFor.chargePaperId === cp.id && (d.rows || []).some(r => r && paperRowKey(r).key === k));
   const corrCands = [];
   // עודף של אותו מוצר בקליטה סמוכה (גם קטן מהשורה), או מאזן המוצר קטן מהשורה — חלק ממה שחויב הגיע: לא תיקון
@@ -13270,7 +13296,7 @@ function paperLedger(opts) {
   papers.forEach(p => {
     if (states[p.id] === 'unproven') out.unshift({ id: 'paper|' + p.id, kind: 'unproven', state: 'question', paper: p });
     // v130: ממתין (לא שאלה) — לא בשורה האדומה שבקליטה; הבחירה במסך המאזן, למי שרוצה
-    if (states[p.id] === 'needs-attach') out.unshift({ id: 'attach|' + p.id, kind: 'needsAttach', state: 'pending', paper: p, ask: asks[p.id] || [] });
+    if (states[p.id] === 'needs-attach') out.unshift({ id: 'attach|' + p.id, kind: 'needsAttach', state: 'pending', paper: p, ask: asks[p.id] || [], why: askWhy[p.id] || null });
     if (states[p.id] === 'awaiting-receipt') out.push({ id: 'await|' + p.id, kind: 'deliveryNotReceived', state: String(p.docDay) >= asOf ? 'pending' : 'problem', paper: p,
       sameDay: recs.some(rc => storedReceiptDate(rc) === String(p.docDay)) });
     if (states[p.id] === 'duplicate') out.push({ id: 'dup|' + p.id, kind: 'duplicatePaper', state: 'info', paper: p, of: dupOf[p.id] });
@@ -13394,6 +13420,7 @@ function ledgerClassify(k, x, units, sign, c) {
 function ledgerCorrectionCandidates(k, chargeP, q, c, legacy) {
   const out = [], nc = paperNumerator(chargeP);
   if (!chargeP || (!nc && !legacy) || !(q > 0)) return out;
+  if (!legacy && c.unsureDays && c.unsureDays.has(String(chargeP.docDay))) return out;
   for (const p of c.placed || []) {
     if (p.kind !== 'credit' || String(p.docDay) !== String(chargeP.docDay)) continue;
     const np = paperNumerator(p);
@@ -13402,6 +13429,17 @@ function ledgerCorrectionCandidates(k, chargeP, q, c, legacy) {
     const retId = p.attach && p.attach.type === 'return' ? p.attach.id : null;
     const R = retId && c.docOf('return', retId);
     if (!R || (c.mainOf[retId] || []).length || !R.credited) continue;
+    if (!legacy) {
+      // נייר שממתין לבחירה יכול להיות הנייר הראשי של ההחזרה; נייר שכבר רשום כזיכוי לחוסר — לא זיכוי של החזרה
+      if (c.pendingRets && c.pendingRets.has(retId)) continue;
+      if (c.regNotes && paperNumbers(p).some(n => c.regNotes.has(n))) continue;
+      // המוצר שחויב נשלח בהחזרה עצמה — החיוב יכול להיות משהו אחר, לא תיקון של זיכוי שניתן במקומו
+      if (R.rows[k] && R.rows[k].sent > 0) continue;
+      // הזיכוי השגוי (על המוצר שחויב) כבר צולם ונספר בהחזרה — אין מה לקזז שוב
+      const paperOnK = (c.placed || []).filter(o => o && o.kind === 'credit' && o.attach && (o.attach.rowTargets || []).some(t => t && t.type === 'return' && t.id === retId))
+        .reduce((a, o) => a + (o.rows || []).reduce((b, r, i) => b + (r && paperRowKey(r).key === k && (o.attach.rowTargets || []).some(t => t && t.line === i && t.type === 'return' && t.id === retId) ? (Number(r.qty) || 0) : 0), 0), 0);
+      if (paperOnK > 0) continue;
+    }
     // לפי הכיסוי, לא לפי התפקיד שנשמר: נייר שמכסה לפחות חצי מההחזרה נראה כמו הנייר הראשי שלה — אז הוא עצמו
     // מסביר את ההחזרה, ואין "זיכוי ראשון שלא צולם" לתקן
     const onR = new Set((Array.isArray(p.rows) ? p.rows : []).filter(Boolean).map(r => paperRowKey(r).key).filter(y => R.rows[y] && (R.rows[y].sent > 0 || R.rows[y].cred > 0)));
@@ -13413,6 +13451,8 @@ function ledgerCorrectionCandidates(k, chargeP, q, c, legacy) {
       if (y === k || (Number(r.qty) || 0) !== q) return;
       const t = (p.attach.rowTargets || []).find(z => z && z.line === i);
       if (!t || t.type !== 'return') return;
+      // שורת הזיכוי עצמה תואמת לחוסר באותו יום בקליטה — זה זיכוי לחוסר, לא זיכוי משלים של ההחזרה
+      if (!legacy && (c.recs || []).some(d => d.day === String(p.docDay) && d.rows[y] && d.rows[y].billed - d.rows[y].received >= q)) return;
       if (R.rows[y] && R.rows[y].cred >= q) out.push({ returnId: retId, creditPaperId: p.id, other: y, units: q, slot: p.id + '#' + i });
     });
   }
@@ -13490,7 +13530,8 @@ function ledgerItemText(it, lg, papers) {
       detail: LEDGER_PHOTO_HINT.trim(), actions: [{ role: 'ledger-ack-offset', label: 'אין נייר — לקזז' }] };
     case 'netted': return { text: nm(it.key) + ': עודף ב-' + ledgerDayShort(it.over.day) + ' וחוסר ב-' + ledgerDayShort(it.short.day) + ' התקזזו', actions: [] };
     case 'unproven': return { text: paperLabel(it.paper) + ' לא נקרא עד הסוף — לבדוק', actions: [{ role: 'ledger-paper-open', label: 'לבדיקה', paperId: it.paper.id }] };
-    case 'needsAttach': return { text: paperLabel(it.paper) + ' מתאים לכמה החזרות — לא נספר עד שתבחר לאיזו', detail: 'כדי לא לספור זיכוי פעמיים, נייר שלא ברור לאיזו החזרה הוא שייך לא נספר. אפשר לבחור כאן.', actions: (it.ask || []).filter(id => (lg.docDays || {})[id]).map(id => {
+    case 'needsAttach': return { text: paperLabel(it.paper) + (it.why === 'registered' ? ' — לא ברור על מה הזיכוי (כבר רשום זיכוי כזה) — לא נספר עד שתבחר' : ' מתאים לכמה החזרות — לא נספר עד שתבחר לאיזו'),
+      detail: 'כדי לא לספור זיכוי פעמיים, נייר שלא ברור על מה הוא לא נספר. אפשר לבחור כאן.', actions: (it.ask || []).filter(id => (lg.docDays || {})[id]).map(id => {
       const prod = Object.keys(lg.products).map(k => lg.products[k]).map(pr => ({ pr, part: pr.parts.find(z => z.type === 'return' && z.id === id) })).filter(z => z.part);
       const lines = prod.length, top = prod.slice().sort((a, b) => (b.part.sent || 0) - (a.part.sent || 0))[0];
       if (!lines) return { role: 'ledger-attach', label: 'ההחזרה מ-' + ledgerDayShort(lg.docDays[id]) + ' (לפני תחילת המאזן)', paperId: it.paper.id, returnId: id };
@@ -15025,8 +15066,9 @@ function renderLedger() {
   const conflicts = paperLocalConflicts();
   const live = papers.filter(p => p && !p.deleted);
   const all = live.concat(local.map(r => r.paper).filter(p => !live.some(x => x.id === p.id)));
-  const main = lg.items.filter(i => i.state === 'problem' || i.state === 'question');
-  const pending = lg.items.filter(i => i.state === 'pending'), info = lg.items.filter(i => i.state === 'info');
+  // v130: נייר שלא נספר עד שבוחרים — למעלה (לא "הכל מאוזן" כשיש כזה)
+  const main = lg.items.filter(i => i.state === 'problem' || i.state === 'question' || i.kind === 'needsAttach');
+  const pending = lg.items.filter(i => i.state === 'pending' && i.kind !== 'needsAttach'), info = lg.items.filter(i => i.state === 'info');
   const recent = all.filter(p => p.kind !== 'declared').slice().sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)).slice(0, ledgerShowAll ? 200 : 12);
   const answers = all.filter(p => p.kind === 'declared' && lg.states[p.id] !== 'superseded');
   const paperRow = p => {
@@ -15285,10 +15327,11 @@ function openIssuesList() {
   try { paperLocalConflicts().forEach(rec => out.push({ state: 'question', text: 'צילום חדש של ' + paperLabel(rec.paper) + ' נקרא אחרת מהנייר עם אותו מספר — מה נכון?', role: 'ledger-open' })); } catch (e) {}
   if (lg) {
     const all = ledgerAllPapers(lg);
-    lg.items.filter(it => it.state === 'problem' || it.state === 'question').forEach(it => {
+    // v130 (סבב 5): נייר זיכוי שלא נספר עד שבוחרים — בשורה האדומה כמשפט (לא שאלה): הוא יכול להיות הראיה היחידה לזיכוי חסר
+    lg.items.filter(it => it.state === 'problem' || it.state === 'question' || it.kind === 'needsAttach').forEach(it => {
       let t = null; try { t = ledgerItemText(it, lg, all); } catch (e) {}
       // v130: בלי שאלות — בקליטה רק מה שצריך לעשות: לבדוק נייר שלא נקרא עד הסוף, או להכניס תעודה לקליטה
-      if (t && t.text) out.push({ state: it.state, text: t.text, role: 'ledger-open', itemId: it.id,
+      if (t && t.text) out.push({ state: it.kind === 'needsAttach' ? 'question' : it.state, text: t.text, role: 'ledger-open', itemId: it.id,
         actions: (t.actions || []).filter(a => a.role === 'ledger-start-receiving' || (a.role === 'ledger-paper-open' && a.label === 'לבדיקה')) });
     });
   }

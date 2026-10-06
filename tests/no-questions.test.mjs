@@ -140,3 +140,19 @@ test('סבב 3: כמה ניירות ושורות שאי אפשר לצרף (למ�
     receiptQuantityPaperRows = () => null; finishReceipt();`);
   assert.ok(!JSON.parse(r.run('JSON.stringify(testConfirms.map(c => c.title))')).some(t => /פער בספירת הפריטים/.test(t)));
 });
+
+test('סבב 5: נייר זיכוי שלא נספר עד שבוחרים — מופיע בשורה האדומה כמשפט (לא שאלה), ולא "הכל מאוזן"', () => {
+  const amb = { schema: 1, state: 'accepted', timestamp: 1, id: 'paper_amb', kind: 'credit', number: '290094992', docDay: '2026-10-02',
+    rows: [{ line: 1, itemCode: '2381', barcode: null, description: '', qty: 1, productId: 'code_2381' }] };
+  const r = ledgerApp(L2.receipts.slice().reverse(), L2.returns.slice().reverse(), [amb]);
+  const list = JSON.parse(r.run('JSON.stringify(openIssuesList())'));
+  const line = list.find(x => /94992/.test(x.text));
+  assert.ok(line, JSON.stringify(list));
+  assert.match(line.text, /מתאים לכמה החזרות — לא נספר עד שתבחר לאיזו$/);
+  assert.ok(!/\?$/.test(line.text));
+  r.run(`setView('receiving')`);
+  assert.doesNotMatch(r.node('app').innerHTML, /data-role="ledger-attach"/, 'בלי כפתורי בחירה בקליטה — רק במאזן');
+  r.run(`setView('ledger')`);
+  assert.doesNotMatch(r.node('app').innerHTML, /הכל מאוזן/);
+  assert.match(r.node('app').innerHTML, /data-role="ledger-attach"/);
+});
