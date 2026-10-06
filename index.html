@@ -537,13 +537,14 @@
 
     <script src="shared-receiving.js?v=102"></script>
     <script src="draft-handoff.js?v=137"></script>
+    <script src="shared-return-events.js?v=138"></script>
     <script type="module">
 // ===== Firebase (מפתח הענן של גלוברנס) =====
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import {
   initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager,
-  collection, onSnapshot, doc, getDoc, getDocFromServer, deleteDoc, addDoc, updateDoc, setDoc, writeBatch, query, orderBy, limit, getDocs, where, runTransaction
+  collection, onSnapshot, doc, getDoc, getDocFromServer, deleteDoc, addDoc, updateDoc, setDoc, writeBatch, query, orderBy, limit, getDocs, where, runTransaction, deleteField
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -726,7 +727,8 @@ const avgTimers = {};
 let advanceTimer = null;
 let dragState = null;
 const RETURNS_DRAFT_KEY = 'bm_returns_draft';
-let returnsDraftTimer = null;
+let returnsEvents = null, returnsEventsState = { pending: 0, ready: false }, returnsSending = false;
+const RETURNS_LEGACY_BACKUP_KEY = 'bm_returns_legacy_backup_v138';
 
 // ===== מצב קליטת תעודות =====
 let receiptCountingMode = 'scan'; // 'scan' | 'manual'; saved with this receipt draft
@@ -826,7 +828,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '137'; // v137: המעבר בין טלפונים בטוח — מסמך אחד בענן לכל קליטה, כל כתיבה בטרנזקציה עם תנאי (draft-handoff.js)
+const APP_VERSION = '138'; // החזרות בלייב: אירועים עמידים ושליחה אטומית
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -1067,34 +1069,96 @@ function restoreDraft() {
   try { const s = localStorage.getItem(ORDER_DRAFT_KEY); if (s) { const o = JSON.parse(s); if (o && typeof o === 'object') orderState = { ...orderState, ...o }; } } catch (e) {}
   draftReady = true;
 }
+// v138: כל עריכה הופכת להפרש של אירועים עמידים; אין עוד כתיבה של כל הרשימה.
+function returnsEventsApply(view, state) {
+  returnsEventsState = state || returnsEventsState;
+  if (!view || !view.slots) return;
+  returnsSlots = { weekly: cloneSafe((view.slots.weekly || {}).items || []), daily: cloneSafe((view.slots.daily || {}).items || []) };
+  returnsDocDates = { weekly: String((view.slots.weekly || {}).date || ''), daily: String((view.slots.daily || {}).date || '') };
+  returnsList = returnsSlots[returnsSlot]; returnsDocDate = returnsDocDates[returnsSlot] || '';
+  saveReturnsActiveSlot();
+  if (!returnsEvents) return;
+  const dateEl = $('retDocDate'); if (dateEl && document.activeElement !== dateEl) dateEl.value = returnsDocDate;
+  const statusEl = $('returnsEventsStatus'); if (statusEl) statusEl.innerHTML = returnsEventsStatusHtml();
+  if (currentView === 'returns' && !isDragging) refreshReturnsList();
+  updateCart();
+}
+async function returnsEventsLegacy(tx, data) {
+  const slots = {}, ids = data && data.draftIds || {};
+  for (const slot of ['weekly', 'daily']) {
+    const id = ids[slot] || (slot === 'weekly' && data && data.draftId) || '';
+    const sent = id ? await tx.get(doc(db, ...dataPath('returns', id))) : null;
+    slots[slot] = { items: sent && sent.exists() ? [] : cloneSafe(data && data.slots && data.slots[slot] || (slot === 'weekly' && data && data.items) || []),
+      date: String(data && data.dates && data.dates[slot] || ''), note: '', draftId: id || 'legacy_' + slot };
+  }
+  return { slots, writes: [] };
+}
+function returnsEventsDeviceId() {
+  try {
+    const id = localStorage.getItem('bm_device_id') || makeOperationId('device');
+    localStorage.setItem('bm_device_id', id); return id;
+  } catch (e) { return makeOperationId('device'); }
+}
+function saveReturnsActiveSlot() {
+  try { localStorage.setItem('bm_returns_active_slot_v138', returnsSlot); } catch (e) {}
+}
+function startReturnsEvents() {
+  if (returnsEvents) return returnsEvents;
+  if (!db || typeof SharedReturnEvents === 'undefined' || typeof updateDoc !== 'function' || typeof runTransaction !== 'function' || typeof onSnapshot !== 'function' || typeof deleteField !== 'function') return null;
+  returnsEvents = SharedReturnEvents.create({ app: 'berman', prefix: 'bm', storage: localStorage,
+    deviceId: returnsEventsDeviceId(), slots: ['weekly', 'daily'], db,
+    fs: { runTransaction, onSnapshot, updateDoc, deleteField },
+    ref: doc(db, ...dataPath('drafts', 'returns_events_berman_v1')),
+    legacyRef: doc(db, ...dataPath('drafts', 'returns')),
+    recordRef: id => doc(db, ...dataPath('returns', id)), legacy: returnsEventsLegacy,
+    onChange: returnsEventsApply });
+  returnsEvents.start().catch(() => {});
+  return returnsEvents;
+}
 function saveReturnsDraft() {
   returnsSlots[returnsSlot] = returnsList;
   returnsDocDates[returnsSlot] = returnsDocDate || '';
-  if (!returnsDraftIds[returnsSlot]) returnsDraftIds[returnsSlot] = makeOperationId('returns');
-  returnsDraftUpdatedAt = Date.now();
-  const snapshot = { schemaVersion: 2, draftIds: returnsDraftIds, slots: returnsSlots, dates: returnsDocDates, active: returnsSlot, updatedAt: returnsDraftUpdatedAt };
-  try { localStorage.setItem(RETURNS_DRAFT_KEY, JSON.stringify(snapshot)); } catch (e) { showToast('לא ניתן לשמור את טיוטת החזרות במכשיר', null, null, 3200); }
-  if (!db) return;
-  clearTimeout(returnsDraftTimer);
-  returnsDraftTimer = setTimeout(() => {
-    runCloudTaskSilent('save returns draft', { op: 'set', path: dataPath('drafts', 'returns'), data: snapshot, merge: false, operationId: 'returns_draft' });
-  }, 700);
+  const next = { items: cloneSafe(returnsList), date: returnsDocDate || '', note: '' };
+  const engine = startReturnsEvents();
+  if (engine) {
+    const ok = engine.change(returnsSlot, next);
+    if (!ok) showToast('אין מקום לשמור את הסריקה בטלפון — פנה מקום ונסה שוב', null, null, 5000);
+    return ok;
+  }
+  // רק כשהענן לא הוגדר כלל: עותק מקומי, שאינו יכול להיכנס לתור הכתיבה הישן.
+  try { localStorage.setItem('bm_returns_unsynced_fallback_v138', JSON.stringify({ schemaVersion: 2, slots: returnsSlots, dates: returnsDocDates, active: returnsSlot })); return true; }
+  catch (e) { showToast('לא ניתן לשמור את טיוטת החזרות במכשיר', null, null, 3200); return false; }
 }
 function restoreReturnsDraft() {
   try {
-    const s = localStorage.getItem(RETURNS_DRAFT_KEY); if (!s) return;
-    const a = JSON.parse(s);
-    if (Array.isArray(a)) { returnsSlots = { weekly: a, daily: [] }; returnsSlot = 'weekly'; } // טיוטה ישנה
-    else if (a && a.slots) {
-      returnsSlots = { weekly: Array.isArray(a.slots.weekly) ? a.slots.weekly : [], daily: Array.isArray(a.slots.daily) ? a.slots.daily : [] };
-      returnsSlot = a.active === 'daily' ? 'daily' : 'weekly';
-      returnsDocDates = { weekly: String((a.dates && a.dates.weekly) || ''), daily: String((a.dates && a.dates.daily) || '') };
-      returnsDraftUpdatedAt = Number(a.updatedAt) || 0;
-      returnsDraftIds = { weekly: (a.draftIds && a.draftIds.weekly) || a.draftId || null, daily: (a.draftIds && a.draftIds.daily) || null };
-    }
-    returnsList = returnsSlots[returnsSlot];
-    returnsDocDate = returnsDocDates[returnsSlot] || '';
-  } catch (e) {}
+    const raw = localStorage.getItem(RETURNS_DRAFT_KEY); if (!raw) { returnsSlot = localStorage.getItem('bm_returns_active_slot_v138') === 'daily' ? 'daily' : 'weekly'; return; }
+    const old = JSON.parse(raw);
+    const active = localStorage.getItem('bm_returns_active_slot_v138') || old && old.active;
+    returnsSlot = active === 'daily' ? 'daily' : 'weekly';
+    if (old && old.schemaVersion === 3) return;
+    // אין דרך להבחין בין סריקה מקומית שלא הגיעה לבין עותק ישן שכבר נשלח.
+    // לכן שומרים את המקור לעיון, ומעבירים לענן רק את הטיוטה שנקראה מהשרת.
+    if (!localStorage.getItem(RETURNS_LEGACY_BACKUP_KEY)) localStorage.setItem(RETURNS_LEGACY_BACKUP_KEY, raw);
+  } catch (e) { showToast('לא ניתן לשמור גיבוי של הטיוטה הישנה בטלפון', null, null, 4500); }
+}
+function returnsLegacyCopies() {
+  const out = [];
+  const add = (label, data) => { const rows = Array.isArray(data) ? data : data && data.slots ? Object.values(data.slots).flat() : data && data.items || []; if (rows.length) out.push({ label, rows }); };
+  try { add('הטיוטה הישנה', JSON.parse(localStorage.getItem(RETURNS_LEGACY_BACKUP_KEY) || localStorage.getItem(RETURNS_DRAFT_KEY) || 'null')); } catch (e) {}
+  try { add('עותק שנשמר בטלפון בלי חיבור למנגנון', JSON.parse(localStorage.getItem('bm_returns_unsynced_fallback_v138') || 'null')); } catch (e) {}
+  try { const queue = JSON.parse(localStorage.getItem('bm_returns_old_queue_v138') || '[]'); queue.forEach(x => { const t = x.task || {}; if (t.data) add('פעולת שמירה ישנה שלא נשלחה', t.data); (t.writes || []).forEach(w => { if (isLegacyReturnsDraftTask(w)) add('פעולת שמירה ישנה שלא נשלחה', w.data); }); }); } catch (e) {}
+  return out;
+}
+function returnsEventsStatusHtml() {
+  const st = returnsEventsState || {};
+  const text = st.error ? 'הסריקות שמורות בטלפון — ממתינות לחיבור לענן' : st.pending ? 'הסריקות שמורות בטלפון — מעדכן את שאר הטלפונים…' : 'הרשימה מתעדכנת בכל הטלפונים';
+  return '<div class="text-xs text-slate-500 mb-2">' + text + (returnsLegacyCopies().length ? '<button data-role="ret-legacy-view" class="block text-blue-700 underline py-2">עותקים מלפני העדכון — לעיון</button>' : '') + '</div>';
+}
+function showReturnsLegacyCopy() {
+  const copies = returnsLegacyCopies(); if (!copies.length) return;
+  const ov = document.createElement('div'); ov.className = 'fixed inset-0 bg-slate-900/60 z-[90] flex items-center justify-center p-4';
+  ov.innerHTML = '<div class="bg-white rounded-2xl p-4 w-full max-w-md max-h-[85vh] overflow-y-auto"><div class="font-black mb-2">עותקים מלפני העדכון — לעיון</div><div class="text-sm mb-3">ייתכן שהפריטים כבר נשלחו או נמצאים ברשימה המשותפת. העותקים אינם נוספים אליה אוטומטית.</div>' + copies.map(copy => '<div class="font-bold mt-3">' + htmlEscape(copy.label) + '</div>' + copy.rows.map(x => '<div class="border-b py-2">' + htmlEscape(x.name || '') + ' · ' + (Number(x.qty) || 0) + ' יח׳</div>').join('')).join('') + '<button data-close class="w-full bg-slate-100 rounded-xl mt-3 p-3 font-black">סגור</button></div>';
+  ov.addEventListener('click', e => { if (e.target === ov || e.target.closest('[data-close]')) ov.remove(); }); document.body.appendChild(ov);
 }
 function switchReturnsSlot(slot) {
   if (slot !== 'weekly' && slot !== 'daily') return;
@@ -1104,7 +1168,7 @@ function switchReturnsSlot(slot) {
   returnsSlot = slot;
   returnsList = returnsSlots[returnsSlot];
   returnsDocDate = returnsDocDates[returnsSlot] || '';
-  saveReturnsDraft();
+  saveReturnsActiveSlot();
   renderReturns();
 }
 function parseNoteVal(v, decimals) {
@@ -1474,39 +1538,7 @@ function startListeners() {
     }
   }, console.error);
 
-  // טיוטת חזרות משותפת — מסונכרנת בין כל המכשירים בזמן אמת
-  const rdRef = doc(db, 'artifacts', appId, 'public', 'data', 'drafts', 'returns');
-  onSnapshot(rdRef, (snap) => {
-    if (snap.metadata.hasPendingWrites) return; // הד של כתיבה מקומית — מתעלמים
-    const d = snap.data();
-    if (!d) return;
-    const remoteUpdatedAt = Number(d.updatedAt) || 0;
-    if (remoteUpdatedAt && remoteUpdatedAt <= returnsDraftUpdatedAt) return;
-    if (d.slots) {
-      // מחילים slots + active + dates אטומית, כדי שיומית ושבועית לא יתערבבו.
-      returnsSlots = {
-        weekly: Array.isArray(d.slots.weekly) ? d.slots.weekly : [],
-        daily: Array.isArray(d.slots.daily) ? d.slots.daily : []
-      };
-      returnsSlot = d.active === 'daily' ? 'daily' : 'weekly';
-      returnsDocDates = { weekly: String((d.dates && d.dates.weekly) || ''), daily: String((d.dates && d.dates.daily) || '') };
-      returnsDraftIds = { weekly: (d.draftIds && d.draftIds.weekly) || d.draftId || returnsDraftIds.weekly || null, daily: (d.draftIds && d.draftIds.daily) || returnsDraftIds.daily || null };
-    } else if (Array.isArray(d.items)) {
-      // מעבר מהמבנה הישן: הרשימה הישנה הייתה שבועית.
-      returnsSlots = { weekly: d.items, daily: [] };
-      returnsSlot = 'weekly';
-      returnsDocDates = { weekly: '', daily: '' };
-    } else return;
-    returnsDraftUpdatedAt = remoteUpdatedAt;
-    returnsList = returnsSlots[returnsSlot];
-    returnsDocDate = returnsDocDates[returnsSlot] || '';
-    try { localStorage.setItem(RETURNS_DRAFT_KEY, JSON.stringify({ schemaVersion: 2, draftIds: returnsDraftIds, slots: returnsSlots, dates: returnsDocDates, active: returnsSlot, updatedAt: returnsDraftUpdatedAt })); } catch (e) {}
-    if (currentView === 'returns' && !isDragging) {
-      const a = document.activeElement;
-      if (!(a && app.contains(a) && (a.tagName === 'INPUT' || a.tagName === 'SELECT'))) refreshReturnsList();
-    }
-    updateCart();
-  }, console.error);
+  startReturnsEvents();
 
   const rcRef = collection(db, 'artifacts', appId, 'public', 'data', 'receipts');
   const rcQ = query(rcRef, orderBy('timestamp', 'desc'), limit(100));
@@ -2033,7 +2065,7 @@ function trashCard(it) {
       '</div>' +
     '</div>' +
     '<div class="flex gap-2 mt-4">' +
-      '<button data-role="trash-restore" data-id="' + htmlEscape(it.trashId) + '" class="btn-tap flex-1 py-2.5 rounded-xl font-black bg-green-600 text-white flex items-center justify-center gap-2"><i class="fa-solid fa-rotate-left"></i> שחזר</button>' +
+      (returnsUnsendTrash(it) ? '<div class="flex-1 text-xs text-slate-500 py-2">הפריטים כבר הוחזרו לרשימה — התעודה אינה משוחזרת בנפרד</div>' : '<button data-role="trash-restore" data-id="' + htmlEscape(it.trashId) + '" class="btn-tap flex-1 py-2.5 rounded-xl font-black bg-green-600 text-white flex items-center justify-center gap-2"><i class="fa-solid fa-rotate-left"></i> שחזר</button>') +
       '<button data-role="trash-delete" data-id="' + htmlEscape(it.trashId) + '" class="btn-tap px-4 py-2.5 rounded-xl font-black bg-red-50 text-red-600 flex items-center justify-center gap-2"><i class="fa-solid fa-trash-can"></i></button>' +
     '</div>' +
   '</div>';
@@ -2066,8 +2098,10 @@ function mergeRestorePlan(it, currentTarget) {
   if (now > before + 1) return { mode: 'blocked-newer-merge' };
   return { mode: 'full-unmerge' };
 }
+function returnsUnsendTrash(it) { return !!(it && it.collectionName === 'returns' && ['unsend-return', 'return-unsend', 'return-to-open-list'].includes(it.reason)); }
 async function restoreTrashItem(trashId) {
   const it = trash.find(x => x.trashId === trashId);
+  if (returnsUnsendTrash(it)) { showToast('הפריטים כבר הוחזרו לרשימה — את התעודה אי אפשר לשחזר בנפרד. ביטול ההחזרה לרשימה מחזיר את שני הצדדים יחד.', null, null, 5500); return; }
   // v125: נייר — חוזר רק אם אין כבר נייר באותו מספר, לא בענן ולא ממתין במכשיר (צילום חדש גובר
   // על שחזור). הבדיקה והכתיבה בטרנזקציה אחת — גם מכשיר אחר שכתב רגע לפני לא נדרס.
   if (it && it.collectionName === 'papers' && it.paperData && it.paperData.paper) {
@@ -2398,6 +2432,8 @@ async function exportFullBackup() {
       localDrafts: {
         order: readLocalJson(ORDER_DRAFT_KEY, null),
         returns: readLocalJson(RETURNS_DRAFT_KEY, null),
+        returnEvents: readLocalJson('bm_return_events_v1', null),
+        returnsOldQueue: readLocalJson('bm_returns_old_queue_v138', null),
         receipt: readLocalJson(RECEIPT_DRAFT_KEY, null)
       }
     };
@@ -2470,6 +2506,25 @@ async function commitBackupOpQueue(ops, busyText) {
   await flush();
   return total;
 }
+// שחזור גיבוי ישן אינו מחזיר תעודה שהועברה לרשימה — גם אם המקור נמחק.
+async function restoreReturnsBackupDocs(docsObj, existing) {
+  const protectedIds = new Set(existing.docs.filter(dd => dd.data().returnEventSend).map(dd => dd.id));
+  const ids = [...new Set(existing.docs.map(dd => dd.id).concat(Object.keys(docsObj)))];
+  let restored = 0;
+  for (const id of ids) {
+    if (protectedIds.has(id) || docsObj[id] && docsObj[id].returnEventSend) continue;
+    restored += await runTransaction(db, async tx => {
+      const ledger = await tx.get(doc(db, ...dataPath('drafts', 'returns_events_berman_v1')));
+      const ref = doc(db, ...dataPath('returns', id)), current = await tx.get(ref);
+      if ((ledger.exists() && ledger.data().protectedRecords && ledger.data().protectedRecords[id]) || (current.exists() && current.data().returnEventSend)) return 0;
+      if (Object.prototype.hasOwnProperty.call(docsObj, id)) tx.set(ref, cloneSafe(docsObj[id]));
+      else if (current.exists()) tx.delete(ref);
+      else return 0;
+      return 1;
+    });
+  }
+  return restored;
+}
 async function applyBackupToCloud(payload) {
   if (!db || !validBackupPayload(payload)) throw new Error('גיבוי לא תקין');
   showCloudBusy('משחזר נתונים מגיבוי...');
@@ -2479,10 +2534,18 @@ async function applyBackupToCloud(payload) {
       if (c.optional && !(payload.collections && Object.prototype.hasOwnProperty.call(payload.collections, c.name))) continue;
       const ref = collection(db, 'artifacts', appId, 'public', 'data', c.name);
       const existing = await getDocs(ref);
+      if (c.name === 'returns') { restored += await restoreReturnsBackupDocs(cloneSafe((payload.collections && payload.collections.returns) || {}), existing); continue; }
       const ops = [];
-      existing.docs.forEach(dd => ops.push({ type: 'delete', ref: dd.ref }));
+      const protectedIds = new Set();
+      existing.docs.forEach(dd => {
+        if ((c.name === 'drafts' && /^returns_events_/.test(dd.id)) || (c.name === 'returns' && dd.data().returnEventSend)) { protectedIds.add(dd.id); return; }
+        ops.push({ type: 'delete', ref: dd.ref });
+      });
       const docsObj = cloneSafe((payload.collections && payload.collections[c.name]) || {});
-      Object.keys(docsObj).forEach(id => ops.push({ type: 'set', ref: doc(db, 'artifacts', appId, 'public', 'data', c.name, id), data: cloneSafe(docsObj[id]) }));
+      Object.keys(docsObj).forEach(id => {
+        if (protectedIds.has(id) || (c.name === 'drafts' && /^returns_events_/.test(id)) || (c.name === 'returns' && docsObj[id].returnEventSend)) return;
+        ops.push({ type: 'set', ref: doc(db, 'artifacts', appId, 'public', 'data', c.name, id), data: cloneSafe(docsObj[id]) });
+      });
       restored += await commitBackupOpQueue(ops, 'משחזר: ' + c.label);
     }
     showToast('השחזור הסתיים ✓ הנתונים יתעדכנו מהענן בעוד רגע', null, null, 4500);
@@ -2520,9 +2583,7 @@ function healthDraftCounts() {
   const rd = readLocalJson(RETURNS_DRAFT_KEY, []);
   const rc = readLocalJson(RECEIPT_DRAFT_KEY, null);
   const orderCount = od && typeof od === 'object' ? Object.values(od).filter(x => parseInt(x && x.amount, 10) > 0).length : 0;
-  const returnsCount = Array.isArray(rd) ? rd.length : (rd && rd.slots
-    ? (Array.isArray(rd.slots.weekly) ? rd.slots.weekly.length : 0) + (Array.isArray(rd.slots.daily) ? rd.slots.daily.length : 0)
-    : 0);
+  const returnsCount = Object.values(returnsSlots).reduce((n, rows) => n + rows.length, 0);
   let receiptCount = 0, receiptNotesCount = 0, receiptIsOpen = false;
   if (Array.isArray(rc)) { receiptCount = rc.length; receiptIsOpen = rc.length > 0; }
   else if (rc && typeof rc === 'object') {
@@ -2967,7 +3028,7 @@ function renderReturns() {
   if (returnsSlot !== 'weekly') switchReturnsSlot('weekly');
   const slotBtn = (key, label, cnt) =>
     '<button data-role="ret-slot" data-slot="' + key + '" class="btn-tap flex-1 py-2.5 rounded-lg font-black text-sm ' + (returnsSlot === key ? 'bg-white shadow text-emerald-800' : 'text-slate-500') + '">' + label + (cnt ? ' <span class="text-[10px] bg-rose-100 text-rose-700 rounded-full px-1.5">' + cnt + '</span>' : '') + '</button>';
-  app.innerHTML = histBar +
+  app.innerHTML = histBar + '<div id="returnsEventsStatus">' + returnsEventsStatusHtml() + '</div>' +
     '<button data-role="ret-scan" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 text-lg font-black flex items-center justify-center gap-2 mb-2 shadow-lg"><i class="fa-solid fa-barcode text-xl"></i> סרוק פריט</button>' +
     '<button data-role="ret-crates" class="btn-tap w-full bg-amber-50 border-2 border-amber-300 text-amber-900 rounded-2xl py-3 font-black flex items-center justify-center gap-2 mb-2"><i class="fa-solid fa-basket-shopping"></i> החזרת לחם בתפזורת</button>' +
     '<details class="bg-white rounded-xl border border-slate-200 shadow-sm mb-3"><summary class="cursor-pointer p-3 font-black text-sm text-slate-600"><i class="fa-solid fa-circle-question text-slate-400"></i> לא מצליח לסרוק?</summary><div class="px-3 pb-3">' +
@@ -3087,12 +3148,8 @@ function addManualReturn() {
   if (currentView === 'returns') refreshReturnsList();
   updateCart();
 }
-function openReturnsSend() {
-  if (!returnsList.length) return;
-  // ברמן: תעודת "החזרה יבש". v123: התעודה היא כמויות בלבד — מוצר, קוד, ברקוד
-  // וכמות. הכסף של ההחזרה מחושב במרכזת החודשית ממחיר הלקוח של אותו יום,
-  // ולכן שום מחיר לא נכתב כאן (גם לא לשורה ידנית או לשורה שהועברה מפער).
-  const items = returnsList.map(it => {
+function returnsDocumentItems(list) {
+  const items = list.map(it => {
     const p = products.find(x => x.id === it.productId);
     const line = { name: it.name, barcode: it.barcode || '', code: productCode(p) || String(it.code || ''), productId: it.productId, qty: it.qty };
     // v78: שורה שהוחזרה מפער זיכוי היא תביעה על יחידות שכבר נספרו בתעודה המקורית —
@@ -3102,16 +3159,21 @@ function openReturnsSend() {
   });
   // v167: מוצר עם פיקדון מוגדר — הבקבוקים חוזרים לספק, והפיקדון חוזר
   // אלינו: שורת פיקדון נפרדת בזיכוי, כמו שהיא מופיעה בתעודות הספק.
-  returnsList.forEach(it => {
+  list.forEach(it => {
     if (it.manual) return;
     const p = products.find(x => x.id === it.productId);
     const dep = Number(p && p.deposit) || 0;
     if (!(dep > 0) || !(Number(it.qty) > 0)) return;
     items.push({ name: 'פיקדון · ' + it.name, barcode: '', qty: it.qty, isDeposit: true });
   });
+  return items;
+}
+function openReturnsSend() {
+  if (!returnsList.length) return;
+  const items = returnsDocumentItems(returnsList);
   const returnVatRate = vatRateForNewDocument(returnsDocDate || todayStr());
-  if (!returnsDraftIds[returnsSlot]) { returnsDraftIds[returnsSlot] = makeOperationId('returns'); saveReturnsDraft(); }
-  sendCtx = { type: 'returns', items, resetCurrent: false, vatPct: r2(returnVatRate * 100), operationId: returnsDraftIds[returnsSlot], sourceSlot: returnsSlot };
+  const engine = startReturnsEvents();
+  sendCtx = { type: 'returns', items, resetCurrent: false, vatPct: r2(returnVatRate * 100), sourceSlot: returnsSlot, expectedEpoch: engine ? engine.epoch(returnsSlot) : 0 };
   renderSendModal(items, 'תעודת החזרה יבש', 'returns');
 }
 // v123: תעודת חזרה חדשה, באותו מבנה לשמירה בלי שליחה ולשליחה בוואטסאפ.
@@ -3284,32 +3346,35 @@ function openReturnCarryConfirm(id) {
     'הפריטים יתווספו לרשימת החזרות הפתוחה וייתבעו שוב בתעודת החזרות הבאה: ' + retCarrySideText(plan.items) + ' (' + plan.units + ' יח׳). התעודה הזאת תיסגר — היחידות האלה כבר לא ייחשבו פתוחות בה. להחזיר?',
     'החזר לרשימה', () => saveReturnCarry(id, plan));
 }
+function returnsSourceFingerprint(record) {
+  const value = cloneSafe(record || {}); delete value.id;
+  return JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
+}
+function requireSameReturnsSource(snap, expected) {
+  if (!snap.exists() || returnsSourceFingerprint(snap.data()) !== returnsSourceFingerprint(expected)) throw new Error('התעודה השתנתה בטלפון אחר — פתח אותה מחדש');
+  return { id: snap.id, ...snap.data() };
+}
 async function saveReturnCarry(id, plan) {
-  const r = returns.find(x => x.id === id); if (!r || !plan || !plan.items.length) return;
-  const at = Date.now();
-  // v123: הרישום נושא את המוצר והכמות — בלי מחיר
-  const notes = returnCarriedNotes(r).concat(plan.items.map(x => {
-    const note = { name: x.name, barcode: x.barcode || '', qty: Number(x.qty) || 0, at };
-    if (x.productId) note.productId = x.productId;
-    if (x.code) note.code = x.code;
-    return note;
-  }));
-  const saved = await runCloudTask('carry credit gap to returns', { op: 'update', path: dataPath('returns', id), data: { carriedNotes: cloneSafe(notes) }, operationId: makeOperationId('carry_gap') });
-  if (!saved) return;
-  r.carriedNotes = notes;
-  // השורות נכנסות כשורות מועברות: המרכזת סופרת אותן כזיכוי שנתבע שוב ולא כסחורה
-  // שיצאה עכשיו, ופיקדון לא נוסף עליהן בשליחה. שורה מאותה תעודה ובאותו מוצר מתאחדת.
-  plan.items.forEach(x => {
-    const ex = returnsList.find(it => it.carried && it.carriedFrom === id && it.name === x.name && (it.barcode || '') === (x.barcode || ''));
-    if (ex) { ex.qty = (Number(ex.qty) || 0) + (Number(x.qty) || 0); return; }
-    const row = { productId: 'carry_' + Date.now() + '_' + Math.floor(Math.random() * 1000), name: x.name, barcode: x.barcode || '', qty: Number(x.qty) || 0, manual: true, carried: true, carriedFrom: id };
-    if (x.code) row.code = x.code;
-    returnsList.push(row);
-  });
-  saveReturnsDraft();
-  buzz(18);
-  refreshAfterReturnCarry();
-  showToast('הפריטים חזרו לרשימת החזרות ✓', null, null, 3000);
+  const r = returns.find(x => x.id === id), engine = startReturnsEvents();
+  if (!r || !plan || !plan.items.length || !engine) return;
+  const slot = returnsSlot, expected = cloneSafe(r), ref = doc(db, ...dataPath('returns', id)), at = Date.now();
+  try {
+    const result = await engine.mutate([ref], (snaps, view) => {
+      const fresh = requireSameReturnsSource(snaps[0], expected), current = cloneSafe(view.slots[slot]);
+      const nowPlan = retCarryPlan(fresh); if (!nowPlan || !nowPlan.items.length) throw new Error('הפער כבר הועבר');
+      const notes = returnCarriedNotes(fresh).concat(nowPlan.items.map(x => ({ name: x.name, barcode: x.barcode || '', qty: Number(x.qty) || 0, at, ...(x.productId ? { productId: x.productId } : {}), ...(x.code ? { code: x.code } : {}) })));
+      nowPlan.items.forEach((x, n) => {
+        const ex = current.items.find(it => it.carried && it.carriedFrom === id && it.name === x.name && (it.barcode || '') === (x.barcode || ''));
+        if (ex) ex.qty = (Number(ex.qty) || 0) + (Number(x.qty) || 0);
+        else current.items.push({ productId: 'carry_' + id + '_' + n, name: x.name, barcode: x.barcode || '', qty: Number(x.qty) || 0, manual: true, carried: true, carriedFrom: id, ...(x.code ? { code: x.code } : {}) });
+      });
+      return { changes: { [slot]: current }, writes: [{ op: 'update', ref, data: { carriedNotes: notes } }], result: { notes } };
+    }, { key: makeOperationId('carry') });
+    if (!result.ok) throw new Error('לא נשמרה ההעברה — נסה שוב כשיש חיבור');
+    if (result.result) r.carriedNotes = result.result.notes;
+    if (result.mutationId) r.returnEventMutationId = result.mutationId;
+    buzz(18); refreshAfterReturnCarry(); showToast('הפריטים חזרו לרשימת החזרות ✓', null, null, 3000);
+  } catch (e) { showToast(e.message || 'ההעברה לא נשמרה', null, null, 4500); }
 }
 // מוריד מרשימת החזרות הפתוחה את השורות שהועברו מתעודה — במקום, בלי להחליף את המערך
 // (returnsList הוא אותו מערך שיושב ב-returnsSlots)
@@ -3321,17 +3386,28 @@ function dropCarriedRowsFrom(id) {
 }
 async function undoReturnCarry(id, opts) {
   opts = opts || {};
-  const r = returns.find(x => x.id === id); if (!r) return false;
-  if (!returnCarriedNotes(r).length && !returnsList.some(it => it.carriedFrom === id)) return false;
-  const saved = await runCloudTask('undo carry credit gap', { op: 'update', path: dataPath('returns', id), data: { carriedNotes: [] }, operationId: makeOperationId('carry_gap_undo') });
-  if (!saved) return false;
-  r.carriedNotes = [];
-  dropCarriedRowsFrom(id);
-  if (opts.silent) return true;
-  buzz(8);
-  refreshAfterReturnCarry();
-  showToast('ההחזרה בוטלה — הפער חזר לתעודה', null, null, 2800);
-  return true;
+  const r = returns.find(x => x.id === id);
+  if (!r || (!returnCarriedNotes(r).length && !Object.values(returnsSlots).some(list => list.some(x => x.carriedFrom === id)))) return false;
+  const engine = startReturnsEvents(); if (!engine) return false;
+  const expected = cloneSafe(r), ref = doc(db, ...dataPath('returns', id));
+  try {
+    const result = await engine.mutate([ref], (snaps, view) => {
+      requireSameReturnsSource(snaps[0], expected);
+      const changes = {}; let found = false;
+      for (const slot of ['weekly', 'daily']) {
+        const current = cloneSafe(view.slots[slot]);
+        if (current.items.some(it => it.carriedFrom === id)) { found = true; current.items = current.items.filter(it => it.carriedFrom !== id); changes[slot] = current; }
+      }
+      const needed = {}, available = {};
+      returnCarriedNotes(r).forEach(row => { const key = retCarryKey(row); needed[key] = r2((needed[key] || 0) + (Number(row.qty) || 0)); });
+      Object.values(view.slots).forEach(value => value.items.filter(row => row.carriedFrom === id).forEach(row => { const key = retCarryKey(row); available[key] = r2((available[key] || 0) + (Number(row.qty) || 0)); }));
+      if ((!found && returnCarriedNotes(r).length) || JSON.stringify(Object.entries(needed).sort()) !== JSON.stringify(Object.entries(available).sort())) throw new Error('הכמויות שהועברו כבר השתנו או נשלחו — הביטול לא בוצע');
+      return { changes, writes: [{ op: 'update', ref, data: { carriedNotes: [] } }] };
+    }, { key: makeOperationId('undo_carry') });
+    if (!result.ok) return false;
+    r.carriedNotes = []; if (result.mutationId) r.returnEventMutationId = result.mutationId; if (!opts.silent) { buzz(8); refreshAfterReturnCarry(); showToast('ההחזרה בוטלה — הפער חזר לתעודה', null, null, 2800); }
+    return true;
+  } catch (e) { showToast(e.message || 'הביטול לא נשמר', null, null, 4500); return false; }
 }
 function refreshAfterReturnCarry() {
   if (currentView === 'receiptsHistory') renderReceiptsHistory();
@@ -3489,10 +3565,11 @@ function retUnsendNewId(item) {
 }
 // מוסיף לרשימה ומחזיר בדיוק מה נוסף לכל שורה, כדי ש"בטל" יוכל להוריד את
 // אותה כמות בלי לגעת במה שכבר היה שם קודם.
-function applyReturnUnsend(plan) {
+function applyReturnUnsend(plan, list) {
+  list = list || returnsList;
   const applied = [];
   (plan && plan.items || []).forEach(item => {
-    const existing = returnsList.find(x => retUnsendSameLine(x, item));
+    const existing = list.find(x => retUnsendSameLine(x, item));
     if (existing) {
       existing.qty = r2((Number(existing.qty) || 0) + item.qty);
       applied.push({ productId: String(existing.productId || ''), qty: item.qty, created: false });
@@ -3501,7 +3578,7 @@ function applyReturnUnsend(plan) {
     const row = { productId: retUnsendNewId(item), name: item.name, barcode: item.barcode, qty: item.qty };
     if (item.kind !== 'catalog') { row.manual = true; if (item.code) row.code = item.code; }
     if (item.kind === 'carried') { row.carried = true; if (item.carriedFrom) row.carriedFrom = item.carriedFrom; }
-    returnsList.push(row);
+    list.push(row);
     applied.push({ productId: row.productId, qty: item.qty, created: true });
   });
   return applied;
@@ -3517,33 +3594,48 @@ function openReturnUnsendConfirm(id) {
     'החזר לרשימה', () => saveReturnUnsend(id));
 }
 async function saveReturnUnsend(id) {
-  const r = returns.find(x => x.id === id); if (!r || r.credited) return;
-  if (returnHasCreditAllocations(id)) return;
-  const plan = retUnsendPlan(r); if (!plan) return;
-  const backup = cloneSafe({ ...r });
-  // סדר הפעולות אינו שרירותי: קודם המחיקה. אם היא נכשלה (אין רשת, שגיאת
-  // ענן) הפריטים עדיין לא נכנסו לרשימה, ואי אפשר להגיע למצב שבו אותה
-  // סחורה יושבת גם בתעודה פתוחה וגם ברשימה הפתוחה.
-  const deleted = await hardDeleteDocWithBackup('returns', id, backup, 'unsend-return');
-  if (!deleted) { showToast('המחיקה נכשלה — הפריטים לא הוחזרו לרשימה', null, null, 3500); return; }
-  const applied = applyReturnUnsend(plan);
-  saveReturnsDraft();
-  buzz(18);
-  refreshAfterReturnCarry();
-  showToast('הפריטים חזרו לרשימת החזרות ✓ · התעודה נמחקה', 'בטל', () => undoReturnUnsend(backup, applied));
+  const r = returns.find(x => x.id === id), engine = startReturnsEvents();
+  if (!r || r.credited || returnHasCreditAllocations(id) || !engine) return;
+  const slot = returnsSlot, expected = cloneSafe(r), ref = doc(db, ...dataPath('returns', id));
+  const trashId = trashDocId('returns', id), trashRef = doc(db, ...dataPath('trash', trashId));
+  try {
+    const result = await engine.mutate([ref], (snaps, view) => {
+      const fresh = requireSameReturnsSource(snaps[0], expected), plan = retUnsendPlan(fresh);
+      if (!plan || fresh.credited || creditAllocationList(fresh).length || returnCreditNotes(fresh).length) throw new Error('התעודה כבר השתנתה — לא הוחזרו פריטים');
+      const current = cloneSafe(view.slots[slot]), applied = applyReturnUnsend(plan, current.items), backup = cloneSafe(fresh);
+      return { changes: { [slot]: current }, writes: [
+        { op: 'set', ref: trashRef, data: { collectionName: 'returns', originalId: id, reason: 'unsend-return', deletedAt: Date.now(), data: backup } },
+        { op: 'delete', ref }
+      ], result: { backup, applied, epoch: view.epochs[slot] } };
+    }, { key: makeOperationId('unsend') });
+    if (!result.ok || !result.result) throw new Error('ההחזרה לרשימה לא נשמרה — נסה שוב כשיש חיבור');
+    const saved = result.result; returns = returns.filter(x => x.id !== id); buzz(18); refreshAfterReturnCarry();
+    showToast('הפריטים חזרו לרשימת החזרות ✓ · התעודה נמחקה', 'בטל', () => undoReturnUnsend(saved.backup, saved.applied, slot, saved.epoch, trashId));
+  } catch (e) { showToast(e.message || 'ההחזרה לרשימה לא נשמרה', null, null, 4500); }
 }
-function undoReturnUnsend(backup, applied) {
+function undoReturnUnsendItems(list, applied) {
   (applied || []).forEach(x => {
-    const i = returnsList.findIndex(it => it && String(it.productId || '') === String(x.productId || ''));
+    const i = list.findIndex(it => it && String(it.productId || '') === String(x.productId || ''));
     if (i < 0) return;
-    const left = r2((Number(returnsList[i].qty) || 0) - (Number(x.qty) || 0));
-    // מחיקה במקום, בלי להחליף את המערך — returnsList הוא אותו מערך שב-returnsSlots
-    if (x.created || left <= 0) returnsList.splice(i, 1);
-    else returnsList[i].qty = left;
+    const left = r2((Number(list[i].qty) || 0) - (Number(x.qty) || 0));
+    if (left <= 0) list.splice(i, 1); else list[i].qty = left;
   });
-  saveReturnsDraft();
-  refreshAfterReturnCarry();
-  restoreDoc('returns', backup);
+  return list;
+}
+async function undoReturnUnsend(backup, applied, slot, epoch, trashId) {
+  const engine = startReturnsEvents(); if (!engine || !backup || !backup.id) return;
+  const ref = doc(db, ...dataPath('returns', backup.id)), trashRef = doc(db, ...dataPath('trash', trashId));
+  try {
+    const result = await engine.mutate([ref, trashRef], (snaps, view) => {
+      if (snaps[0].exists() || !snaps[1].exists() || view.epochs[slot] !== epoch) throw new Error('התעודה או הטיוטה כבר השתנו — הביטול לא בוצע');
+      const current = cloneSafe(view.slots[slot]);
+      if ((applied || []).some(x => (Number((current.items.find(it => it.productId === x.productId) || {}).qty) || 0) < Number(x.qty))) throw new Error('הכמויות כבר השתנו — הביטול לא בוצע');
+      undoReturnUnsendItems(current.items, applied);
+      const data = cloneSafe(backup); delete data.id;
+      return { changes: { [slot]: current }, writes: [{ op: 'set', ref, data }, { op: 'delete', ref: trashRef }] };
+    }, { key: 'undo_' + trashId });
+    if (result.ok) { returns.push({ ...cloneSafe(backup), ...(result.mutationId ? { returnEventMutationId: result.mutationId } : {}) }); refreshAfterReturnCarry(); }
+  } catch (e) { showToast(e.message || 'הביטול לא נשמר', null, null, 4500); }
 }
 function retUnsendBtnHtml(r) {
   const plan = retUnsendPlan(r);
@@ -4317,17 +4409,30 @@ function buildMessage(items, note) {
   return m;
 }
 // v25: בתנובה החזרות נמסרות לרוב ביד — וואטסאפ הוא אופציה, לא שער.
+async function finishReturnsEvents(sentTo) {
+  const ctx = sendCtx, engine = startReturnsEvents();
+  if (!ctx || ctx.type !== 'returns' || returnsSending || !engine) return null;
+  returnsSending = true;
+  try {
+    const result = await engine.finish(ctx.sourceSlot || returnsSlot, (slot, id) => ({
+      schemaVersion: 2, timestamp: Date.now(), date: todayStr(), docDate: slot.date || todayStr(),
+      vatPct: r2(vatRateForNewDocument(slot.date || todayStr()) * 100), returnKind: ctx.sourceSlot || returnsSlot,
+      sentTo, items: returnsDocumentItems(slot.items), credited: false, operationId: id
+    }), { expectedEpoch: ctx.expectedEpoch });
+    if (!result.ok || result.already || result.empty) {
+      showToast(result.already || result.empty ? 'ההחזרה כבר נשמרה בטלפון אחר — הרשימה עודכנה' : 'אין אישור מהענן — ההחזרה נשארה בטלפון. נסה שוב כשיש חיבור', null, null, 4500);
+      if (result.already || result.empty) { sendCtx = null; hideSend(); }
+      return null;
+    }
+    logCloudActionIfNeeded(sentTo === 'נמסר ידנית' ? 'save returns without sending' : 'save returns before send', { op: 'set', path: dataPath('returns', result.id), data: result.record, operationId: result.id });
+    return result.record;
+  } catch (e) { showToast('ההחזרה לא נשמרה — הסריקות נשארו בטלפון', null, null, 4500); return null; }
+  finally { returnsSending = false; }
+}
 async function saveReturnsWithoutSending() {
   if (!sendCtx || sendCtx.type !== 'returns' || sendCtx.resendExisting) { hideSend(); return; }
-  const items = sendCtx.items || [];
-  if (!items.length) { hideSend(); return; }
-  const opId = sendCtx.operationId || returnsDraftIds[returnsSlot] || (sendCtx.operationId = makeOperationId('returns'));
-  const deIn = $('retDocDate'); if (deIn && deIn.value) returnsDocDate = deIn.value;
-  const data = returnDocData('נמסר ידנית', opId);
-  const saved = await runCloudTask('save returns without sending', { op: 'set', path: dataPath('returns', opId), data, operationId: opId });
-  if (!saved) return;
-  returnsList = []; returnsSlots[returnsSlot] = returnsList; returnsDocDate = ''; returnsDocDates[returnsSlot] = ''; returnsDraftIds[returnsSlot] = null; saveReturnsDraft();
-  sendCtx = null; hideSend(); receiptHistoryFilter = 'all'; setView('receiptsHistory'); // v114: התעודה שנשמרה עכשיו חייבת להיראות בראש המסך — בלי מסנן ישן
+  const record = await finishReturnsEvents('נמסר ידנית'); if (!record) return;
+  sendCtx = null; hideSend(); receiptHistoryFilter = 'all'; setView('receiptsHistory');
   showToast('תעודת החזרה נשמרה — בלי שליחה', null, null, 2600);
 }
 function renderContactPicker() {
@@ -4445,14 +4550,10 @@ async function performSend(contact) {
       sendCtx = null; hideSend(); groupCopy(msg); window.location.href = url;
       return;
     }
-    const opId = sendCtx.operationId || returnsDraftIds[returnsSlot] || (sendCtx.operationId = makeOperationId('returns'));
-    const deIn = $('retDocDate'); if (deIn && deIn.value) returnsDocDate = deIn.value;
-    const data = returnDocData(contact.name, opId);
-    const saved = await runCloudTask('save returns before send', { op: 'set', path: dataPath('returns', opId), data, operationId: opId });
-    if (!saved) return;
-    const msg = buildReturnsMessage(items, note);
+    const record = await finishReturnsEvents(contact.name);
+    if (!record) return;
+    const msg = buildReturnsMessage(record.items, note);
     const url = waUrl(msg);
-    returnsList = []; returnsSlots[returnsSlot] = returnsList; returnsDocDate = ''; returnsDocDates[returnsSlot] = ''; returnsDraftIds[returnsSlot] = null; saveReturnsDraft();
     sendCtx = null; hideSend(); receiptHistoryFilter = 'all'; setView('receiptsHistory'); groupCopy(msg); window.location.href = url; // v114: התעודה שנשלחה עכשיו חייבת להיראות בראש המסך — בלי מסנן ישן
     return;
   }
@@ -4949,6 +5050,28 @@ function makeOperationId(prefix) {
   try { if (crypto && crypto.randomUUID) return p + '_' + crypto.randomUUID(); } catch (e) {}
   return p + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
 }
+function isLegacyReturnsDraftTask(task) {
+  if (!task) return false;
+  if (task.op === 'batch') return (task.writes || []).some(isLegacyReturnsDraftTask);
+  const path = task.path || [], id = path[path.length - 1];
+  return path.join('/') === dataPath('drafts', 'returns').join('/') || task.operationId === 'returns_draft' || (task.op === 'set' && path[path.length - 2] === 'returns' && task.operationId === id && task.data && task.data.operationId === id);
+}
+function quarantineLegacyReturnsQueue() {
+  const old = cloudFailedWrites.filter(x => isLegacyReturnsDraftTask(x.task));
+  if (!old.length) return;
+  try {
+    const previous = JSON.parse(localStorage.getItem('bm_returns_old_queue_v138') || '[]');
+    const merged = previous.slice(); old.forEach(x => { if (!merged.some(y => y.id === x.id && JSON.stringify(y.task) === JSON.stringify(x.task))) merged.push(cloneSafe(x)); });
+    localStorage.setItem('bm_returns_old_queue_v138', JSON.stringify(merged));
+  } catch (e) { return; } // שומר הענן חוסם, אך התור נשאר עד שגיבויו מצליח.
+  cloudFailedWrites = cloudFailedWrites.flatMap(item => {
+    if (!isLegacyReturnsDraftTask(item.task)) return [item];
+    if (item.task.op !== 'batch') return [];
+    const writes = (item.task.writes || []).filter(w => !isLegacyReturnsDraftTask(w));
+    return writes.length ? [{ ...item, task: { ...item.task, writes } }] : [];
+  });
+  saveCloudFailedWrites();
+}
 function loadCloudFailedWrites() {
   try { const raw = localStorage.getItem(CLOUD_FAILED_KEY); cloudFailedWrites = raw ? (JSON.parse(raw) || []) : []; }
   catch (e) { cloudFailedWrites = []; }
@@ -5034,13 +5157,36 @@ function showCloudFailDetails() {
   const msg = 'יש ' + cloudFailedWrites.length + ' פעולות שלא קיבלו אישור מהענן. הפעולה האחרונה: ' + (first.actionName || 'שמירה') + '. שגיאה: ' + (first.error || 'לא ידוע') + '. לנסות לשמור שוב עכשיו?';
   showConfirm('פעולות שלא נשמרו', msg, 'נסה שוב', retryCloudFailedWrites);
 }
+function returnsSetWrite(write) { return !!(write && ['set', 'create-if-absent'].includes(write.op) && Array.isArray(write.path) && write.path[write.path.length - 2] === 'returns'); }
+async function executeReturnsSetWrites(writes) {
+  return runTransaction(db, async tx => {
+    const ledger = await tx.get(doc(db, ...dataPath('drafts', 'returns_events_berman_v1')));
+    for (const write of writes.filter(returnsSetWrite)) {
+      const id = write.path[write.path.length - 1], current = await tx.get(doc(db, ...write.path));
+      if ((ledger.exists() && ledger.data().protectedRecords && ledger.data().protectedRecords[id]) || (current.exists() && current.data().returnEventSend)) {
+        const error = new Error('התעודה כבר הועברה או נשמרה — שחזור ישן לא יכול להחזיר אותה בנפרד'); error.code = 'stale-return-restore'; throw error;
+      }
+      if (write.op === 'create-if-absent' && current.exists()) throw new Error('התעודה כבר קיימת');
+    }
+    writes.forEach(write => {
+      const ref = doc(db, ...write.path);
+      if (write.op === 'delete') tx.delete(ref);
+      else if (write.op === 'update') tx.update(ref, write.data || {});
+      else if (write.merge) tx.set(ref, write.data || {}, { merge: true });
+      else tx.set(ref, write.data || {});
+    });
+  });
+}
 async function executeCloudTask(task) {
+  if (isLegacyReturnsDraftTask(task)) throw new Error('שמירת החזרות ישנה הופרדה מהסנכרון — העותק נשמר בטלפון');
   if (!db || !task) throw new Error('אין חיבור לענן');
   if (Array.isArray(task.tasks)) { for (const t of task.tasks) await executeCloudTask(t); return; }
   if (task.op === 'return-credit-link') return executeReturnCreditLinkTask(task);
   if (task.op === 'return-approve') return executeReturnApproveTask(task);
   if (task.op === 'ledger-close') return executeLedgerCloseTask(task);
   if (task.priceEntry && (task.op === 'update' || task.op === 'price-entry')) return executePriceEntryTask(task);
+  if (returnsSetWrite(task)) return executeReturnsSetWrites([task]);
+  if (task.op === 'batch' && (task.writes || []).some(returnsSetWrite)) return executeReturnsSetWrites(task.writes || []);
   if (task.op === 'batch') {
     const batch = writeBatch(db);
     (task.writes || []).forEach(w => {
@@ -5138,7 +5284,7 @@ async function retryCloudFailedWrites() {
       }
       catch (e) {
         if (e && e.code === 'duplicate-barcode') { removeCloudFailedWrite(item.id); duplicate++; continue; }
-        if (e && (e.code === 'stale-return-credit-link' || e.code === 'stale-return-approve' || e.code === 'stale-ledger-close')) { removeCloudFailedWrite(item.id); staleLinks++; continue; }
+        if (e && (e.code === 'stale-return-credit-link' || e.code === 'stale-return-approve' || e.code === 'stale-ledger-close' || e.code === 'stale-return-restore')) { removeCloudFailedWrite(item.id); staleLinks++; continue; }
         item.error = errText(e); item.tries = (item.tries || 0) + 1; item.updatedAt = Date.now(); fail++;
       }
     }
@@ -5213,7 +5359,7 @@ async function mustCloudWrite(actionName, fn, opts) {
       if (typeof opts.onDuplicateBarcode === 'function') opts.onDuplicateBarcode(e);
       return false;
     }
-    if (e && (e.code === 'stale-return-credit-link' || e.code === 'stale-return-approve' || e.code === 'stale-ledger-close')) {
+    if (e && (e.code === 'stale-return-credit-link' || e.code === 'stale-return-approve' || e.code === 'stale-ledger-close' || e.code === 'stale-return-restore')) {
       const queued = cloudFailedWrites.find(x => x.operationId === (opts.failedTask && opts.failedTask.operationId));
       if (queued) removeCloudFailedWrite(queued.id);
       showToast(e.message, null, null, 5500);
@@ -5229,6 +5375,7 @@ async function mustCloudWrite(actionName, fn, opts) {
   }
 }
 loadCloudFailedWrites();
+quarantineLegacyReturnsQueue();
 restorePendingUnitIntentsFromFailedWrites();
 updateCloudFailButton();
 async function hardDeleteDocWithBackup(name, id, data, reason) {
@@ -21064,10 +21211,11 @@ app.addEventListener('click', (e) => {
   else if (role === 'clear-returns-history') showConfirm('ניקוי היסטוריה', 'למחוק את כל היסטוריית החזרות? יישמר גיבוי בסל מחזור.', 'מחק הכל', () => clearAllDocs('returns'));
   else if (role === 'rc-scan') openReceivingScanner();
   else if (role === 'rc-date-clear') { receiptDocDate = null; saveReceiptDraft(); buzz(12); showToast('התאריך נוקה — התעודה תירשם על היום', null, null, 2200); refreshReceipt(); }
+  else if (role === 'ret-legacy-view') { showReturnsLegacyCopy(); }
   else if (role === 'ret-date-clear') { returnsDocDate = ''; returnsDocDates[returnsSlot] = ''; saveReturnsDraft(); buzz(12); showToast('התאריך נוקה — ההחזרה תירשם על היום', null, null, 2200); renderReturns(); }
   else if (role === 'rc-crates') { openCratePicker('receipt'); }
   else if (role === 'ret-crates') { openCratePicker('returns'); }
-  else if (role === 'ret-slot') { const de = $('retDocDate'); if (de) returnsDocDate = de.value || ''; switchReturnsSlot(t.dataset.slot); }
+  else if (role === 'ret-slot') { switchReturnsSlot(t.dataset.slot); }
   // v62: מסלול הצילום. פותח את התעודה, מפעיל את הסורק, ומשגר את הקריאה
   // לרקע — בלי await, כדי שהעובד יתחיל לסרוק מיד. העוגנים ייכנסו לבד.
   else if (role === 'rc-open-photo' || role === 'rc-open-photo-quantity') {
@@ -21266,7 +21414,7 @@ app.addEventListener('click', (e) => {
   });
   else if (role === 'health-go-prices') setView('prices');
   else if (role === 'health-go-receipts') setView('receiptsHistory');
-  else if (role === 'trash-restore') { const ti = trash.find(x => x.trashId === id); const tiMerge = !!(ti && ti.reason === 'merge-return' && ti.mergeTargetBackup); showConfirm('שחזור מסל המחזור', tiMerge ? 'זו רשומת מיזוג — השחזור יבטל את כל המיזוג: הפריטים יחזרו לתעודת המקור, ותעודת היעד תחזור למצבה שלפני המיזוג.' : 'לשחזר את הרשומה למקום המקורי?', 'שחזר', () => restoreTrashItem(id)); }
+  else if (role === 'trash-restore') { const ti = trash.find(x => x.trashId === id); if (returnsUnsendTrash(ti)) { restoreTrashItem(id); return; } const tiMerge = !!(ti && ti.reason === 'merge-return' && ti.mergeTargetBackup); showConfirm('שחזור מסל המחזור', tiMerge ? 'זו רשומת מיזוג — השחזור יבטל את כל המיזוג: הפריטים יחזרו לתעודת המקור, ותעודת היעד תחזור למצבה שלפני המיזוג.' : 'לשחזר את הרשומה למקום המקורי?', 'שחזר', () => restoreTrashItem(id)); }
   else if (role === 'trash-delete') showConfirm('מחיקה לצמיתות', 'למחוק את הרשומה הזאת לצמיתות מסל המחזור?', 'מחק לצמיתות', () => deleteTrashItem(id));
   else if (role === 'trash-clear') showConfirm('ריקון סל מחזור', 'למחוק לצמיתות את כל מה שנמצא בסל המחזור?', 'רוקן', clearTrash);
   else if (role === 'del-receipt') { const rc = receipts.find(x => x.id === id), own = receiptOwnDeliveryPapers(rc); showConfirm('מחיקת תעודה', 'למחוק את התעודה' + (rc ? ' מ-' + new Date(rc.timestamp).toLocaleDateString('he-IL') : '') + '?' + (own.length ? ' גם ' + paperPhotosText(own) + (own.length === 1 ? ' יימחק' : ' יימחקו') + ' (לסל המחזור).' : ''), 'מחק', () => delReceipt(id)); }
@@ -22058,7 +22206,7 @@ function setOnlineUI() {
   $('onlineDot').className = 'inline-flex rounded-full h-2.5 w-2.5 ' + (isOnline ? 'bg-green-400 shadow-[0_0_6px_rgba(74,222,128,.8)]' : 'bg-red-400');
   $('onlineText').textContent = isOnline ? 'יש אינטרנט' : 'אין אינטרנט';
 }
-window.addEventListener('online', () => { setOnlineUI(); if (cloudFailedWrites.length) retryCloudFailedWrites(); paperFlushPending(); });
+window.addEventListener('online', () => { if (returnsEvents) returnsEvents.flush(); setOnlineUI(); if (cloudFailedWrites.length) retryCloudFailedWrites(); paperFlushPending(); });
 window.addEventListener('offline', setOnlineUI);
 setOnlineUI();
 

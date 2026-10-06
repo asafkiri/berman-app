@@ -23,6 +23,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { runtime, appPath } from './receipt-scan-harness.mjs';
+import { returnsCloud } from './returns-cloud-helpers.mjs';
 
 // ===== התפאורה: שלוש תעודות חזרה, בשלושת המצבים, עם חותמות זמן קבועות =====
 // תעודה שנשלחה ועדיין לא אומתה (יומית — כדי לראות את התג "יומית" בכרטיס).
@@ -54,7 +55,7 @@ function openReceipt() {
 
 // מסך התעודות המאוחד מצייר לתוך #app — אותו צומת שהמסך הישן צייר אליו.
 function open(docs, receipts = []) {
-  const rt = runtime();
+  const rt = returnsCloud(runtime());
   rt.context.testReturns = structuredClone(docs);
   rt.context.testReceipts = structuredClone(receipts);
   rt.run(`returns = structuredClone(testReturns); receipts = structuredClone(testReceipts); receiptHistoryFilter = 'all';
@@ -423,15 +424,16 @@ test('the flows that used to go back to the returns screen — a saved verificat
   assert.deepEqual(rv.toasts, ['הזיכוי אומת ✓']);
 
   // תעודה חדשה שנשמרה בלי שליחה: הרשימה מתרוקנת ונוחתים במסך המאוחד
-  const line = "returnsList.push({ productId: 'code_401', name: 'פיתות כוסמין 10 בשקית', barcode: '7290001001', qty: 2 }); setView('returns'); openReturnsSend();";
+  const line = "returnsList.push({ productId: 'code_401', name: 'פיתות כוסמין 10 בשקית', barcode: '7290001001', qty: 2 }); setView('returns');";
   const saved = open([]);
   saved.run('Date.now = () => ' + Date.UTC(2026, 8, 23, 6, 0) + '; ' + line);
+  await saved.startReturnsCloud(); saved.run('openReturnsSend()');
   assert.equal(saved.run('sendCtx.type'), 'returns');
   await saved.run('saveReturnsWithoutSending()');
   assert.equal(saved.run('currentView'), 'receiptsHistory');
   assert.equal(saved.run('returnsList.length'), 0);
   assert.equal(saved.run('sendCtx'), null);
-  const write = saved.writes[saved.writes.length - 1];
+  const write = saved.savedReturnWrites().at(-1);
   assert.equal(write.op, 'set');
   assert.equal(write.path.slice(-2)[0], 'returns');
   assert.equal(write.data.credited, false);
@@ -454,13 +456,14 @@ test('the flows that used to go back to the returns screen — a saved verificat
   // שליחה בוואטסאפ לנהג: אותה נחיתה, והקישור נפתח
   const sent = open([]);
   sent.run("window.location = { href: '' }; " + line);
+  await sent.startReturnsCloud(); sent.run('openReturnsSend()');
   await sent.run("performSend({ name: 'הנהג', phone: '050-1234567' })");
   assert.equal(sent.run('currentView'), 'receiptsHistory');
   assert.equal(sent.run('returnsList.length'), 0);
-  assert.equal(sent.writes[sent.writes.length - 1].data.sentTo, 'הנהג');
-  assert.equal(sent.writes[sent.writes.length - 1].data.schemaVersion, 2);
-  ['totalExVat', 'totalIncVat'].forEach(k => assert.equal(Object.hasOwn(sent.writes[sent.writes.length - 1].data, k), false, k));
-  assert.ok(sent.writes[sent.writes.length - 1].data.items.every(l => !('unitPrice' in l) && !('lineTotal' in l)));
+  assert.equal(sent.savedReturnWrites().at(-1).data.sentTo, 'הנהג');
+  assert.equal(sent.savedReturnWrites().at(-1).data.schemaVersion, 2);
+  ['totalExVat', 'totalIncVat'].forEach(k => assert.equal(Object.hasOwn(sent.savedReturnWrites().at(-1).data, k), false, k));
+  assert.ok(sent.savedReturnWrites().at(-1).data.items.every(l => !('unitPrice' in l) && !('lineTotal' in l)));
   assert.match(sent.run('window.location.href'), /^https:\/\/wa\.me\/972501234567\?text=/);
   assert.equal(sent.requests.length, 0, 'no network');
 });
@@ -551,15 +554,17 @@ test('a filter chip chosen earlier never hides the returns the entry points prom
   assert.equal(rt.run('receiptHistoryFilter'), 'open', 'from receiving (and manage) the chip stays as it was — unchanged behaviour');
 
   // תעודה חדשה שנשמרה בלי שליחה — נוחתת על הרשימה המלאה, לא מאחורי "הושלמו"
-  const line = "returnsList.push({ productId: 'code_401', name: 'פיתות כוסמין 10 בשקית', barcode: '7290001001', qty: 2 }); setView('returns'); openReturnsSend();";
+  const line = "returnsList.push({ productId: 'code_401', name: 'פיתות כוסמין 10 בשקית', barcode: '7290001001', qty: 2 }); setView('returns');";
   const saved = open([]);
   saved.run("receiptHistoryFilter = 'done'; Date.now = () => " + Date.UTC(2026, 8, 23, 6, 0) + '; ' + line);
+  await saved.startReturnsCloud(); saved.run('openReturnsSend()');
   await saved.run('saveReturnsWithoutSending()');
   assert.equal(saved.run('currentView'), 'receiptsHistory');
   assert.equal(saved.run('receiptHistoryFilter'), 'all');
   // וגם שליחה בוואטסאפ
   const sent = open([]);
   sent.run("receiptHistoryFilter = 'done'; window.location = { href: '' }; " + line);
+  await sent.startReturnsCloud(); sent.run('openReturnsSend()');
   await sent.run("performSend({ name: 'הנהג', phone: '050-1234567' })");
   assert.equal(sent.run('currentView'), 'receiptsHistory');
   assert.equal(sent.run('receiptHistoryFilter'), 'all');
