@@ -34,6 +34,7 @@ const rpc = async (operation, args = {}) => {
   return true;
 };
 const setup = `
+try{localStorage.setItem('bm_shared_receiving_live','1')}catch(e){} // v136: הבדיקה הזאת בודקת את הסנכרון בלייב (בחירה מפורשת)
 const initializeApp = () => ({}), getAuth = () => ({currentUser:{getIdToken:async()=> 'test'}});
 const initializeFirestore = () => ({}), getFirestore = () => ({});
 const persistentLocalCache = () => ({}), persistentMultipleTabManager = () => ({});
