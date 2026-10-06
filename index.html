@@ -816,7 +816,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '132'; // v132: "לא הגיע כלום" גדול ופתוח — במסך הקליטה ובמסך הניירות
+const APP_VERSION = '133'; // v133: "לא הגיע כלום" נשמר מיד (בלי מסך ההבדלים); תיקוני הסקירה של v132
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -6088,14 +6088,14 @@ function startReceiptQuantityReview(allMatch) {
     });
     receiptQuantityReview = { key, itemsKey, paperRows: receiptQuantityRowsSignature(paperRows), rows, confirmedAt: null };
     saveReceiptDraft();
-    if (allMatch || none) commitReceiptQuantityReview(); else renderReceiptQuantityReview();
+    if (allMatch || none) commitReceiptQuantityReview({ nothingArrived: none }); else renderReceiptQuantityReview();
   };
   if (none) {
     // ספירה שכבר נעשתה נמחקת — אומרים כמה, כדי שלא יימחק בטעות מה שבאמת הגיע
     const n = receiptPaperDocCount(), counted = receiptList.reduce((a, l) => a + (Number(l && l.qty) || 0), 0);
     showConfirm('לא הגיע כלום?', (counted > 0 ? 'שים לב: כבר נספרו ' + mtxQty(counted) + ' יח׳ — הספירה תימחק. ' : '') +
-      (n > 1 ? 'לא הגיע כלום מכל ' + n + ' התעודות בקליטה: כל השורות שבהן' : 'כל השורות שבתעודה') + ' יירשמו כחוסר (0 התקבלו). ' +
-      'אם משהו כן הגיע — סרוק אותו או בחר "יש חוסרים או עודפים". המאזן ישייך את החוסרים למה שכבר חסר או עודף בהיסטוריה, ויראה מה באמת פתוח.', 'לא הגיע כלום', begin);
+      (n > 1 ? 'לא הגיע כלום מכל ' + n + ' התעודות בקליטה: כל השורות שבהן' : 'כל השורות שבתעודה') + ' יירשמו כחוסר (0 התקבלו), והקליטה תישמר. ' +
+      'אם משהו כן הגיע — סרוק אותו או בחר "יש חוסרים או עודפים". המאזן ישייך את החוסרים למה שכבר חסר או עודף בהיסטוריה, ויראה מה באמת פתוח.', 'לא הגיע כלום — שמור', begin);
     return;
   }
   if (allMatch && receiptList.length) showConfirm('אישור כל הכמויות', 'הכמויות שכבר הוזנו יוחלפו בכמויות שבתעודה, כולל ביטול חוסרים ועודפים שסומנו. בדקת שכולן תואמות?', 'כן, כל הכמויות תואמות', begin);
@@ -6150,7 +6150,9 @@ function receiptQuantityCheckAudit() {
   return { method: 'manual', confirmedAt: r.confirmedAt, differences: r.rows.filter(row => row.kind !== 'match').map(row =>
     ({ productId: row.productId, paperQty: row.paperQty, received: receiptQuantityActual(row) })) };
 }
-function commitReceiptQuantityReview() {
+// opts.nothingArrived (v133): "לא הגיע כלום" — האישור כבר נאמר בשאלה; הקליטה נסגרת ונשמרת בלי מסך ההבדלים ובלי הסיכום
+function commitReceiptQuantityReview(opts) {
+  opts = opts || {};
   if (!canEditSharedReceipt()) { sharedReceiptReadOnlyNotice(); return; }
   const r = receiptQuantityReview, paperRows = receiptQuantityPaperRows();
   if (!r || !paperRows || r.key !== receiptQuantityPaperKey() || r.itemsKey !== JSON.stringify(receiptList)
@@ -6172,7 +6174,20 @@ function commitReceiptQuantityReview() {
   // same question a second time, so it is answered here. A shortage, a surplus,
   // an unread line or an unknown product still stops there and waits for a person.
   if (currentView === 'reconcile' && aiScanAllGood(aiScanEvaluation)) aiApplyInvoiceResult();
+  // v133: "לא הגיע כלום" — מסך ההבדלים ("חוסר 13, חוסר 2 — קלוט את התעודה") שואל שוב את מה שכבר אושר,
+  // ואחריו הסיכום. נסגר ונשמר, רק כשההבדלים הם בדיוק החוסרים שאושרו: בלי עודף, בלי שורה שלא נקראה,
+  // בלי מוצר לא מוכר. כל דבר אחר — נעצר כמו קודם, וכך גם שאלה אמיתית בדרך (כפילות, אימות קריאה).
+  else if (opts.nothingArrived && currentView === 'reconcile' && aiScanOnlyShortages(aiScanEvaluation) && receiptList.every(l => Number(l.qty) === 0)) aiApplyInvoiceResult();
+  if (opts.nothingArrived && pendingReceipt && !pendingReceipt.noDoc) confirmReceipt().catch(e => console.error('nothing-arrived save failed', e));
   return true;
+}
+// v133: הממצאים הם חוסרים בלבד (ו"לא הגיע כלום" אישר אותם) — אין עודף, שורה שלא נקראה או מוצר לא מוכר
+function aiScanOnlyShortages(ev) {
+  if (!ev || ev.valid !== true) return false;
+  const findings = (Array.isArray(ev.findings) ? ev.findings : []).filter(aiIsActionableFinding);
+  const residuals = Array.isArray(ev.residuals) ? ev.residuals : [];
+  const unknown = (Array.isArray(ev.barcodeSuggestions) ? ev.barcodeSuggestions : []).filter(x => x && x.unknownProduct === true);
+  return findings.length > 0 && findings.every(f => f.type === 'shortage') && residuals.length === 0 && unknown.length === 0;
 }
 
 function renderReceiving() {
@@ -13199,7 +13214,16 @@ function paperLedger(opts) {
   const regNotes = new Set();
   baseWide.forEach(d => { if (d.type === 'receipt' && d.doc) (Array.isArray(d.doc.shortCreditUnits) ? d.doc.shortCreditUnits : []).forEach(x => { const n = x && receiptPaperNumber(x.noteNumber); if (n) regNotes.add(n); }); });
   const pairCtx = { placed, docOf: (t, id) => byId.get(t + ':' + id), mainOf, pendingRets, unsureDays, regNotes, recs: baseWide.filter(d => d.type === 'receipt') };
-  const answered = (cp, k) => declared.some(d => d.declare === 'correction' && d.standsFor && d.standsFor.chargePaperId === cp.id && (d.rows || []).some(r => r && paperRowKey(r).key === k));
+  // v133: "כן, זה תיקון" (תשובה מגרסה קודמת) חלה רק באותם תנאים כמו בהחלה שלה למטה: ההחזרה בלי נייר ראשי, ונייר החיוב
+  // עוד נספר — נייר משלוח קטן שנקלט, רק תשובה שנאמרה על הקליטה שלו. תשובה מ-v128 על נייר החיוב 95141, שהיום הוא נייר
+  // משלוח קטן בקליטה, כבר לא חלה; אם הייתה חוסמת את הזיהוי — אף אחד לא היה מקזז, והתיקון היה נראה "חויבת ולא קיבלת"
+  // (6.10.2026). עכשיו התיקון מזוהה לבד, כמו אצל מי שלא ענה.
+  const corrDeclLive = d => {
+    const sf = d.standsFor || {}, ret = sf.returnId, ch = sf.chargePaperId;
+    if (ret && mainOf[ret] && mainOf[ret].length) return false;
+    return !ch || placed.some(x => x.id === ch) || !!(sf.receiptId && smallIn.some(x => x.id === ch && x.recId === sf.receiptId));
+  };
+  const answered = (cp, k) => declared.some(d => d.declare === 'correction' && d.standsFor && d.standsFor.chargePaperId === cp.id && corrDeclLive(d) && (d.rows || []).some(r => r && paperRowKey(r).key === k));
   const corrCands = [];
   // עודף של אותו מוצר בקליטה סמוכה (גם קטן מהשורה), או מאזן המוצר קטן מהשורה — חלק ממה שחויב הגיע: לא תיקון
   const unexplained = (k, q, day, recId) => {
@@ -13219,9 +13243,10 @@ function paperLedger(opts) {
   corrCands.forEach(c => { c.list = ledgerCorrectionCandidates(c.k, c.cp, c.q, pairCtx); });
   const slotUses = {}, slotTaken = new Set();
   corrCands.forEach(c => c.list.forEach(m => { slotUses[m.slot] = (slotUses[m.slot] || 0) + 1; }));
-  // שורת זיכוי ש"כן, זה תיקון" (תשובה מגרסה קודמת) כבר הסבירה — לא מסבירה חיוב נוסף
-  declared.filter(d => d.declare === 'correction' && !d.auto && d.standsFor && d.standsFor.chargePaperId).forEach(d => {
-    const cp = placed.find(x => x.id === d.standsFor.chargePaperId) || smallIn.find(x => x.id === d.standsFor.chargePaperId);
+  // שורת זיכוי ש"כן, זה תיקון" (תשובה מגרסה קודמת) כבר הסבירה — לא מסבירה חיוב נוסף (v133: רק תשובה שעדיין חלה)
+  declared.filter(d => d.declare === 'correction' && !d.auto && d.standsFor && d.standsFor.chargePaperId && corrDeclLive(d)).forEach(d => {
+    const ch = d.standsFor.chargePaperId;
+    const cp = placed.find(x => x.id === ch) || smallIn.find(x => x.id === ch && x.recId === d.standsFor.receiptId);
     if (cp) (Array.isArray(d.rows) ? d.rows : []).filter(Boolean).forEach(r => ledgerCorrectionCandidates(paperRowKey(r).key, cp, Number(r.qty) || 0, pairCtx, true).forEach(m => slotTaken.add(m.slot)));
   });
   corrCands.forEach(c => {

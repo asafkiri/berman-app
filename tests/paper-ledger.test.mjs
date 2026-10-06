@@ -474,6 +474,28 @@ test('נייר קטן שנקלט ("לא הגיע כלום") עם 142: נשאר �
   assert.equal(lg.placed.find(p => p.id === P.p142.id).attach.role, 'side', 'הנייר הקטן שלא הגיע לידו — 142 משלים, כמו ליד נייר חיוב');
 });
 
+// v133 — התשובה "כן, זה תיקון" מ-v128 על נייר החיוב 95141 (היום: נייר משלוח קטן שנקלט, בלי receiptId בתשובה). היא כבר
+// לא חלה ("הוחלפה"), ועד v132 עוד חסמה את הזיהוי של התיקון — כך שאף אחד לא קיזז, ולחם אחיד ×13 נראה "חויבת ולא
+// קיבלת" (6.10.2026, מהגיבוי של אסף). עכשיו — כמו בלי התשובה: רק 1231 ×2, והתיקון מזוהה לבד.
+test('תשובה ישנה "כן, זה תיקון" על 95141, שהיום נקלט כנייר קטן — לא חוסמת את הזיהוי: רק 1231 ×2; תשובה על הקליטה עצמה — חלה, בלי כפל', () => {
+  const ret = F.returns.find(x => (x.docDate || x.date) === '2026-10-04').id;
+  const old = { schema: 1, id: 'decl_corr_v128', kind: 'declared', declare: 'correction', state: 'accepted', docDay: '2026-10-04', timestamp: 3, writtenBy: '128',
+    standsFor: { chargePaperId: P.p141.id, returnId: ret }, rows: [{ line: 1, productId: 'code_100', itemCode: '100', qty: 13 }] };
+  const papers = [SMALL, P.p142, old];
+  const lg = paperLedger({ recs: F.receipts.concat([RC_SMALL]), rets: F.returns, papers, from: '2026-09-01', asOf: '2026-10-05' });
+  assert.equal(lg.states[old.id], 'superseded', 'התשובה הישנה כבר לא חלה');
+  assert.deepEqual(brief(lg), [['chargedNotReceived', 'code_1231', 2, 'problem']], 'בלי "לחם אחיד ×13 חויבת ולא קיבלת"');
+  assert.deepEqual(nets(lg), { code_1231: 2 });
+  const auto = lg.items.find(i => i.kind === 'autoCorrection');
+  assert.ok(auto, 'התיקון מזוהה לבד'); assert.deepEqual([auto.key, auto.units], ['code_100', 13]);
+  // תשובה שנאמרה על הקליטה הזאת (receiptId) — חלה, והזיהוי לא מוסיף עוד אחד (בלי קיזוז כפול)
+  const own = { ...old, id: 'decl_corr_own', standsFor: { ...old.standsFor, receiptId: RC_SMALL.id } };
+  const lg2 = paperLedger({ recs: F.receipts.concat([RC_SMALL]), rets: F.returns, papers: [SMALL, P.p142, own], from: '2026-09-01', asOf: '2026-10-05' });
+  assert.notEqual(lg2.states[own.id], 'superseded');
+  assert.deepEqual(lg2.autoDeclared, [], 'התשובה מכסה — בלי זיהוי נוסף');
+  assert.deepEqual(nets(lg2), { code_1231: 2 });
+});
+
 test('נייר קטן שצורף לקליטה של 5.10 — אותה תוצאה; בלי 142 — לחם אחיד ×13 "חויבת ולא קיבלת"; כשהסחורה שלו הגיעה — אין תיקון', () => {
   const RC1005 = 'receipt_92580828-0558-42fc-8e7e-2a4fa1560417';
   const recs = F.receipts.map(r => r.id !== RC1005 ? r : { ...r, paperDocs: r.paperDocs.concat([{ kind: 'charge', number: '290095141' }]),
