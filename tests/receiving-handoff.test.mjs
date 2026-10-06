@@ -280,3 +280,48 @@ test('שורה עליונה: תאריך להצעה ישנה, "שורה אחת", 
   assert.match(r.run(`receivingHandoffWhat({ lines: 1, units: 3 })`), /ב-שורה אחת/);
   assert.match(r.run(`receivingHandoffWhat({ lines: 2, units: 3, docs: ['1', '2'] })`), /תעודות 1, 2 · נספרו 3 יח׳ ב-2 שורות/);
 });
+
+test('לחיצה כפולה על "שמור" — תעודה אחת; בזמן השמירה אי אפשר לערוך', async () => {
+  const cloud = createCloud();
+  const a = await startOnA(cloud);
+  const id = a.run('receiptDraftId');
+  a.run(`pendingReceipt = { lines: receiptList.slice(), status: 'ok', noteTotal: 0, noteParts: [] };`);
+  const first = a.run('confirmReceipt()');
+  assert.equal(a.run('canEditSharedReceipt()'), false, 'בזמן השמירה — לא עורכים');
+  const second = a.run('confirmReceipt()');
+  await first; await second; await settle();
+  assert.equal(cloud.transactions >= 1, true);
+  assert.ok(record(cloud, id), 'נשמרה');
+  assert.equal(cloud.paths('/receipts/').length, 1, 'תעודה אחת');
+});
+
+test('בלי רשת בזמן עבודה — השורה העליונה אומרת "הגיבוי לענן מתעכב", והעבודה ממשיכה', async () => {
+  const cloud = createCloud();
+  const a = await startOnA(cloud);
+  online(a, false);
+  a.run(`receiptList = [{ productId: products[0].id, name: products[0].name, barcode: products[0].barcode, qty: 2 }]; saveReceiptDraft();`);
+  await sync(a);
+  assert.match(banner(a), /הגיבוי לענן מתעכב — הקליטה שמורה בטלפון/);
+  assert.equal(a.run('canEditSharedReceipt()'), true);
+  online(a, true); await sync(a);
+  assert.match(banner(a), /הקליטה מגובה בענן/);
+  assert.deepEqual(JSON.parse(handoffDoc(cloud, a.run('receiptDraftId')).payload).state.receiptList.map(l => l.qty), [2]);
+});
+
+test('קליטה שמגיעה מטלפון אחר עם קריאה "רצה": בלי קריאה — "צלם שוב או הקלד"; עם קריאה — העוגנים ממנה, בלי בקשה', async () => {
+  const cloud = createCloud();
+  const a = await startOnA(cloud);
+  const p = JSON.parse(handoffDoc(cloud, a.run('receiptDraftId')).payload);
+  const b = phone(cloud, 'טלפון ב');
+  // עם קריאה: הקריאה כבר יש — לוקחים ממנה את העוגנים
+  p.state.aiScanBusy = true; p.state.receiptPaperScanState = 'running'; p.state.receiptNotes = []; p.state.receiptAnchorSource = null;
+  b.context.__p = p; b.run('receivingHandoffApply(JSON.parse(JSON.stringify(__p)), {})');
+  assert.equal(b.run('aiScanBusy'), false); assert.equal(b.run('receiptPaperScanState'), 'ok');
+  assert.deepEqual(json(b, 'receiptNotes.map(n => n.units)'), [30]);
+  // בלי קריאה: "צלם שוב או הקלד"
+  p.state.aiScanResponse = null; p.state.receiptDraftId = 'receipt_other';
+  b.context.__p = p; b.run('receivingHandoffApply(JSON.parse(JSON.stringify(__p)), {})');
+  assert.equal(b.run('receiptPaperScanState'), 'failed');
+  assert.match(b.run('receiptPaperScanProblems[0]'), /לא הסתיימה בטלפון השני/);
+  assert.equal(b.requests.length, 0);
+});
