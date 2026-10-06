@@ -470,7 +470,7 @@ test('טיוטה מלפני המנגנון שבוטלה — הביטול מקו�
   const a = phone(cloud, 'א', { draft: legacy }); a.start(); await settle();
   a.h.cancel({ paperIds: ['p9'] }); a.d = emptyDraft(); a.h.changed(); a.h.retry(); await settle(120);
   assert.equal(doc(cloud, 'old1'), null, 'לא נוצר מסמך "בוטלה"');
-  assert.deepEqual(a.closed, [], 'הניירות לא נמחקים');
+  assert.deepEqual(j(a.closed), [{ paperIds: ['p9'] }], 'מה שהמשתמש אישר בביטול (הניירות) — כן יוצא');
   // ולחיצה בלי שינוי לא תובעת
   const b = phone(cloud, 'ב', { draft: legacy }); b.start(); await settle();
   b.h.changed({ user: true }); await settle();
@@ -542,8 +542,9 @@ test('עותקים בצד: של רשומה שכבר נשמרה — יורדים 
   const cloud = createCloud();
   const a = phone(cloud, 'א'), b = phone(cloud, 'ב'); a.start(); b.start(); await settle();
   a.newDraft('r1'); a.set('bread', 3); await settle();
+  a.client.setOnline(false); a.set('bread', 9); await settle(); // ספירה בא' שלא הגיעה לענן
   await b.h.take('r1'); await settle(); b.set('bread', 7); await settle();
-  a.d.items.bread = 9; // ספירה מקומית שלא עברה
+  a.client.setOnline(true); await settle(80);
   assert.equal(a.state().away.localAhead, true, 'הטלפון יודע שיש בו ספירה שלא הגיעה');
   await a.h.take('r1'); await settle();
   assert.equal(a.d.items.bread, 7);
@@ -584,4 +585,52 @@ test('מניחים את הטלפון (pagehide / מעבר לרקע) — הגיב
   assert.deepEqual(JSON.parse(doc(cloud, 'r1').payload).items, { a: 1 }, 'pagehide — מיד');
   d.items.a = 2; h.changed(); ctx.document.visibilityState = 'hidden'; docListeners.visibilitychange(); await settle();
   assert.deepEqual(JSON.parse(doc(cloud, 'r1').payload).items, { a: 2 }, 'מעבר לרקע — מיד');
+});
+
+
+test('מעבר רגיל: הטלפון הראשון לא שינה כלום אחרי המעבר — לא "יש כאן ספירה שלא הגיעה", ו"החזר" לא שומר בצד גרסה ישנה', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'א'), b = phone(cloud, 'ב'); a.start(); b.start(); await settle();
+  a.newDraft('r1'); a.set('bread', 3); await settle();
+  await b.h.take('r1'); await settle(); b.set('bread', 9); await settle();
+  assert.equal(a.state().away.localAhead, false);
+  await a.h.take('r1'); await settle();
+  assert.equal(a.d.items.bread, 9);
+  assert.deepEqual(a.debug().side, [], 'בלי "גרסה קודמת" מטעה');
+});
+
+test('טיוטה שהתרוקנה אחרי פתיחה מחדש (בלי רשת) — גם אז יורדת מההצעות; "כבר נשמרה" ממקום אחר — המסמך יורד מההצעות', async () => {
+  const cloud = createCloud();
+  const a1 = phone(cloud, 'א'), b = phone(cloud, 'ב'); a1.start(); b.start(); await settle();
+  a1.newDraft('r1'); a1.set('bread', 3); await settle();
+  a1.client.setOnline(false); a1.h.stop();
+  const a2 = phone(cloud, 'א', { storage: a1.storage, cache: a1.client.cache, draft: a1.d });
+  a2.client.setOnline(false); a2.start(); await settle();
+  a2.d = emptyDraft(); a2.h.changed();
+  a2.client.setOnline(true); a2.h.retry(); await settle(120);
+  assert.equal(doc(cloud, 'r1').openKey, null, 'חונה');
+  assert.equal(b.state().offers.length, 0);
+  // exists
+  a2.newDraft('r5'); a2.set('x', 1); await settle();
+  cloud.put(recPath('r5'), { items: { x: 4 } });
+  assert.equal((await a2.h.finish('r5', { items: { x: 1 } })).reason, 'exists');
+  a2.h.retry(); await settle(120);
+  assert.equal(doc(cloud, 'r5').openKey, null);
+  a2.h.clear(); await settle();
+  assert.deepEqual(a2.state().offers, [], 'לא מוצעת לעצמי');
+});
+
+test('עותק בצד של קליטה שבוטלה — נפתח כקליטה חדשה (מזהה חדש) ואפשר לשמור אותה; "מחק את העותק"', async () => {
+  const cloud = createCloud();
+  const a = phone(cloud, 'א'), b = phone(cloud, 'ב'); a.start(); b.start(); await settle();
+  a.newDraft('r1'); a.set('bread', 3); await settle();
+  await b.h.take('r1'); await settle();
+  b.h.cancel(); b.d = emptyDraft(); b.h.changed(); b.h.retry(); await settle(120);
+  assert.equal(a.state().away.away, 'canceled');
+  a.h.clear(); await settle();
+  assert.equal(a.state().side[0].canOpen, false, 'בלי reviveDraft — לא נפתח');
+  // מתאם שיודע לפתוח כקליטה חדשה
+  const c = phone(cloud, 'ג'); c.start(); await settle();
+  c.h.importSide({ sessionId: 'old', payload: JSON.stringify({ v: 1, sessionId: 'old', items: { milk: 2 } }), reason: 'canceled' });
+  assert.equal(c.h.dropSide('old').ok, true); assert.deepEqual(c.debug().side, []);
 });

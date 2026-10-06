@@ -143,7 +143,7 @@ test('סיום בשני: נשמרת בטרנזקציה במזהה של הקלי�
   assert.equal(record(cloud, draftId).savedBy.gen, 2, 'התעודה השמורה לא השתנתה');
 });
 
-test('"החזר אותה לכאן" — הספירה העדכנית מהשני חוזרת, והספירה המקומית נשמרת בצד', async () => {
+test('"החזר אותה לכאן" — הספירה העדכנית מהשני חוזרת (ובלי "גרסה קודמת" כשלא היה שינוי מקומי)', async () => {
   const cloud = createCloud();
   const a = await startOnA(cloud);
   const b = await takeOnB(cloud, a);
@@ -156,8 +156,7 @@ test('"החזר אותה לכאן" — הספירה העדכנית מהשני ח
   assert.equal(a.run('canEditSharedReceipt()'), true);
   await settle();
   assert.match(banner(b), /ממשיכה בטלפון "טלפון א"/);
-  const side = JSON.parse(a.storage.get('bm_handoff_receiving_side'));
-  assert.equal(side.length, 1); assert.equal(side[0].reason, 'same', 'הגרסה המקומית — בצד');
+  assert.equal(JSON.parse(a.storage.get('bm_handoff_receiving_side') || '[]').length, 0, 'בא\' לא היה שום שינוי שלא הגיע — אין "גרסה קודמת"');
 });
 
 test('קליטה אחרת פתוחה בטלפון השני — שואלים; היא נשמרת בצד, ואחרי הסיום נפתחת מהשורה העליונה', async () => {
@@ -374,4 +373,13 @@ test('טיוטה שהתרוקנה (למשל הצילום בוטל) — לא נש
   assert.equal(handoffDoc(cloud, id).openKey, null, 'חונה');
   const b = phone(cloud, 'טלפון ב'); await settle();
   assert.doesNotMatch(banner(b), /יש קליטה פתוחה/);
+});
+
+test('ביטול שהגיע לענן באיחור — נייר שבינתיים נכנס לקליטה הפתוחה לא יוצא לסל', async () => {
+  const cloud = createCloud();
+  const a = await startOnA(cloud);
+  a.run(`globalThis.__discarded = []; paperDiscard = async p => { __discarded.push(p.id); return { ok: true }; };`);
+  // הנייר בקליטה הפתוחה עכשיו (ביטול ו"מתחילים מחדש" עם אותו נייר)
+  a.run(`receivingDiscardCanceledPapers(['paper_290095141'])`); await settle();
+  assert.deepEqual(json(a, '__discarded'), [], 'בשימוש — נשאר');
 });

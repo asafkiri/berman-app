@@ -109,7 +109,7 @@
 | מפתח | מה |
 |---|---|
 | `{p}_device_id` | מזהה אקראי קבוע לטלפון. אם אי אפשר לשמור אותו, משתמשים במזהה אקראי בזיכרון לריצה הזאת. **לעולם לא ערך קבוע** כמו `'device-unknown'` |
-| `{p}_handoff_{kind}_claim` | `{sessionId, gen}`. `gen: 0` = הטיוטה נוצרה כאן והבעלות עוד לא אושרה. **אין claim** לטיוטה שהייתה פתוחה כשהמודול עלה לראשונה בטלפון (`…_legacy`) |
+| `{p}_handoff_{kind}_claim` | `{sessionId, gen, fp}` — `fp`: טביעת התוכן שהטלפון אישר בענן לאחרונה (גיבוי/העברה). "יש כאן ספירה שלא הגיעה" = הטביעה עכשיו שונה ממנה; ב"החזר" נשמרת בצד רק ספירה כזו. `gen: 0` = הטיוטה נוצרה כאן והבעלות עוד לא אושרה. **אין claim** לטיוטה שהייתה פתוחה כשהמודול עלה לראשונה בטלפון (`…_legacy`) |
 | `{p}_handoff_{kind}_away` | `{sessionId, away: 'moved'/'saved'/'canceled', by, gen}`. נשמר כשהשרת אמר. נמחק רק ב"החזר", ב"פתח אותה" או ב"נקה" |
 | `{p}_handoff_{kind}_side` | עותקים בצד (סעיף 5.8) |
 | `{p}_handoff_{kind}_close` | ביטולים שעוד לא נסגרו בענן |
@@ -422,7 +422,8 @@ await h.finish(recordId, data);    // במקום set עיוור — { ok } / { u
 await h.take(sessionId);      // "המשך" / "החזר"
 h.cancel(meta);               // לפני שמרוקנים טיוטה שבוטלה; meta (למשל מזהי רשומות למחיקה) חוזר ב-onClosed
 h.tidy();                     // כשהרשומות השמורות התעדכנו (מאזין) — עותקים בצד של מה שכבר נשמר יורדים
-h.clear(); h.openSide(sessionId); h.importSide(entry); h.state(); h.stop();
+h.clear(); h.openSide(sessionId); h.dropSide(sessionId); h.importSide(entry); h.state(); h.stop();
+// adapter.reviveDraft(payloadText) → מזהה חדש: עותק של קליטה שבוטלה בטלפון אחר נפתח כקליטה חדשה (בלי — נשאר לעיון)
 ```
 `h.state()` מחזיר את מה שהשורה העליונה והשומר צריכים: `readOnly`, `away`, `checking`, `canTakeBack`, `offers`, `side`, `status`.
 בברמן החיבור כולו נמצא ב-`index.html`, בבלוק "v137: קליטה בטלפון, גיבוי בענן ומעבר בין טלפונים". הוא כולל את

@@ -90,7 +90,8 @@
     // claim: { sessionId, gen } — gen 0 = נוצרה כאן, הבעלות עוד לא אושרה. אין claim = טיוטה מלפני המנגנון בטלפון הזה
     const claim = () => readKey(K.claim, null);
     const claimFor = sessionId => { const c = claim(); return c && c.sessionId === sessionId ? c : null; };
-    const setClaim = (sessionId, gen) => writeKey(K.claim, { sessionId, gen: Number(gen) || 0 });
+    // fp — טביעת התוכן שהטלפון הזה אישר בענן לאחרונה (גיבוי / העברה): כך יודעים אם יש בו שינויים שלא הגיעו
+    const setClaim = (sessionId, gen, fp) => { const c = claimFor(sessionId); writeKey(K.claim, { sessionId, gen: Number(gen) || 0, fp: fp !== undefined ? fp : (c ? c.fp || null : null) }); };
     const away = () => readKey(K.away, null);
     const awayFor = sessionId => { const a = away(); return a && a.sessionId === sessionId ? a : null; };
     function setAway(sessionId, kindOfAway, docData, extra) {
@@ -101,7 +102,6 @@
         localAhead: prev && prev.away === kindOfAway ? !!prev.localAhead : false }, extra || {});
       if (prev && equal(prev, next)) return;
       writeKey(K.away, next);
-      if (active === sessionId) active = null;
     }
     const clearAway = sessionId => { const a = away(); if (a && (!sessionId || a.sessionId === sessionId)) writeKey(K.away, null); };
     const sideList = () => (Array.isArray(readKey(K.side, [])) ? readKey(K.side, []) : []);
@@ -195,7 +195,6 @@
     let started = false, stopped = false, status = 'idle', tooBigNow = false, writing = null, again = false, debounceTimer = null, retryTimer = null;
     let finishing = false, taking = false, checking = null, lastScan = false, scanStartedLocal = null, scanBeat = 0, scanTimer = null, beatTimer = null;
     let watched = new Map(), currentDoc = null, offerDocs = [], offersFromServer = false, unsubQuery = null;
-    let active = null; // המושב שהשרת אישר שהוא של הטלפון הזה (לגילוי טיוטה שנעלמה בלי שמירה/ביטול)
     const closedHere = new Set(); // מושבים שנשמרו / בוטלו / נוקו כאן — לא מוצעים בחזרה עד שהשרת מראה שנסגרו
     const scanSeen = new Map();
     function setStatus(next) { if (status !== next) { status = next; emit(); } }
@@ -264,14 +263,16 @@
       } else if (cur.state === 'canceled') setAway(sessionId, 'canceled', cur);
       else if (cur.state === 'open' && cur.deviceId !== me()) {
         // האם בטלפון הזה יש ספירה שלא הגיעה לטלפון השני (לא נבנה בכל לחיצה: רק כשהשרת שולח מסמך)
+        // רק שינויים שהטלפון הזה עשה אחרי הגיבוי האחרון שלו — לא כל שינוי שהטלפון השני עשה
         let ahead = false;
-        try { const p = withPayload(d || draft()); ahead = p.payload != null && cur.payload != null && p.payload !== cur.payload; } catch (e) { ahead = false; }
+        try { const c = claimFor(sessionId); ahead = !!(c && c.fp && fingerprint(d || draft()) !== c.fp); } catch (e) { ahead = false; }
         setAway(sessionId, 'moved', cur, { localAhead: ahead });
       } else if (cur.state === 'open' && cur.deviceId === me()) {
-        clearAway(sessionId);
+        // שלי — "עברה" יורד. "נשמרה" שבא מהרשומה (נשמרה ממקום אחר, 'exists') — נשאר, גם כשהמסמך עוד פתוח
+        const a0 = awayFor(sessionId);
+        if (a0 && a0.away === 'moved') clearAway(sessionId);
         const c = claimFor(sessionId);
         if (!c || c.gen !== Number(cur.gen)) setClaim(sessionId, Number(cur.gen) || 0);
-        active = sessionId;
       }
     }
     function startQuery() {
@@ -341,6 +342,7 @@
       if (!c) { setStatus('local'); return; } // טיוטה מלפני המנגנון שעוד לא השתנתה כאן — לא נתבעת
       if (!online()) { setStatus('failed'); scheduleRetry(); return; }
       const d = withPayload(d0);
+      const fpNow = fingerprint(d0);
       setStatus('saving');
       try {
         const res = await transaction(async t => {
@@ -363,8 +365,8 @@
           if (!still.empty && still.sessionId === d.sessionId) { if (res.away === 'saved' && !awayFor(d.sessionId)) keepLate(d.sessionId, res.doc, still); setAway(d.sessionId, res.away, res.doc); }
           setStatus('idle');
         } else {
-          if (claimFor(d.sessionId)) setClaim(d.sessionId, res.gen);
-          active = d.sessionId; tooBigNow = !!res.tooBig;
+          if (claimFor(d.sessionId)) setClaim(d.sessionId, res.gen, fpNow);
+          tooBigNow = !!res.tooBig;
           setStatus(res.tooBig ? 'too-big' : 'saved');
         }
         if (retryTimer && !closeQueue().length) { timers.clear(retryTimer); retryTimer = null; }
@@ -388,29 +390,38 @@
               const ref = handoffRef(q.sessionId), snap = await t.get(ref);
               const cur = exists(snap) ? snap.data() : null;
               if (q.mode === 'park') {
+                const now0 = draft();
+                if (!now0.empty && now0.sessionId === q.sessionId && !awayFor(q.sessionId)) return 'skip'; // חזרו לעבוד בה
                 if (!cur || cur.state !== 'open' || cur.deviceId !== me() || (q.gen > 0 && Number(cur.gen) !== q.gen)) return 'skip';
                 t.set(ref, Object.assign({}, cur, { openKey: null, parked: true, scanRunning: false, updatedAt: now() })); return 'parked';
               }
               if (!cur) {
                 // טיוטה מלפני המנגנון (אולי פתוחה בטלפון אחר) — הביטול כאן מקומי בלבד
-                if (q.legacy) return 'local';
+                if (q.legacy) return 'local'; // (המשתמש אישר את הביטול — הרשומות הקשורות יוצאות כמו בביטול רגיל)
                 if (!q.editsExisting) { const rec = await t.get(recordRef(q.recordId)); if (exists(rec)) return 'declined'; }
                 t.set(ref, closedDoc(null, { sessionId: q.sessionId, recordId: q.recordId, expected: q.editsExisting ? {} : null, summary: q.summary }, 'canceled'));
                 return 'closed';
               }
+              // כבר בוטלה על ידי הטלפון הזה (commit קודם שהתשובה שלו אבדה) — כמו "נסגרה"
+              if (cur.state === 'canceled' && cur.deviceId === me()) return 'closed';
               if (cur.state !== 'open' || cur.deviceId !== me()) return cur.state === 'open' ? 'declined' : 'skip'; // טלפון אחר לקח — הוא ממשיך איתה
               if (q.gen != null && q.gen > 0 && Number(cur.gen) !== q.gen) return 'declined';
               t.set(ref, closedDoc(cur, { sessionId: q.sessionId, recordId: q.recordId, summary: cur.summary }, 'canceled'));
               return 'closed';
             }, T.close);
             drop();
+            if (q.mode === 'park' && result === 'skip') { const n = draft(); if (!n.empty && n.sessionId === q.sessionId && !awayFor(q.sessionId)) schedule(0); }
             if (q.mode !== 'park') {
-              if (result === 'closed') { try { A.onClosed && A.onClosed(q.meta || {}, q.sessionId); } catch (e) {} }
+              if (result === 'closed' || result === 'local') { try { A.onClosed && A.onClosed(q.meta || {}, q.sessionId); } catch (e) {} }
               else if (result === 'declined') notice('cancel-declined', { sessionId: q.sessionId, meta: q.meta || {} });
             }
           } catch (e) { if (permanent(e)) drop(); else scheduleRetry(); }
         }
-      } finally { closingNow = false; emit(); }
+      } finally {
+        closingNow = false; emit();
+        // נוספו סגירות בזמן הריצה — עוד סבב
+        if (closeQueue().some(x => !queue.some(y => y.sessionId === x.sessionId && y.at === x.at))) timers.set(() => processCloses(), 0);
+      }
     }
     function queueClose(entry) {
       const queue = closeQueue().filter(x => x.sessionId !== entry.sessionId);
@@ -419,14 +430,15 @@
       timers.set(() => processCloses(), 0);
     }
     // טיוטה שהייתה של הטלפון הזה נעלמה (רוקנה / הוחלפה) בלי שמירה, ביטול או עותק בצד — יורדת מההצעות
+    // (לפי ה-claim שנשמר בטלפון — עובד גם אחרי פתיחה מחדש)
     function noticeGone(d) {
-      if (!active) return;
-      const still = !d.empty && d.sessionId === active;
-      if (still) return;
-      const gone = active; active = null;
-      if (closedHere.has(gone) || closing(gone) || sideList().some(x => x.sessionId === gone) || awayFor(gone)) return;
-      const c = claimFor(gone);
-      queueClose({ mode: 'park', sessionId: gone, gen: c ? c.gen : 0 });
+      const c = claim();
+      if (!c || !(c.gen >= 1)) return;
+      if (!d.empty && d.sessionId === c.sessionId) return;
+      const gone = c.sessionId;
+      if (!(closedHere.has(gone) || closing(gone) || sideList().some(x => x.sessionId === gone) || awayFor(gone)))
+        queueClose({ mode: 'park', sessionId: gone, gen: c.gen });
+      if (d.empty) writeKey(K.claim, null); // (טיוטה חדשה תקבל claim משלה)
     }
 
     // ---- עותקים בצד ----
@@ -458,7 +470,8 @@
     // ---- "המשך אותה כאן" ----
     function applyTaken(sessionId, res) {
       A.applyPayload(res.payload, { source: 'handoff', doc: res.doc });
-      setClaim(sessionId, res.gen); clearAway(sessionId); currentDoc = res.doc || null; active = sessionId; closedHere.delete(sessionId);
+      setClaim(sessionId, res.gen, fingerprint(draft())); clearAway(sessionId); currentDoc = res.doc || null; closedHere.delete(sessionId);
+      emit(); // המסך יוצא מ"לקריאה בלבד" מיד (לא מחכים ל-snapshot)
       if (closing(sessionId)) writeKey(K.close, closeQueue().filter(x => x.sessionId !== sessionId)); // המשתמש בחר להמשיך בה
       syncWatches(); setStatus('saved');
       log('הטיוטה עברה לטלפון הזה', (res.doc && res.doc.deviceName ? 'מ-' + res.doc.deviceName : 'מטלפון אחר'), { sessionId, gen: res.gen });
@@ -481,7 +494,9 @@
         const d = withPayload(draft());
         const remote = offerDocs.find(x => x.sessionId === sessionId) || (currentDoc && currentDoc.sessionId === sessionId ? currentDoc : null);
         const localAway = d.empty ? null : awayFor(d.sessionId);
-        if (!d.empty && d.payload != null && !(localAway && localAway.away === 'saved') && (d.sessionId !== sessionId || !remote || d.payload !== remote.payload)) {
+        const myClaim = d.empty ? null : claimFor(d.sessionId);
+        const localAhead = d.empty ? false : myClaim && myClaim.fp ? fingerprint(d) !== myClaim.fp : (!remote || d.payload !== remote.payload);
+        if (!d.empty && d.payload != null && !(localAway && localAway.away === 'saved') && (d.sessionId !== sessionId || localAhead)) {
           const put = sidePut(sideEntry(d, d.sessionId !== sessionId ? 'other' : 'same'));
           if (!put.ok) { taking = false; emit(); return { ok: false, reason: put.reason }; }
           undo = put.undo;
@@ -521,7 +536,7 @@
         const code = errorCode(e);
         const d = draft();
         if (['saved', 'canceled'].includes(code) && !d.empty && d.sessionId === sessionId) setAway(sessionId, code, e.doc || null);
-        emit();
+        emit(); schedule(T.debounce);
         return { ok: false, reason: code };
       }
     }
@@ -568,7 +583,6 @@
       clearAway(sessionId);
       writeKey(K.side, sideList().filter(x => x.sessionId !== sessionId));
       closedHere.add(sessionId);
-      if (active === sessionId) active = null;
     }
     async function finish(recordId, data) {
       const d0 = draft();
@@ -624,11 +638,14 @@
         }
         const code = errorCode(e);
         if (['moved', 'saved', 'canceled'].includes(code)) { setAway(d.sessionId, code, e.doc || null); syncWatches(); }
-        if (code === 'exists') { setAway(d.sessionId, 'saved', null); syncWatches(); } // נשמרה ממקום אחר — "נקה" בלי למחוק כלום
+        if (code === 'exists') { setAway(d.sessionId, 'saved', null); queueClose({ mode: 'park', sessionId: d.sessionId, gen: 0 }); syncWatches(); } // נשמרה ממקום אחר — "נקה" בלי למחוק כלום; המסמך יורד מההצעות
         // השמירה הקודמת שלי נכנסה עם תוכן אחר — מה שבטלפון נשמר בצד (גלוי), והקליטה "נשמרה"
         if (code === 'saved-late') { const by = (e.doc && e.doc.savedBy) || { deviceId: me(), sessionId: d.sessionId, fp: 'other' }; keepLate(d.sessionId, { savedBy: by }, d); setAway(d.sessionId, 'saved', e.doc || null); syncWatches(); }
         return { ok: false, reason: code };
-      } finally { finishing = false; emit(); }
+      } finally {
+        finishing = false; emit();
+        if (!checking) schedule(0); // הגיבוי שנדחה בשביל השמירה — יוצא עכשיו (אם השמירה לא הצליחה)
+      }
     }
 
     // ---- ביטול, ניקוי, פתיחת עותק ----
@@ -636,7 +653,6 @@
       const d = draft(); if (d.empty) return;
       const c = claimFor(d.sessionId), a = awayFor(d.sessionId);
       closedHere.add(d.sessionId);
-      if (active === d.sessionId) active = null;
       if (!a && cloudReady()) queueClose({ mode: 'cancel', sessionId: d.sessionId, recordId: d.recordId, gen: c ? c.gen : null,
         legacy: !c && isLegacy(d.sessionId), editsExisting: !!d.expected, summary: {}, meta: meta || {} });
       else if (!cloudReady()) { try { A.onClosed && A.onClosed(meta || {}, d.sessionId); } catch (e) {} } // בלי ענן — כמו פעם
@@ -652,14 +668,22 @@
       } else writeKey(K.side, sideList().filter(x => x.sessionId !== d0.sessionId || x.reason === 'late')); // נשמרה — העותקים הישנים שלה יורדים (חוץ ממה שנעשה אחרי השמירה)
       if (claimFor(d0.sessionId)) writeKey(K.claim, null);
       clearAway(d0.sessionId);
-      if (active === d0.sessionId) active = null;
       A.emptyDraft && A.emptyDraft();
       syncWatches(); emit();
+      return { ok: true };
+    }
+    function dropSide(sessionId) {
+      sessionId = safeId(sessionId);
+      writeKey(K.side, sideList().filter(x => x.sessionId !== sessionId)); emit();
       return { ok: true };
     }
     function openSide(sessionId) {
       sessionId = safeId(sessionId);
       const entry = sideList().find(x => x.sessionId === sessionId); if (!entry) return { ok: false, reason: 'gone' };
+      // מה שנשמר באיחור — לא נפתח כטיוטה (התעודה כבר נשמרה); בוטלה — נפתחת כקליטה חדשה (אם המתאם יודע)
+      if (entry.reason === 'late') return { ok: false, reason: 'late' };
+      const revive = entry.reason === 'canceled';
+      if (revive && (entry.expected || !A.reviveDraft)) return { ok: false, reason: 'cannot-revive' };
       const d0 = draft();
       if (!d0.empty && d0.scanRunning) return { ok: false, reason: 'scan-running-here' };
       // העותק יוצא מהרשימה; מה שעל המסך נכנס במקומו (אותה טיוטה — מחליפים בין שתי הגרסאות, ושתיהן נשארות)
@@ -672,9 +696,15 @@
           if (!put.ok) { writeKey(K.side, rest.concat([entry])); return { ok: false, reason: put.reason }; }
         }
       }
+      if (revive) {
+        const newId = safeId(A.reviveDraft(entry.payload));
+        setClaim(newId, 0, null); clearAway(); currentDoc = null;
+        syncWatches(); emit(); schedule(0);
+        return { ok: true, sessionId: newId };
+      }
       A.applyPayload(entry.payload, { source: 'side' });
       if (entry.legacy) { if (claimFor(sessionId)) writeKey(K.claim, null); }
-      else setClaim(sessionId, entry.gen || 0);
+      else setClaim(sessionId, entry.gen || 0, null);
       clearAway(sessionId); currentDoc = null; closedHere.delete(sessionId);
       syncWatches(); emit(); schedule(0);
       return { ok: true };
@@ -696,8 +726,9 @@
         // הטיוטה שפתוחה כשהמנגנון עולה לראשונה בטלפון — מלפני המנגנון: לא נתבעת עד שהיא באמת משתנה כאן
         if (readKey(K.legacy, null) == null) { const d = draft(); writeKey(K.legacy, { sessionId: d.empty || claimFor(d.sessionId) ? null : d.sessionId, at: now() }); }
         const d = draft();
-        if (!d.empty && isLegacy(d.sessionId)) legacyStartPayload = withPayload(d).payload;
+        if (!d.empty && isLegacy(d.sessionId)) legacyStartPayload = fingerprint(d);
         sideTidy();
+        noticeGone(d); // טיוטה שהייתה של הטלפון הזה ונעלמה לפני שנסגר — יורדת מההצעות
         if (cloudReady()) {
           startQuery(); syncWatches();
           const on = (target, type, fn) => { try { target && target.addEventListener && target.addEventListener(type, fn); } catch (e) {} };
@@ -714,9 +745,8 @@
         const d = draft();
         noticeGone(d);
         // הטיוטה חזרה לעבודה לפני ש"החנייה" שלה נשלחה — לא חונים
-        if (!d.empty && closeQueue().some(x => x.sessionId === d.sessionId && x.mode === 'park')) {
+        if (!d.empty && !awayFor(d.sessionId) && closeQueue().some(x => x.sessionId === d.sessionId && x.mode === 'park')) {
           writeKey(K.close, closeQueue().filter(x => !(x.sessionId === d.sessionId && x.mode === 'park')));
-          active = d.sessionId;
         }
         if (opts && opts.user) api.userEdit(d);
         syncWatches(d);
@@ -729,8 +759,8 @@
         d = d || draft();
         if (d.empty || !isLegacy(d.sessionId) || awayFor(d.sessionId)) return;
         // רק שינוי אמיתי בתוכן — לא כל לחיצה על המסך
-        const p = withPayload(d).payload;
-        if (p != null && p !== legacyStartPayload) setClaim(d.sessionId, 0);
+        // לפי טביעת התוכן (מה שנספר/הוקלד) — לא לפי מצב תצוגה (פתיחת בורר, פרטי קריאה)
+        if (fingerprint(d) !== legacyStartPayload) setClaim(d.sessionId, 0);
       },
       flush() { schedule(0); },
       retry: retryAll,
@@ -752,15 +782,17 @@
         [debounceTimer, retryTimer, scanTimer, beatTimer].forEach(t => { if (t) timers.clear(t); });
         debounceTimer = retryTimer = scanTimer = beatTimer = null;
       },
-      take, finish, cancel, clear, openSide,
+      take, finish, cancel, clear, openSide, dropSide,
       // זול: בלי ה-payload (נקרא בכל לחיצה)
       state() {
         const d = draft(), a = d.empty ? null : awayFor(d.sessionId);
         const cur = currentDoc && !d.empty && currentDoc.sessionId === d.sessionId ? currentDoc : null;
-        const sides = sideList().filter(x => !recordSaved(x)).map(x => ({ sessionId: x.sessionId, savedAt: x.savedAt, reason: x.reason, summary: x.summary || {} }));
+        const sides = sideList().filter(x => !recordSaved(x)).map(x => ({ sessionId: x.sessionId, savedAt: x.savedAt, reason: x.reason, summary: x.summary || {},
+          canOpen: x.reason !== 'late' && !(x.reason === 'canceled' && (x.expected || !A.reviveDraft)) }));
         const sideIds = new Set(sides.map(x => x.sessionId));
         const offers = !offersFromServer ? [] : offerDocs.filter(x => (d.empty || x.sessionId !== d.sessionId) && !sideIds.has(x.sessionId)
-          && !((closing(x.sessionId) || closedHere.has(x.sessionId)) && x.deviceId === me())).map(x => ({
+          && !((closing(x.sessionId) || closedHere.has(x.sessionId)) && x.deviceId === me())
+          && !(!x.editsExisting && recordSaved({ recordId: x.recordId, reason: 'offer' }))).map(x => ({
           sessionId: x.sessionId, mine: x.deviceId === me(), deviceName: x.deviceName || '', updatedAt: Number(x.updatedAt) || 0,
           summary: x.summary || {}, scanRunning: scanWindowOpen(x), tooBig: !!x.tooBig || x.payload == null,
           button: !x.tooBig && x.payload != null && !scanWindowOpen(x) }));
@@ -783,7 +815,7 @@
         };
       },
       // לבדיקות ולאבחון
-      _debug: () => ({ claim: claim(), away: away(), side: sideList(), close: closeQueue(), legacy: readKey(K.legacy, null), currentDoc, offerDocs, checking, status, active })
+      _debug: () => ({ claim: claim(), away: away(), side: sideList(), close: closeQueue(), legacy: readKey(K.legacy, null), currentDoc, offerDocs, checking, status })
     };
     return api;
   }
