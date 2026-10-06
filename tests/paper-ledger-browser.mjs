@@ -42,10 +42,11 @@ const L = ${JSON.stringify({ receipts: L.receipts, returns: L.returns, papers: [
 products=testData.products;promos=testData.promos;receipts=L.receipts;returns=L.returns;papers=L.papers;
 todayStr=()=> '2026-10-05';ledgerInvalidate();
 window.fetch=async(url)=>{throw new Error('External network is forbidden in local replay: '+url)};
-window.t={ view:()=>currentView, go:v=>setView(v), count:()=>currentLedger().count, ledger:()=>{ ledgerInvalidate(); setView('ledger'); }, review:id=>openPaperReview(id), history:()=>{ receiptHistoryFilter='all'; setView('receiptsHistory'); }, kinds:()=>currentLedger().items.filter(i=>i.state==='problem'||i.state==='question').map(i=>i.kind+':'+i.key) };
+window.t={ view:()=>currentView, go:v=>setView(v), count:()=>currentLedger().count, ledger:()=>{ ledgerInvalidate(); setView('ledger'); }, review:id=>openPaperReview(id), history:()=>{ receiptHistoryFilter='all'; setView('receiptsHistory'); }, kinds:()=>currentLedger().items.filter(i=>i.state==='problem'||i.state==='question').map(i=>i.kind+':'+i.key),
+  addPaper:p=>{ papers=papers.concat([p]); ledgerInvalidate(); }, intake:items=>{ openPaperIntake({}); paperIntake.items=items; setView('paperIntake'); } };
 setView('receiving');window.t.loaded=true;
 `;
-const css = `.hidden{display:none!important}.flex{display:flex}.grid{display:grid}.flex-1{flex:1}.gap-2{gap:.5rem}.fixed{position:fixed}.bottom-0{bottom:0}.inset-x-0{left:0;right:0}.w-full{width:100%}body{margin:0;font:16px Arial}button,input{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}`;
+const css = `.hidden{display:none!important}.flex{display:flex}.grid{display:grid}.flex-1{flex:1}.flex-wrap{flex-wrap:wrap}.min-w-0{min-width:0}.gap-2{gap:.5rem}.fixed{position:fixed}.bottom-0{bottom:0}.inset-x-0{left:0;right:0}.w-full{width:100%}body{margin:0;font:16px Arial}button,input{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}`;
 const pageHtml = html.replace(/<script\s+src="https:[^"]+"><\/script>/g, '').replace(/<link[^>]+(?:href="https:[^"]+"|rel="manifest")[^>]*>/g, '')
   .replace(/<script type="module">[\s\S]*?<\/script>/, () => '<script type="module">' + setup + moduleSource + replay + '</script>')
   .replace('</head>', '<style>' + css + '</style></head>');
@@ -125,6 +126,17 @@ try {
   await page.locator('#app details', { hasText: 'נייר זיכוי מהנהג' }).locator('summary').click();
   const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(over <= 1, 'היסטוריה: גלילה לצדדים ' + over);
+  // v131: "לאיזו החזרה?" על כרטיס הנייר אחרי הצילום — בלי גלילה לצדדים ברוחב טלפון
+  await page.evaluate(() => {
+    window.t.addPaper({ schema: 1, rev: 1, state: 'accepted', timestamp: 1, id: 'paper_amb', kind: 'credit', number: '290094992', docDay: '2026-10-02',
+      rows: [{ line: 1, itemCode: '2381', barcode: null, description: '', qty: 1, productId: 'code_2381' }] });
+    window.t.intake([{ captureId: 'capA', status: 'saved', paperId: 'paper_amb' }]);
+  });
+  assert.ok(await page.locator('#app [data-role="ledger-attach"]').count() >= 3, 'כפתורי הבחירה על הכרטיס');
+  assert.match(await page.locator('#app').innerText(), /לאיזו החזרה הוא שייך\? בחר כאן/);
+  const overCard = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  assert.ok(overCard <= 1, 'כרטיס הנייר: גלילה לצדדים ' + overCard);
+  await page.screenshot({ path: '/tmp/berman-v131-attach-card.png', fullPage: false });
   assert.deepEqual(errors, []);
   console.log('✓ מאזן מול ברמן בדפדפן: דבר אחד לטיפול, התיקון זוהה לבד; מסך הצילום וכרטיסי התעודות');
 } finally {

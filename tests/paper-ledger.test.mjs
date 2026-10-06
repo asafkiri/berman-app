@@ -780,6 +780,8 @@ test('סבב 5 א2: נייר זיכוי של החזרה שזוכתה (שורה �
   const it = lg.items.find(i => i.kind === 'needsAttach');
   assert.equal(it.why, 'registered'); assert.deepEqual(it.ask, ['ret_1003']);
   assert.match(ledgerItemText(it, lg, [S5, C5]).text, /לא ברור על מה הזיכוי .* לא נספר עד שתבחר$/);
+  assert.equal(ledgerItemText(it, lg, [S5, C5]).actions.at(-1).label, 'זיכוי לחוסר בקליטה של 1.10 (הנייר הקטן)', 'v131: הבחירה האחרונה — החוסר בקליטה המסוימת, לא "לא שייך להחזרה"');
+  assert.equal(ledgerItemText(it, lg, [S5, C5]).actions.at(-1).receiptId, 'rc_1001');
   assert.equal(lg.products.code_233.net, 2);
 });
 
