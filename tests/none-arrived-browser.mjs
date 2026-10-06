@@ -1,6 +1,7 @@
 // v132 — "לא הגיע כלום" גלוי בדפדפן אמיתי, ברוחב טלפון (390px), על נייר "ת.משלוח" קטן שצולם בכפתור שבפס.
 // A: צילום → מסך הניירות: "לא הגיע כלום" מתחת ל"לספירה", במסך הראשון בלי לגלול → "לספירה" → מסך הקליטה:
-//    שלוש הבחירות פתוחות, "לא הגיע כלום" מעל "סרוק פריט לתעודה" ובמסך הראשון → לחיצה → שאלת האישור → כל השורות 0.
+//    שלוש הבחירות פתוחות, "לא הגיע כלום" מעל "סרוק פריט לתעודה" ובמסך הראשון → לחיצה → "לא הגיע כלום — שמור" →
+//    v133: הקליטה נשמרת (כל השורות 0) בלי מסך ההבדלים ובלי הסיכום.
 // B: צילום → "לא הגיע כלום" ישר ממסך הניירות → מסך הקליטה עם שאלת האישור → כל השורות 0.
 // בלי גלילה לצדדים, בלי שגיאות דף, בקשת קריאה אחת לכל טלפון.
 // Run: NODE_PATH=$(npm root -g) node tests/none-arrived-browser.mjs (Playwright + Chromium; BERMAN_CHROMIUM optional;
@@ -117,10 +118,18 @@ async function confirmNone(page) {
   await page.locator('#confirmModal').waitFor({ state: 'visible' });
   assert.equal(await page.locator('#confirmTitle').innerText(), 'לא הגיע כלום?');
   assert.deepEqual((await state(page)).items, [], 'כלום לא נרשם לפני האישור');
+  assert.equal(await page.locator('#confirmOk').innerText(), 'לא הגיע כלום — שמור');
+  const before = [...documents.keys()].filter(k => /\/receipts\//.test(k)).length;
   await page.locator('#confirmOk').click();
-  await page.waitForFunction(() => window.t.state().mode === 'manual');
+  // v133: נשמר מיד — בלי מסך ההבדלים ובלי הסיכום
+  await page.waitForFunction(() => window.t.state().view === 'receiptsHistory');
+  const saved = [...documents.entries()].filter(([k]) => /\/receipts\//.test(k));
+  assert.equal(saved.length, before + 1, 'הקליטה נשמרה');
+  const items = saved[saved.length - 1][1].items;
+  assert.ok(items.length > 0 && items.every(l => l.qty === 0 && l.noteQty > 0), 'כל השורות 0 מול מה שבנייר: ' + JSON.stringify(items));
+  assert.equal(await page.locator('#receiptSummaryModal').isVisible(), false, 'בלי הסיכום');
   const s = await state(page);
-  assert.ok(s.items.length > 0 && s.items.every(l => l.qty === 0), 'כל השורות 0: ' + JSON.stringify(s.items));
+  assert.deepEqual(s.items, [], 'הקליטה נסגרה');
   assert.equal(s.requests, 1, 'בלי קריאה נוספת');
 }
 try {

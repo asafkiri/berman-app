@@ -102,3 +102,25 @@ test('נייר שלא נקרא עד הסוף — "לבדיקה" בתוך המש�
   r.run(`paperUiClick({ dataset: { role: 'review-back' } })`);
   assert.equal(r.run('currentView'), 'receiving');
 });
+
+// v133 — מהגיבוי של 6.10: 95141 נקלט ("לא הגיע כלום") ונשמר; יש תשובה ישנה מ-v128 "כן, זה תיקון" על 95141.
+// עד v132 כרטיס הקליטה שלו בהיסטוריה נשאר אדום ("לחם אחיד ×13 — חויבת ולא קיבלת") בזמן שנייר הזיכוי 142 ירוק.
+// עכשיו: הכרטיס "מאוזנת במאזן", ובשורה האדומה רק החיוב הכפול של 5.10.
+test('95141 שנקלט עם תשובה ישנה "כן, זה תיקון" — כרטיס הקליטה בהיסטוריה מאוזן; פתוח רק 1231 ×2 של 5.10', () => {
+  const small = { ...L.papers.p141, kind: 'delivery', small: true };
+  const rc = { id: 'rc_small_hist', date: '2026-10-06', docDate: '2026-10-04', timestamp: Date.parse('2026-10-06T07:43:00'), schemaVersion: 2,
+    paperDocs: [{ number: '290095141', units: 15, lines: 2 }], quantityCheck: { method: 'manual', confirmedAt: 1, differences: [] },
+    items: [{ productId: 'code_100', code: '100', name: 'לחם אחיד ברמן', qty: 0, noteQty: 13 }, { productId: 'code_1231', code: '1231', name: 'לחמניות 10 בשקית', qty: 0, noteQty: 2 }] };
+  const ret = L.returns.find(x => (x.docDate || x.date) === '2026-10-04').id;
+  const old = { schema: 1, id: 'decl_corr_v128', kind: 'declared', declare: 'correction', state: 'accepted', docDay: '2026-10-04', timestamp: 3, writtenBy: '128',
+    standsFor: { chargePaperId: L.papers.p141.id, returnId: ret }, rows: [{ line: 1, productId: 'code_100', itemCode: '100', qty: 13 }] };
+  const r = app([small, L.papers.p142, old], { receipts: L.receipts.slice().reverse().concat([rc]) });
+  assert.deepEqual(JSON.parse(r.run('JSON.stringify(openIssuesList().map(x => x.text))')),
+    ['חוסר בקליטה של 5.10: לחמניות 10 בשקית ×2 — חויבת ולא קיבלת. לבקש זיכוי מהנהג']);
+  r.run(`receiptHistoryFilter = 'all'; setView('receiptsHistory')`);
+  const html = r.node('app').innerHTML;
+  const card = strip(html.split('<details data-rc-card=').find(c => c.includes('rc_small_hist')) || '');
+  assert.ok(card, 'כרטיס הקליטה של 95141');
+  assert.match(card, /מאוזנת במאזן/);
+  assert.doesNotMatch(card, /הפרש פתוח|חויבת ולא קיבלת/);
+});
