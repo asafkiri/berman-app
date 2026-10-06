@@ -40,11 +40,11 @@ function restoreDoc(name, obj) { restored = { name, obj }; }
 
 const FNS = ['r2', 'fmtMoney', 'lineTotalFromUnit', 'anIsDepositLine', 'anIsCarriedLine',
   'returnSentUnits', 'returnItemsSignature', 'retLedgerView', 'ledgerDocStatus', 'retWaitingPaper', 'retVerifyRowHtml', 'retUnsendLineKind', 'retUnsendPlan', 'retUnsendSameLine',
-  'retUnsendNewId', 'applyReturnUnsend', 'undoReturnUnsend', 'retUnsendBtnHtml'];
+  'retUnsendNewId', 'applyReturnUnsend', 'undoReturnUnsendItems', 'retUnsendBtnHtml'];
 // eslint-disable-next-line no-eval
 const api = eval(extractSource(FNS, []) + '\n({ ' + FNS.join(', ') + ' })');
 const { r2, returnSentUnits, returnItemsSignature, retVerifyRowHtml, retUnsendLineKind, retUnsendPlan,
-  retUnsendSameLine, applyReturnUnsend, undoReturnUnsend, retUnsendBtnHtml } = api;
+  retUnsendSameLine, applyReturnUnsend, undoReturnUnsendItems, retUnsendBtnHtml } = api;
 
 let pass = 0, fail = 0;
 const ok = (name, cond, detail) => { if (cond) { pass++; console.log('  ✓ ' + name); } else { fail++; console.log('  ✗ ' + name + (detail ? '  — ' + detail : '')); } };
@@ -141,12 +141,11 @@ head('[5] איחוד לשורה אחת — הכרעת המשתמש');
 
   // "בטל" מוריד בדיוק את מה שנוסף, ולא את מה שכבר ישב שם קודם.
   restored = null;
-  undoReturnUnsend({ id: 'ret_open' }, applied);
+  undoReturnUnsendItems(returnsList, applied);
   ok('השורה שנצברה חזרה לכמות המקורית', returnsList.find(x => x.productId === PITA.id).qty === 2);
   ok('והשורה שנוצרה נמחקה', !returnsList.some(x => x.productId === LOAF.id));
   ok('גם אחרי הביטול זה אותו מערך', returnsList === slot);
-  ok('הטיוטה נשמרה והמסך רוענן', draftSaves > 0 && refreshes > 0);
-  ok('והתעודה שוחזרה מהגיבוי', restored && restored.name === 'returns' && restored.obj.id === 'ret_open');
+  // השמירה ושחזור התעודה נבדקים כעת יחד בעסקה אמיתית ב-returns-events.test.mjs.
 }
 
 head('[6] שורה ידנית ושורה שהוחזרה מפער — הסימון נשמר, בלי מחיר');
@@ -195,12 +194,13 @@ head('[7] החיווט — כל תפקיד שנפלט חייב מטפל, ובכ�
   ok('שורת האימות יושבת בכרטיס החזרה המאוחד (ורק בו)', (src.match(/retVerifyRowHtml\(r\) \+/g) || []).length === 1);
   ok('וכפתור ההחזרה יושב בו גם (v128: רק כשהתעודה עוד פתוחה)', (src.match(/\(stillOpen \? retUnsendBtnHtml\(r\) : ''\) \+/g) || []).length === 1);
   ok('אין יותר שתי העתקות של שדה סכום הזיכוי', (src.match(/id="rvNote_/g) || []).length === 1);
-  ok('המחיקה קודמת להוספה לרשימה', src.indexOf('const deleted = await hardDeleteDocWithBackup') < src.indexOf('const applied = applyReturnUnsend(plan)'));
-  ok('שיוך זיכוי פתוח חוסם את ההחזרה', /returnHasCreditAllocations\(id\)\) return;\n  const plan = retUnsendPlan/.test(src));
+  ok('המחיקה וההוספה נכתבות באותה עסקת אירועים', /engine\.mutate\(\[ref\],/.test(src) && /changes: \{ \[slot\]: current \}, writes:/.test(src));
+  ok('שיוך זיכוי פתוח חוסם את ההחזרה גם בתוך העסקה', /r\.credited \|\| returnHasCreditAllocations\(id\)/.test(src) && /creditAllocationList\(fresh\)\.length/.test(src));
 }
 
 // ===== מקצה לקצה: לחיצה אמיתית, במודול האפליקציה המלא =====
 const { runtime } = await import('./receipt-scan-harness.mjs');
+const { returnsCloud } = await import('./returns-cloud-helpers.mjs');
 function stubbedRuntime() {
   const rt = runtime();
   // גבול הענן: hardDeleteDocWithBackup כותב ישירות ב-Firestore ואינו עובר
@@ -228,6 +228,7 @@ head('[8] מקצה לקצה — בדיקה ידנית → "הכל זוכה במ�
   ok('בלי סכום מחושב', rt.node('confirmMsg').textContent.indexOf('₪') === -1);
 
   await rt.events.get('confirmOk:click')();
+  for (let i = 0; i < 30; i++) await new Promise(resolve => setImmediate(resolve));
   const write = rt.writes[rt.writes.length - 1];
   ok('התעודה סומנה מאומתת', !!write && write.data.credited === true && write.data.creditStatus === 'ok');
   ok('בלי סכום שהאפליקציה "יודעת"', !('creditNoteTotal' in write.data), JSON.stringify(write.data.creditNoteTotal));
@@ -245,6 +246,7 @@ head('[9] מקצה לקצה — "החזר לרשימה" מוחק את התעוד
   rt.context.testDoc = JSON.parse(JSON.stringify(openDoc()));
   rt.run(`returns = [testDoc]; returnsList = []; returnsSlots = { weekly: returnsList, daily: [] };
     returnsSlot = 'weekly'; receipts = []; receiptHistoryFilter = 'all'; currentView = 'receiptsHistory'; renderReceiptsHistory();`);
+  returnsCloud(rt); await rt.startReturnsCloud();
   ok('הכפתור מוצע על תעודה שלא אומתה', rt.node('app').innerHTML.indexOf('data-role="ret-unsend" data-id="ret_open"') > -1);
 
   rt.click('ret-unsend', 'ret_open');
@@ -253,7 +255,8 @@ head('[9] מקצה לקצה — "החזר לרשימה" מוחק את התעוד
   ok('ואומר במפורש שהתעודה תימחק', msg.indexOf('תימחק') > -1 && msg.indexOf('כאילו לא נשלחה') > -1);
 
   await rt.events.get('confirmOk:click')();
-  const del = rt.run('JSON.parse(JSON.stringify(testDeletes))');
+  for (let i = 0; i < 30; i++) await new Promise(resolve => setImmediate(resolve));
+  const del = rt.returnCloud ? rt.returnCloud.paths('/trash/').map(path=>rt.returnCloud.get(path)).map(x=>({name:x.collectionName,id:x.originalId,data:x.data})) : rt.run('JSON.parse(JSON.stringify(testDeletes))');
   ok('התעודה נמחקה עם גיבוי לסל המחזור', del.length === 1 && del[0].name === 'returns' && del[0].id === 'ret_open');
   ok('והגיבוי נושא את השורות', (del[0].data.items || []).length === 2);
   const list = rt.run('JSON.parse(JSON.stringify(returnsList))');
@@ -272,7 +275,7 @@ head('[9] מקצה לקצה — "החזר לרשימה" מוחק את התעוד
   await rt.run('testToasts2[testToasts2.length - 1].cb()');
   ok('הרשימה התרוקנה בחזרה', rt.run('returnsList.length') === 0);
   ok('גם אחרי הביטול זה אותו מערך', rt.run('returnsSlots.weekly === returnsList'));
-  const restore = rt.writes[rt.writes.length - 1];
+  const restore = rt.savedReturnWrites().at(-1);
   ok('והתעודה שוחזרה מהגיבוי', !!restore && restore.path.slice(-2).join('/') === 'returns/ret_open');
 }
 
@@ -309,7 +312,8 @@ head('[11] v103 — כפתור "מחק תעודה" אחד בכל כרטיס, ל�
   rt.click('ret-delete', 'ret_open');
   ok('המחיקה שואלת לפני', rt.node('confirmMsg').textContent.indexOf('למחוק את תעודת החזרה') > -1);
   await rt.events.get('confirmOk:click')();
-  const del = rt.run('JSON.parse(JSON.stringify(testDeletes))');
+  for (let i = 0; i < 30; i++) await new Promise(resolve => setImmediate(resolve));
+  const del = rt.returnCloud ? rt.returnCloud.paths('/trash/').map(path=>rt.returnCloud.get(path)).map(x=>({name:x.collectionName,id:x.originalId,data:x.data})) : rt.run('JSON.parse(JSON.stringify(testDeletes))');
   ok('ומוחקת עם גיבוי לסל המחזור', del.length === 1 && del[0].name === 'returns' && del[0].id === 'ret_open' && (del[0].data.items || []).length === 2);
 }
 

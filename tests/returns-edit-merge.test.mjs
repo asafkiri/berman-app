@@ -9,6 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runtime } from './receipt-scan-harness.mjs';
+import { returnsCloud } from './returns-cloud-helpers.mjs';
 
 const LEGACY_LINE = { name: 'אחיד פרוס ברמן', barcode: '497112', code: '101', productId: 'code_101', qty: 3, unitPrice: 5.7408, lineTotal: 17.22, sentUnitPrice: 5.7408 };
 function doc(extra) {
@@ -182,10 +183,11 @@ test('an item edit that closes a carried gap takes the carried rows back off the
   d.items[0].qty = 5; d.items[0].noteQty = 3;
   const rt = open(d);
   rt.run(`returnsList.push({ productId: 'carry_9', name: 'אחיד פרוס ברמן', barcode: '497112', qty: 2, manual: true, carried: true, carriedFrom: 'r1' }); returnsSlots.weekly = returnsList;`);
+  returnsCloud(rt); await rt.startReturnsCloud();
   rt.run(`retEditSetQtyLive(0, '3')`);
   await rt.run('saveReturnItemsEdit()');
-  assert.equal(rt.writes[rt.writes.length - 2].data.creditStatus, 'ok');
-  assert.deepEqual(rt.writes[rt.writes.length - 1].data, { carriedNotes: [] });
+  assert.equal(rt.writes[rt.writes.length - 1].data.creditStatus, 'ok');
+  assert.deepEqual(rt.savedReturnWrites().at(-1).data.carriedNotes, []);
   assert.equal(rt.run('returnsList.length'), 0);
 });
 

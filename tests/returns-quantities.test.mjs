@@ -6,6 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runtime } from './receipt-scan-harness.mjs';
+import { returnsCloud } from './returns-cloud-helpers.mjs';
 
 const MONEY_DOC = ['totalExVat', 'totalIncVat'];
 const MONEY_LINE = ['unitPrice', 'lineTotal', 'sentUnitPrice', 'listPrice', 'discountPct', 'priceForm', 'promoOnPaper'];
@@ -15,14 +16,14 @@ function stringInput(rt, id) {
   Object.defineProperty(n, 'value', { get: () => v, set: x => { v = String(x); }, configurable: true });
 }
 function setup() {
-  const rt = runtime();
+  const rt = returnsCloud(runtime());
   stringInput(rt, 'qtyVal');
   rt.run(`returns = []; receipts = []; returnsList = []; returnsSlots = { weekly: returnsList, daily: [] }; returnsSlot = 'weekly';
     window.location = { href: '' }; Date.now = () => ${Date.UTC(2026, 9, 4, 6, 0)};`);
   return rt;
 }
 const pick = (rt, code) => JSON.parse(rt.run(`JSON.stringify(products.find(p => p.code === '${code}'))`));
-const lastWrite = rt => rt.writes[rt.writes.length - 1];
+const lastWrite = rt => rt.savedReturnWrites().at(-1);
 function assertNoMoney(data) {
   MONEY_DOC.forEach(k => assert.equal(Object.hasOwn(data, k), false, 'doc has ' + k));
   (data.items || []).forEach((l, i) => MONEY_LINE.forEach(k => assert.equal(Object.hasOwn(l, k), false, 'line ' + i + ' has ' + k)));
@@ -33,7 +34,7 @@ test('save without sending and WhatsApp send write the same quantities-only docu
     const rt = setup();
     const loaf = pick(rt, '101'), pita = pick(rt, '401');
     rt.context.rows = [{ productId: loaf.id, name: loaf.name, barcode: loaf.barcode, qty: 3 }, { productId: pita.id, name: pita.name, barcode: pita.barcode, qty: 2 }];
-    rt.run(`rows.forEach(x => returnsList.push(x)); setView('returns'); openReturnsSend();`);
+    rt.run(`rows.forEach(x => returnsList.push(x)); setView('returns');`); await rt.startReturnsCloud(); rt.run('openReturnsSend()');
     const msgBefore = rt.run('buildReturnsMessage(sendCtx.items, "")');
     if (via === 'save-only') await rt.run('saveReturnsWithoutSending()');
     else await rt.run(`performSend({ name: 'הנהג', phone: '050-1234567' })`);
@@ -67,6 +68,7 @@ test('a deposit product adds a quantity-only deposit line that is not counted as
   const items = JSON.parse(rt.run('JSON.stringify(sendCtx.items)'));
   assert.deepEqual(items[1], { name: 'פיקדון · ' + loaf.name, barcode: '', qty: 4, isDeposit: true });
   assert.match(rt.run('buildReturnsMessage(sendCtx.items, "")'), /\*1\* סוגים · \*4\* יחידות/);
+  await rt.startReturnsCloud(); rt.run('openReturnsSend()');
   await rt.run('saveReturnsWithoutSending()');
   assertNoMoney(lastWrite(rt).data);
 });
@@ -133,6 +135,7 @@ test('a carried row is sent flagged with its origin and code, without a price', 
   const line = JSON.parse(rt.run('JSON.stringify(sendCtx.items[0])'));
   assert.deepEqual(line, { name: 'ברמן אסלי 5 פיתות', barcode: '497440', code: '238', productId: 'carry_1', qty: 1, carried: true, carriedFrom: 'returns_43eb' });
   assert.match(rt.run('buildReturnRow(returnsList[0])'), /הוחזר מפער זיכוי/);
+  await rt.startReturnsCloud(); rt.run('openReturnsSend()');
   await rt.run('saveReturnsWithoutSending()');
   assertNoMoney(lastWrite(rt).data);
 });

@@ -26,7 +26,7 @@ const rpc = async (operation, args = {}) => {
   if (operation === 'list') return [...documents.entries()].filter(([k, v]) => k.startsWith(args.prefix + '/') && k.split('/').length === args.prefix.split('/').length + 1
     && v && (args.wheres || []).every(w => v[w.field] === w.value)).map(([k, v]) => ({ id: k.split('/').pop(), value: v }));
   if (operation === 'commit' || operation === 'batch') {
-    for (const [path, value, op] of args.writes) { if (op === 'delete') documents.delete(path); else documents.set(path, structuredClone(value)); }
+    for (const [path, value, op] of args.writes) { if (op === 'delete') documents.delete(path); else if(op === 'update'){const data=structuredClone(documents.get(path)||{});for(const [key,v] of Object.entries(value)){const parts=key.split('.');let obj=data;for(const p of parts.slice(0,-1)){obj[p]||={};obj=obj[p];}if(v?.__deleteField)delete obj[parts.at(-1)];else obj[parts.at(-1)]=structuredClone(v);}documents.set(path,data);}else documents.set(path, structuredClone(value)); }
   }
   if (operation === 'commit' || operation === 'abort') { releaseTransaction(); releaseTransaction = null; }
   return true;
@@ -61,12 +61,14 @@ const onSnapshot = (path, opts, callback) => {
 };
 const runTransaction = async(_db,body)=>{
   await window.__sharedRpc('begin'); const writes=[];
-  try{const value=await body({get:getDoc,set:(path,value)=>writes.push([path,value]),delete:path=>writes.push([path,null,'delete'])});await window.__sharedRpc('commit',{writes});return value;}
+  try{const value=await body({get:getDoc,set:(path,value)=>writes.push([path,value]),update:(path,value)=>writes.push([path,value,'update']),delete:path=>writes.push([path,null,'delete'])});await window.__sharedRpc('commit',{writes});return value;}
   catch(error){await window.__sharedRpc('abort');throw error;}
 };
 const writeBatch=()=>{const writes=[];return{set:(path,value)=>writes.push([path,value]),commit:()=>window.__sharedRpc('batch',{writes})};};
 const setDoc=(path,value)=>window.__sharedRpc('batch',{writes:[[path,value]]});
 const deleteDoc=path=>window.__sharedRpc('batch',{writes:[[path,null,'delete']]});
+const updateDoc=(path,value)=>window.__sharedRpc('batch',{writes:[[path,value,'update']]}),deleteField=()=>({__deleteField:true});
+const getDocs=async q=>{const list=await window.__sharedRpc('list',{prefix:q.collection,wheres:q.wheres});return {docs:list.map(d=>({id:d.id,data:()=>d.value})),metadata:{fromCache:false}};},getDocsFromServer=getDocs;
 `;
 const replay = `
 const testData = ${JSON.stringify(data)};
@@ -89,7 +91,7 @@ const pageHtml = html.replace(/<script\s+src="https:[^"]+"><\/script>/g, '').rep
 const server = http.createServer((req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Content-Security-Policy', "default-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; worker-src 'none'");
-  if (req.url.startsWith('/draft-handoff.js')) { res.setHeader('Content-Type', 'text/javascript'); res.end(fs.readFileSync(new URL('../draft-handoff.js', import.meta.url))); }
+  if(req.url.startsWith('/shared-return-events.js')){res.setHeader('Content-Type','text/javascript');res.end(fs.readFileSync(new URL('../shared-return-events.js',import.meta.url)));}else if (req.url.startsWith('/draft-handoff.js')) { res.setHeader('Content-Type', 'text/javascript'); res.end(fs.readFileSync(new URL('../draft-handoff.js', import.meta.url))); }
   else if (req.url.startsWith('/shared-receiving.js')) { res.setHeader('Content-Type', 'text/javascript'); res.end(fs.readFileSync(new URL('../shared-receiving.js', import.meta.url))); }
   else if (req.url === '/') { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(pageHtml); }
   else { res.statusCode = 404; res.end(); }

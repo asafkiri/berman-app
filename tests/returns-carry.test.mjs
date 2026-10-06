@@ -220,13 +220,15 @@ head('[10] החיווט — כל תפקיד שנפלט חייב מטפל');
 // כאן לא נשלפת פונקציה בודדת — רץ כל index.html, ורק גבולות הדפדפן, Firebase
 // והרשת מוחלפים. הלחיצה עוברת דרך אותו מאזין שרץ בטלפון.
 const { runtime } = await import('./receipt-scan-harness.mjs');
+const { returnsCloud } = await import('./returns-cloud-helpers.mjs');
 
 head('[11] מקצה לקצה — הכפתור, האישור, הרשימה והביטול');
 {
-  const rt = runtime();
+  const rt = returnsCloud(runtime());
   rt.context.testDoc = JSON.parse(JSON.stringify(baseDoc()));
   rt.run(`returns = [testDoc]; returnsList = []; returnsSlots = { weekly: returnsList, daily: [] };
     returnsSlot = 'weekly'; receipts = []; receiptHistoryFilter = 'all'; currentView = 'receiptsHistory'; renderReceiptsHistory();`);
+  await rt.startReturnsCloud();
   const card = rt.node('app').innerHTML;
   ok('הכרטיס האדום מציע להחזיר את הפריטים', card.indexOf('החזר את הפריטים לרשימת החזרות') > -1);
   ok('עם התפקיד שהמאזין מכיר', card.indexOf('data-role="ret-carry" data-id="ret_8_9"') > -1);
@@ -236,7 +238,8 @@ head('[11] מקצה לקצה — הכפתור, האישור, הרשימה והב
   ok('והוא מפרט מה בדיוק חוזר', rt.node('confirmMsg').textContent.indexOf('3 × ') > -1);
 
   await rt.events.get('confirmOk:click')();
-  const write = rt.writes[rt.writes.length - 1];
+  for (let i = 0; i < 30; i++) await new Promise(resolve => setImmediate(resolve));
+  const write = rt.savedReturnWrites().at(-1);
   ok('נכתב רישום ההחזרה על התעודה', !!write && write.path.slice(-2).join('/') === 'returns/ret_8_9' && write.data.carriedNotes.length === 1);
   ok('הרישום נושא מוצר, כמות וברקוד — בלי מחיר', write.data.carriedNotes[0].qty === 3 && write.data.carriedNotes[0].productId === PITA.id && !('price' in write.data.carriedNotes[0]) && !('amountOnly' in write.data.carriedNotes[0]));
   const listed = rt.run('JSON.parse(JSON.stringify(returnsList))');
@@ -260,7 +263,8 @@ head('[11] מקצה לקצה — הכפתור, האישור, הרשימה והב
   rt.click('ret-carry-undo', 'ret_8_9');
   ok('הביטול מבקש אישור', rt.node('confirmMsg').textContent.indexOf('לתעודה המקורית') > -1);
   await rt.events.get('confirmOk:click')();
-  ok('הרישום נמחק מהתעודה', (rt.writes[rt.writes.length - 1].data.carriedNotes || []).length === 0);
+  for (let i = 0; i < 30; i++) await new Promise(resolve => setImmediate(resolve));
+  ok('הרישום נמחק מהתעודה', (rt.savedReturnWrites().at(-1).data.carriedNotes || []).length === 0);
   ok('והשורות ירדו מרשימת החזרות', rt.run('returnsList.length') === 0);
   ok('בלי להחליף את המערך שבסלוט', rt.run('returnsSlots.weekly === returnsList'));
   ok('התעודה חזרה להיות אדומה', rt.run('returnsDiscrepancyInfo(returns[0]).open') && rt.run('renderReceiptsHistory(); document.getElementById("app").innerHTML').indexOf('פתוח — חסר זיכוי') > -1);

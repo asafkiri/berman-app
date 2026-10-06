@@ -10,6 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runtime } from './receipt-scan-harness.mjs';
+import { returnsCloud } from './returns-cloud-helpers.mjs';
 
 const j = (rt, expr) => JSON.parse(rt.run('JSON.stringify(' + expr + ')'));
 function receiptRt(rc) {
@@ -131,10 +132,11 @@ test('editor: removing the carried short line leaves over-credit only — the ca
   const rt = editRt(verified([{ productId: 'code_101', name: 'אחיד פרוס ברמן', barcode: '497112', qty: 5, noteQty: 3 }, { productId: 'code_401', name: 'פיתות', qty: 2 }],
     { creditStatus: 'open', carriedNotes: [{ productId: 'code_101', name: 'אחיד פרוס ברמן', barcode: '497112', qty: 2, at: 1 }] }));
   rt.run(`returnsList.push({ productId: 'carry_9', name: 'אחיד פרוס ברמן', barcode: '497112', qty: 2, manual: true, carried: true, carriedFrom: 'r1' }); returnsSlots.weekly = returnsList;`);
+  returnsCloud(rt); await rt.startReturnsCloud();
   rt.run('retEditRemove(0)');
   await rt.run('saveReturnItemsEdit({ skipDropped: true })');
   assert.equal(saved(rt).creditStatus, 'open', 'over-credit keeps the document open');
-  assert.deepEqual(rt.writes[rt.writes.length - 1].data, { carriedNotes: [] }, 'but the carry is undone');
+  assert.deepEqual(rt.savedReturnWrites().at(-1).data.carriedNotes, [], 'but the carry is undone');
   assert.equal(rt.run('returnsList.length'), 0);
 });
 
