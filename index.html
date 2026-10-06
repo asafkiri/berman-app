@@ -816,7 +816,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '131'; // v131: "לאיזו החזרה?" על כרטיס הנייר מיד אחרי הצילום — רק כשלא ברור
+const APP_VERSION = '132'; // v132: "לא הגיע כלום" גדול ופתוח — במסך הקליטה ובמסך הניירות
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -6026,8 +6026,16 @@ function receiptQuantityButtonsHtml() {
     '<button data-role="rc-quantity-all" class="btn-tap w-full bg-emerald-600 text-white rounded-xl py-4 px-3 font-black text-base">בדקתי ידנית — כל הכמויות תואמות, המשך לקליטה</button>' +
     '<button data-role="rc-quantity-differences" class="btn-tap w-full bg-white border-2 border-blue-300 text-blue-800 rounded-xl py-4 px-3 font-black text-base">בדקתי ידנית — יש חוסרים או עודפים</button>' +
     '<button data-role="rc-quantity-none" class="btn-tap w-full bg-white border-2 border-rose-300 text-rose-800 rounded-xl py-4 px-3 font-black text-base">לא הגיע כלום — הכל חסר</button></div>';
-  // Folded to its own question. Counting by scanner is the ordinary path, so the
-  // manual shortcut asks for one line of the screen until it is actually wanted.
+  // v132: לפני שנספר משהו — זו ההחלטה הראשונה במסך, אז היא פתוחה, ו"לא הגיע כלום" גדול כמו כפתור הספירה
+  if (!receiptList.length) return '<div data-quantity-first class="bg-white border-2 border-slate-200 rounded-2xl p-3 mb-3">' +
+    '<div class="text-sm font-black text-slate-800 mb-2">בדקת ידנית את הכמויות מול התעודה?</div>' +
+    '<div class="grid grid-cols-2 gap-2">' +
+    '<button data-role="rc-quantity-all" class="btn-tap min-h-[52px] bg-emerald-600 text-white rounded-2xl py-3 px-2 font-black text-base">כל הכמויות תואמות</button>' +
+    '<button data-role="rc-quantity-differences" class="btn-tap min-h-[52px] bg-white border-2 border-blue-300 text-blue-800 rounded-2xl py-3 px-2 font-black text-base">יש חוסרים או עודפים</button></div>' +
+    '<button data-role="rc-quantity-none" class="btn-tap w-full min-h-[56px] mt-2 bg-rose-600 text-white rounded-2xl py-4 px-3 font-black text-lg flex items-center justify-center gap-2 shadow-md"><i class="fa-solid fa-ban" aria-hidden="true"></i> לא הגיע כלום — הכל חסר</button>' +
+    '<div class="text-[11px] font-bold text-slate-500 text-center mt-2">או סרוק את מה שהגיע — למטה</div></div>';
+  // Once counting has started the scanner is the path, so the manual shortcut
+  // folds to one line of the screen until it is actually wanted.
   return '<details data-quantity-picker' + (receiptQuantityPickerOpen ? ' open' : '') +
     ' class="bg-white border border-slate-200 rounded-xl p-2 mb-2">' +
     '<summary data-role="rc-quantity-toggle" class="flex items-center justify-between gap-2 cursor-pointer text-xs font-black text-slate-700">' +
@@ -6049,6 +6057,13 @@ function receiptPaperDocCount() {
 function startReceiptQuantityReview(allMatch) {
   const none = allMatch === 'none';
   if (none) allMatch = false;
+  // v132: עוד נייר מהנהג נקרא לקליטה הזאת (אולי עוד תעודת משלוח) — הבחירה חלה על כל הניירות, אז מחכים לו (כמו הסיום)
+  if (paperJoinPending.size) paperJoinRetry();
+  const paperReading = receivingPaperReadRunning();
+  if (paperReading) {
+    showToast(paperReading === 'other' ? 'נייר מהנהג נקרא עכשיו בטלפון אחר — עוד רגע ואפשר לבחור.' : 'עוד נייר מהנהג נקרא עכשיו — עוד רגע הוא ייכנס לבד, ואז אפשר לבחור.', null, null, 3500);
+    return;
+  }
   const paperRows = receiptQuantityPaperRows();
   if (!paperRows) {
     showToast('צריך להשלים את זיהוי המוצרים ובדיקת הפענוח לפני אישור הכמויות', null, null, 4500);
@@ -14795,6 +14810,8 @@ function renderPaperIntake() {
   const open = !receivingDraftEmpty();
   const count = open ? '<button data-role="paper-count-now" class="btn-tap w-full min-h-[48px] bg-blue-600 text-white rounded-2xl py-3 font-black mb-3"><i class="fa-solid fa-arrow-left"></i> לספירה</button>'
     : it.busy ? '<button data-role="paper-count-now" class="btn-tap w-full min-h-[48px] bg-white border-2 border-blue-300 text-blue-800 rounded-2xl py-3 font-black text-sm mb-3"><i class="fa-solid fa-barcode"></i> יש סחורה לקלוט? התחל לספור עכשיו — תעודת המשלוח תיכנס לבד</button>' : '';
+  // v132: "לא הגיע כלום" — באותו גודל כמו "לספירה", כשתעודת המשלוח כבר בקליטה ושום נייר לא נקרא עכשיו
+  const none = open && paperNoneArrivedReady() ? '<button data-role="paper-none-arrived" class="btn-tap w-full min-h-[48px] bg-rose-600 text-white rounded-2xl py-3 font-black mb-3"><i class="fa-solid fa-ban" aria-hidden="true"></i> לא הגיע כלום — הכל חסר</button>' : '';
   app.innerHTML =
     '<div class="px-1 py-1 mb-3"><h2 class="font-black text-2xl text-slate-800">הניירות מהנהג</h2>' +
       '<div class="text-sm text-slate-600 mt-1">' + (R ? 'תעודת הזיכוי של ההחזרה מ-' + htmlEscape(ledgerDayShort(ledgerReturnDay(R))) + '. ' : '') +
@@ -14804,11 +14821,16 @@ function renderPaperIntake() {
     // הקריאה מתחילה לבד; "קרא" מופיע רק כשהיא לא יכלה להתחיל (בלי רשת) — כדי לנסות שוב
     (waiting && !it.busy ? '<button data-role="paper-run" class="btn-tap w-full bg-emerald-600 text-white rounded-2xl py-4 font-black text-lg shadow-md mb-3"><i class="fa-solid fa-rotate-right"></i> קרא (' + waiting + ')</button>' : '') +
     (it.progress ? '<div class="bg-slate-900 text-white rounded-full px-4 py-2.5 text-sm font-black text-center mb-3" role="status" aria-live="polite"><i class="fa-solid fa-spinner fa-spin"></i> ' + htmlEscape(it.progress) + '</div>' : '') +
-    count +
+    count + none +
     (it.items.length ? '' : '<div class="rounded-xl bg-blue-50 border border-blue-200 p-3 mb-3 text-xs font-black text-blue-800"><i class="fa-solid fa-arrow-up" aria-hidden="true"></i> צלם נייר בכפתור "צלם נייר מהנהג" למעלה.</div>') +
     '<div id="paperIntakeList" class="space-y-2 mb-24">' + it.items.map(paperIntakeItemHtml).join('') + '</div>';
 }
 function refreshPaperIntake() { if (currentView === 'paperIntake') renderPaperIntake(); }
+// v132: אפשר לבחור "לא הגיע כלום" ישר ממסך הניירות — אותם תנאים כמו הכפתור במסך הקליטה
+function paperNoneArrivedReady() {
+  return !receiptNoDoc && !receiptAttachTarget && receiptPaperScanState === 'ok' && !!aiScanResponse && !aiScanBusy
+    && !pendingReceipt && !reconcileData && !sharedReceiptFinalizing && canEditSharedReceipt() && !receivingPaperReadRunning();
+}
 // v131: הכפתורים של "לאיזו החזרה?" לנייר שלא נספר עד שבוחרים — אותם כפתורים כמו במסך המאזן
 function paperAttachChoice(p, lg) {
   try {
@@ -15447,6 +15469,8 @@ function paperUiClick(t) {
     return true;
   }
   if (role === 'paper-goto-receiving') { setView('receiving'); return true; }
+  // v132: לקליטה, ושם אותה שאלת אישור כמו הכפתור במסך הקליטה
+  if (role === 'paper-none-arrived') { setView('receiving'); startReceiptQuantityReview('none'); return true; }
   if (role.indexOf('ledger-') === 0) { ledgerAnswer(role, t.dataset.item, t.dataset.return, t.dataset.paper, t.dataset.receipt); return true; }
   if (!paperReview) return false;
   const r = paperReview;
