@@ -309,7 +309,7 @@ test('סוג שלא נקרא — "לבדיקה", לא נספר כחיוב; תע�
   assert.equal(it.sameDay, true, 'יש קליטה מ-5.10 עם מספר אחר');
   const t = ledgerItemText(it, lg, [dn]);
   assert.match(t.text, /לא נמצאה בקליטה של 5\.10/);
-  assert.deepEqual(t.actions.map(a => a.role), ['ledger-paper-open', 'ledger-start-receiving']);
+  assert.deepEqual(t.actions.map(a => a.role), ['ledger-paper-open', 'ledger-start-receiving', 'ledger-paper-delete'], 'v132: גם "מחק את הצילום"');
   assert.match(t.detail, /3 יח׳ ו-שורה אחת/);
   // v126: התעודה כבר נקראה — "לקליטה" מכניס אותה כפי שנקראה; לא שולחים להקליד
   assert.doesNotMatch(t.detail, /הקלד את המספרים/);
