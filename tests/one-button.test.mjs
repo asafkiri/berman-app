@@ -311,7 +311,8 @@ test('תור: צילום שנוסף בזמן שהסבב קורא נקרא באו
 
 test('הפענוח נקטע בטלפון השני (אין תמונות): "המשך בלעדיה" — אפס בקשות; גם הכפתור של v125 לא שולח כלום', async () => {
   const r = app(delivery());
-  r.run(`receiptOpened = true; receiptEntryMode = 'photo'; aiScanDocuments = []; aiScanBusy = true; receiptPaperScanState = 'running'; aiScanResponse = null;
+  // v136: סנכרון בלייב (בחירה מפורשת) — רק בו קריאה רצה "בטלפון השני"
+  r.run(`sharedReceivingOff = false; receiptOpened = true; receiptEntryMode = 'photo'; aiScanDocuments = []; aiScanBusy = true; receiptPaperScanState = 'running'; aiScanResponse = null;
     sharedReceiptStatus = { ready: true, scan: null, head: { updatedAt: Date.now() - 600000 } }; currentView = 'receiving'; saveReceiptDraft();`);
   r.run('renderSharedReceivingBanner()');
   assert.match(r.node('sharedReceivingBanner').innerHTML, /המשך בלעדיה/);

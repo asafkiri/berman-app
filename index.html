@@ -816,13 +816,16 @@ let sharedReceiptLastAction = null, sharedReceiptConfirmText = null;
 // v135: קליטה בטלפון הזה בלבד — בלי הסנכרון בלייב בין טלפונים. כשהסנכרון לא עולה, הקליטה לא ננעלת: הספירה נשמרת
 // בטלפון, והתעודה נשמרת ישר לענן בסיום (אותה תעודה, אותו מזהה — שמירה חוזרת לא יוצרת שתיים). נשמר לטלפון הזה.
 const SHARED_RECEIVING_OFF_KEY = 'bm_shared_receiving_off';
-let sharedReceivingOff = false, sharedReceivingStartedAt = 0;
-try { sharedReceivingOff = localStorage.getItem(SHARED_RECEIVING_OFF_KEY) === '1'; } catch (e) {}
+// v136: ברירת המחדל — טלפון אחד (בלי הסנכרון בלייב). הקליטה פתוחה בענן כגיבוי, ואפשר להמשיך אותה בטלפון אחר
+// ("המשך אותה כאן"). הסנכרון בלייב נשאר רק למי שבחר בו במפורש (המפתח הזה בטלפון).
+const SHARED_RECEIVING_LIVE_KEY = 'bm_shared_receiving_live';
+let sharedReceivingOff = true, sharedReceivingStartedAt = 0;
+try { sharedReceivingOff = localStorage.getItem(SHARED_RECEIVING_LIVE_KEY) !== '1' || localStorage.getItem(SHARED_RECEIVING_OFF_KEY) === '1'; } catch (e) {}
 let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '135'; // v135: "המשך בטלפון הזה בלבד" כשהסנכרון לא עולה; תיקוני הסקירה של v132–v134
+const APP_VERSION = '136'; // v136: קליטה בטלפון (בלי סנכרון בלייב), גיבוי שקט בענן ו"המשך אותה כאן" בטלפון אחר
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -1290,6 +1293,7 @@ function readNoteEntry(required) {
 }
 function saveReceiptDraft() {
   scheduleSharedReceiptSave();
+  scheduleReceivingHandoff(); // v136: גיבוי שקט לענן (בלי לחכות לו)
   if ((receiptOpened || receiptList.length || receiptNotes.length || aiScanDocuments.some(d => d.pages.length)) && !receiptDraftId) receiptDraftId = makeOperationId('receipt');
   const draft = { countingMode: receiptCountingMode, quantityReview: receiptQuantityReview, schemaVersion: 2, draftId: receiptDraftId, items: receiptList, notes: receiptNotes, opened: receiptOpened, docDate: receiptDocDate || null, entryMode: receiptEntryMode, anchorSource: receiptAnchorSource, noDoc: receiptNoDoc, attach: receiptAttachTarget, paperScan: null, sharedReceivingVersion: sharedReceiving ? 1 : null, updatedAt: Date.now() };
   try {
@@ -21390,10 +21394,7 @@ function renderSharedReceivingBanner() {
   if (!visible) return;
   setSharedReceiptControlsReadOnly();
   // v135: טלפון אחד — אומרים את זה, ואפשר לחזור לסנכרון
-  if (sharedReceivingOff) {
-    el.innerHTML = '<div class="text-[11px] font-bold text-slate-500">קליטה בטלפון הזה בלבד — בלי סנכרון בלייב. התעודה נשמרת לענן בסיום. <button data-shared-receiving="on" class="underline font-bold mr-1">הפעל סנכרון בין טלפונים</button></div>';
-    return;
-  }
+  if (sharedReceivingOff) { el.innerHTML = receivingHandoffBannerHtml(); return; } // v136
   const st = sharedReceiptStatus, failed = !!(st.error || sharedReceiptLastError);
   const legacy = sharedReceiptLegacy && !sharedReceiptHasWork(sharedReceiving?.payload)
     ? '<button data-shared-receiving="legacy" class="underline font-bold mt-1">שחזור טיוטה קודמת מהמכשיר</button>' : '';
@@ -21514,7 +21515,7 @@ function applySharedReceipt(payload, meta = {}) {
   paperJoinRetry();
 }
 async function startSharedReceiving() {
-  if (sharedReceivingOff) { renderSharedReceivingBanner(); return; } // v135: טלפון אחד
+  if (sharedReceivingOff) { startReceivingHandoff(); renderSharedReceivingBanner(); return; } // v135/v136: טלפון אחד + גיבוי ומעבר בין טלפונים
   if (sharedReceiving || !db || !sharedReceiptHooksReady) return;
   sharedReceivingStartedAt = Date.now(); setTimeout(renderSharedReceivingBanner, 6500); // v135: לא עלה תוך 6 שניות — מציעים טלפון אחד
   if (!globalThis.BermanSharedReceiving) { sharedReceiptSyncError(new Error('shared_receiving_script_missing')); return; }
@@ -21540,7 +21541,7 @@ async function startSharedReceiving() {
 function sharedReceivingSolo() {
   const go = () => {
     sharedReceivingOff = true;
-    try { localStorage.setItem(SHARED_RECEIVING_OFF_KEY, '1'); } catch (e) {}
+    try { localStorage.setItem(SHARED_RECEIVING_OFF_KEY, '1'); localStorage.removeItem(SHARED_RECEIVING_LIVE_KEY); } catch (e) {}
     try { if (sharedReceiving) sharedReceiving.stop(); } catch (e) {}
     sharedReceiving = null; sharedReceiptLastError = ''; sharedReceiptStatus = { ready: false, status: 'off' };
     clearTimeout(sharedReceiptSaveTimer); sharedReceiptSaveTimer = null;
@@ -21556,10 +21557,182 @@ function sharedReceivingSolo() {
 // v135: חזרה לסנכרון — טיוטה שיש בטלפון ולא בענן מוצעת לשחזור (כמו מעבר מגרסה ישנה)
 async function sharedReceivingTogether() {
   sharedReceivingOff = false;
-  try { localStorage.removeItem(SHARED_RECEIVING_OFF_KEY); } catch (e) {}
+  try { localStorage.removeItem(SHARED_RECEIVING_OFF_KEY); localStorage.setItem(SHARED_RECEIVING_LIVE_KEY, '1'); } catch (e) {}
   logAction('receipt', 'סנכרון קליטה בין טלפונים', 'הסנכרון הופעל שוב בטלפון הזה', {});
   await startSharedReceiving();
   renderSharedReceivingBanner();
+}
+// ===== v136: קליטה בטלפון, גיבוי בענן ומעבר בין טלפונים =====
+// הקליטה רצה בטלפון ולא מחכה לענן. מה שפתוח מגובה ברקע למסמך אחד (drafts/receiving_handoff) — בלי נעילה, בלי
+// טרנזקציה; כתיבה שנכשלה פשוט תנסה שוב. בטלפון אחר: "המשך אותה כאן" — והטלפון הראשון יודע שהקליטה עברה (ולא
+// שומר אותה במקביל). בסיום, התעודה נשמרת ישר לענן והגיבוי נסגר. התמונות נשארות בטלפון (גדולות מדי למסמך).
+const RECEIVING_HANDOFF_DOC = 'receiving_handoff';
+const RECEIVING_CLAIM_KEY = 'bm_receiving_claim_v1';
+const RECEIVING_HANDOFF_BACKUP_KEY = 'bm_receipt_before_handoff';
+let receivingHandoffRemote = null, receivingHandoffStatus = 'idle', receivingHandoffTimer = null, receivingHandoffRetry = null;
+let receivingHandoffWriting = false, receivingHandoffAgain = false, receivingHandoffLast = '', receivingHandoffUnsub = null;
+function receivingDeviceId() {
+  try {
+    let id = localStorage.getItem('bm_device_id');
+    if (!id) { id = makeOperationId('device'); localStorage.setItem('bm_device_id', id); }
+    return id;
+  } catch (e) { return 'device-unknown'; }
+}
+// מתי הטלפון הזה התחיל להחזיק את הקליטה הפתוחה (נוצרה כאן, או "המשך אותה כאן")
+function receivingClaim() {
+  try { const c = JSON.parse(localStorage.getItem(RECEIVING_CLAIM_KEY) || 'null'); if (c && c.draftId) return c; } catch (e) {}
+  return null;
+}
+function receivingClaimSet(draftId, at) { try { localStorage.setItem(RECEIVING_CLAIM_KEY, JSON.stringify({ draftId, at })); } catch (e) {} }
+function receivingClaimFor(draftId) {
+  const c = receivingClaim();
+  if (c && c.draftId === draftId) return c;
+  const at = Date.now(); receivingClaimSet(draftId, at); return { draftId, at };
+}
+// 'moved' — טלפון אחר המשיך את אותה קליטה אחרי הטלפון הזה; 'saved' — היא כבר נשמרה (בטלפון אחר); '' — שלי
+function receivingHandoffAway() {
+  if (!receiptDraftId || receiptAttachTarget) return '';
+  if (receipts.some(r => r && r.id === receiptDraftId)) return 'saved';
+  const r = receivingHandoffRemote, c = receivingClaim();
+  if (!r || r.draftId !== receiptDraftId || r.deviceId === receivingDeviceId()) return '';
+  if (r.closed) return 'saved';
+  return Number(r.claimAt) > Number(c && c.draftId === receiptDraftId ? c.at : 0) ? 'moved' : '';
+}
+function receivingHandoffPayload() {
+  const p = captureSharedReceipt();
+  // התמונות נשארות בטלפון; הקריאה, העוגנים והספירה עוברים
+  p.state.aiScanDocuments = (p.state.aiScanDocuments || []).map(d => ({ ...d, pages: [] }));
+  // סיכום פתוח או קריאה שרצה עכשיו — שייכים לטלפון הזה; בטלפון השני הם נבנים מחדש
+  p.state.pendingReceipt = null;
+  p.ui = { view: 'receiving', forms: {} };
+  return p;
+}
+function scheduleReceivingHandoff() {
+  if (!sharedReceivingOff || !db || sharedReceiptApplying) return;
+  clearTimeout(receivingHandoffTimer);
+  receivingHandoffTimer = setTimeout(() => { receivingHandoffTimer = null; receivingHandoffSaveNow(); }, 1500);
+}
+async function receivingHandoffWrite(data) {
+  // לא מחכים לנצח: חיבור תקוע לא עוצר כלום — רק מסמן "לא גובה" וננסה שוב
+  await Promise.race([setDoc(doc(db, ...dataPath('drafts', RECEIVING_HANDOFF_DOC)), data),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('handoff_timeout')), 12000))]);
+}
+async function receivingHandoffSaveNow() {
+  if (!sharedReceivingOff || !db) return;
+  if (receivingHandoffWriting) { receivingHandoffAgain = true; return; }
+  const me = receivingDeviceId(), r = receivingHandoffRemote;
+  let data = null;
+  if (!receivingDraftEmpty() && receiptDraftId) {
+    if (receivingHandoffAway()) { refreshHandoffBanner(); return; } // עברה לטלפון אחר — הטלפון הזה כבר לא כותב אותה
+    const claim = receivingClaimFor(receiptDraftId);
+    let payload = JSON.stringify(receivingHandoffPayload());
+    if (payload.length > 900000) { receivingHandoffStatus = 'too-big'; refreshHandoffBanner(); return; }
+    const units = receiptList.reduce((a, l) => a + (Number(l && l.qty) || 0), 0);
+    const nums = (aiScanResponse && aiScanResponse.scan && Array.isArray(aiScanResponse.scan.documents) ? aiScanResponse.scan.documents : []).map(d => receiptPaperNumber(d && (d.docNumber ?? d.invoiceNumber))).filter(Boolean);
+    data = { schema: 1, deviceId: me, deviceName: deviceName || '', draftId: receiptDraftId, claimAt: claim.at, updatedAt: Date.now(), closed: false,
+      summary: { lines: receiptList.length, units, paperUnits: receiptNoteUnits != null ? receiptNoteUnits : null, docs: nums }, payload, writtenBy: APP_VERSION };
+  } else if (r && !r.closed && r.deviceId === me) {
+    // הקליטה של הטלפון הזה נסגרה (נשמרה או בוטלה) — הגיבוי נסגר
+    data = { schema: 1, deviceId: me, deviceName: deviceName || '', draftId: r.draftId || null, claimAt: r.claimAt || 0, updatedAt: Date.now(), closed: true, payload: null, writtenBy: APP_VERSION };
+  } else { if (receivingHandoffStatus !== 'idle') { receivingHandoffStatus = 'idle'; refreshHandoffBanner(); } return; }
+  const sig = JSON.stringify({ ...data, updatedAt: 0 });
+  if (sig === receivingHandoffLast && receivingHandoffStatus === 'saved') return;
+  receivingHandoffWriting = true; receivingHandoffStatus = 'saving'; refreshHandoffBanner();
+  try {
+    await receivingHandoffWrite(data);
+    receivingHandoffLast = sig; receivingHandoffStatus = data.closed ? 'idle' : 'saved';
+    receivingHandoffRemote = { ...data };
+    clearTimeout(receivingHandoffRetry); receivingHandoffRetry = null;
+  } catch (e) {
+    console.warn('receiving handoff backup failed', e);
+    receivingHandoffStatus = 'failed';
+    clearTimeout(receivingHandoffRetry); receivingHandoffRetry = setTimeout(() => { receivingHandoffRetry = null; receivingHandoffSaveNow(); }, 20000);
+  } finally {
+    receivingHandoffWriting = false; refreshHandoffBanner();
+    if (receivingHandoffAgain) { receivingHandoffAgain = false; scheduleReceivingHandoff(); }
+  }
+}
+function startReceivingHandoff() {
+  if (receivingHandoffUnsub || !db) return;
+  try {
+    receivingHandoffUnsub = onSnapshot(doc(db, ...dataPath('drafts', RECEIVING_HANDOFF_DOC)), snap => {
+      receivingHandoffRemote = snap && snap.exists() ? snap.data() : null;
+      refreshHandoffBanner();
+    }, e => console.warn('receiving handoff listener failed', e));
+  } catch (e) { console.warn('receiving handoff listener failed', e); }
+  scheduleReceivingHandoff();
+}
+function refreshHandoffBanner() { if (sharedReceivingOff) renderSharedReceivingBanner(); }
+// קליטה פתוחה מטלפון אחר שאפשר להמשיך כאן (לא זו שכבר פתוחה כאן)
+function receivingHandoffOffer() {
+  const r = receivingHandoffRemote;
+  if (!r || r.closed || !r.payload || !r.draftId || r.deviceId === receivingDeviceId() || r.draftId === receiptDraftId) return null;
+  if (receipts.some(x => x && x.id === r.draftId)) return null; // כבר נשמרה
+  return r;
+}
+function receivingHandoffWhen(r) { try { return new Date(Number(r.updatedAt)).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
+function receivingHandoffBannerHtml() {
+  const offer = receivingHandoffOffer(), away = receivingHandoffAway();
+  const who = r => r && r.deviceName ? 'בטלפון "' + htmlEscape(r.deviceName) + '"' : 'בטלפון אחר';
+  if (away === 'moved') {
+    const r = receivingHandoffRemote;
+    return '<div class="rounded-xl border-2 border-amber-300 bg-amber-50 text-amber-900 p-3 text-xs font-bold">הקליטה הזאת ממשיכה ' + who(r) + ' (מ-' + receivingHandoffWhen(r) + '). מה שנספר כאן מאז לא עובר לשם.' +
+      '<button data-shared-receiving="handoff-take" class="block w-full mt-2 rounded-lg border border-amber-300 bg-white px-3 py-2 font-black">החזר אותה לכאן</button></div>';
+  }
+  if (away === 'saved') return '<div class="rounded-xl border-2 border-emerald-300 bg-emerald-50 text-emerald-900 p-3 text-xs font-bold">הקליטה הזאת כבר נשמרה (בטלפון אחר) — כאן היא עותק ישן.' +
+    '<button data-shared-receiving="handoff-drop" class="block w-full mt-2 rounded-lg border border-emerald-300 bg-white px-3 py-2 font-black">נקה אותה מהטלפון הזה</button></div>';
+  if (offer) {
+    const sm = offer.summary || {}, docs = Array.isArray(sm.docs) && sm.docs.length ? ' · תעודה ' + sm.docs.map(htmlEscape).join(', ') : '';
+    return '<div class="rounded-xl border-2 border-blue-300 bg-blue-50 text-blue-900 p-3 text-xs font-bold">יש קליטה פתוחה ' + who(offer) + ' (מ-' + receivingHandoffWhen(offer) + docs +
+      (sm.paperUnits != null ? ' · ' + mtxQty(sm.paperUnits) + ' יח׳ בנייר' : '') + (sm.lines ? ' · נספרו ' + mtxQty(sm.units || 0) + ' יח׳ ב-' + sm.lines + ' שורות' : '') + ').' +
+      '<button data-shared-receiving="handoff-take" class="block w-full mt-2 rounded-lg bg-blue-600 text-white px-3 py-2.5 font-black text-sm">המשך אותה כאן</button></div>';
+  }
+  const st = receivingHandoffStatus;
+  const text = st === 'failed' ? 'הגיבוי לענן מתעכב — הקליטה שמורה בטלפון, וננסה שוב לבד.'
+    : st === 'too-big' ? 'הקליטה גדולה מדי לגיבוי בענן — היא שמורה בטלפון הזה.'
+    : st === 'saving' ? 'מגבה לענן…'
+    : st === 'saved' && !receivingDraftEmpty() ? 'הקליטה מגובה בענן — אפשר להמשיך אותה גם בטלפון אחר.' : '';
+  return text ? '<div class="text-[11px] font-bold ' + (st === 'failed' || st === 'too-big' ? 'text-amber-700' : 'text-slate-500') + '">' + text + '</div>' : '';
+}
+// "המשך אותה כאן" / "החזר אותה לכאן" — הקליטה מהגיבוי נכנסת לטלפון הזה, והוא מחזיק בה מעכשיו
+function receivingHandoffTake() {
+  const r = receivingHandoffRemote;
+  if (!r || r.closed || !r.payload) { showToast('הקליטה כבר לא פתוחה בענן', null, null, 3000); renderSharedReceivingBanner(); return; }
+  let p = null;
+  try { p = JSON.parse(r.payload); } catch (e) { p = null; }
+  if (!p || p.version !== 1 || !p.state || p.state.receiptDraftId !== r.draftId) { showToast('הגיבוי בענן לא תקין — לא הועבר', null, null, 3500); return; }
+  const go = () => {
+    // מה שהיה פתוח כאן (קליטה אחרת) נשמר בצד, בטלפון — לא נמחק בשקט
+    if (!receivingDraftEmpty() && receiptDraftId !== r.draftId) { try { localStorage.setItem(RECEIVING_HANDOFF_BACKUP_KEY, JSON.stringify({ savedAt: Date.now(), payload: captureSharedReceipt() })); } catch (e) {} }
+    applySharedReceipt(p, { source: 'handoff' });
+    // קריאה שרצה בטלפון השני לא ממשיכה כאן — כמו "המשך בלעדיה": קריאה שכבר יש — נשארת, בלי קריאה בתשלום
+    if (aiScanBusy || aiAnalyzeBusy || receiptPaperScanState === 'running') {
+      aiScanBusy = false; aiAnalyzeBusy = false; aiScanProgressText = '';
+      if (aiScanResponse) { if (receiptPaperScanState === 'running') receiptPaperScanState = ''; bermanAdoptPaperAnchors(); }
+      else { receiptPaperScanState = 'failed'; receiptPaperScanProblems = ['קריאת הניירות לא הסתיימה בטלפון השני. אם הנייר כבר נקרא שם — הוא יופיע במאזן עם "לקליטה". אחרת צלם שוב או הקלד את המספרים.']; }
+      saveReceiptDraft();
+    }
+    receivingClaimSet(r.draftId, Date.now());
+    receivingHandoffLast = '';
+    logAction('receipt', 'קליטה עברה לטלפון הזה', (r.deviceName ? 'מ-' + r.deviceName : 'מטלפון אחר') + ' · ' + (r.summary && r.summary.docs && r.summary.docs.length ? 'תעודה ' + r.summary.docs.join(', ') : 'קליטה פתוחה'), { draftId: r.draftId });
+    if (currentView !== 'receiving') setView('receiving'); else renderReceiving();
+    receivingHandoffSaveNow();
+    showToast('הקליטה עברה לטלפון הזה ✓', null, null, 2500);
+  };
+  if (!receivingDraftEmpty() && receiptDraftId !== r.draftId) {
+    showConfirm('להחליף את הקליטה שפתוחה כאן?', 'כאן פתוחה קליטה אחרת. היא תישמר בצד בטלפון הזה (לא נמחקת), והקליטה מהטלפון השני תיפתח במקומה.', 'המשך את הקליטה מהטלפון השני', go);
+    return;
+  }
+  go();
+}
+// הקליטה כבר נשמרה בטלפון אחר — מנקים את העותק הישן מהטלפון הזה (בלי למחוק ניירות: הם שייכים לתעודה שנשמרה)
+function receivingHandoffDropLocal() {
+  showConfirm('לנקות את העותק הישן?', 'הקליטה הזאת כבר נשמרה. העותק שבטלפון הזה יוסר — התעודה השמורה והניירות שלה לא משתנים.', 'נקה', () => {
+    applySharedReceipt(emptySharedReceipt(), { source: 'handoff' });
+    receiptDraftId = null; saveReceiptDraft();
+    if (currentView === 'receiving') renderReceiving();
+    renderSharedReceivingBanner();
+  });
 }
 async function restoreSharedReceiptLegacy() {
   if (!sharedReceiving || !canEditSharedReceipt() || !sharedReceiptLegacy) return;
@@ -21572,6 +21745,9 @@ async function finishSharedReceipt(id, data) {
   if (!canEditSharedReceipt()) { sharedReceiptReadOnlyNotice(); return false; }
   // v135: טלפון אחד — התעודה נשמרת ישר לענן, במזהה של הטיוטה (שמירה חוזרת דורסת את אותה תעודה, לא יוצרת שנייה)
   if (sharedReceivingOff) {
+    // v136: הקליטה הזאת עברה לטלפון אחר, או כבר נשמרה שם — לא שומרים אותה גם כאן
+    const away = receivingHandoffAway();
+    if (away) { showToast(away === 'saved' ? 'הקליטה הזאת כבר נשמרה בטלפון אחר — לא נשמרת פעמיים.' : 'הקליטה הזאת ממשיכה בטלפון אחר. כדי לסיים כאן — "החזר אותה לכאן" למעלה.', null, null, 5000); renderSharedReceivingBanner(); return false; }
     sharedReceiptFinalizing = true;
     try { return await runCloudTask('save receipt', { op: 'set', path: dataPath('receipts', id), data, operationId: id }); }
     finally { sharedReceiptFinalizing = false; }
@@ -21631,6 +21807,8 @@ $('sharedReceivingBanner').addEventListener('click', async event => {
   const action = event.target.closest('[data-shared-receiving]')?.dataset.sharedReceiving;
   try {
     if (action === 'off') { sharedReceivingSolo(); return; }
+    if (action === 'handoff-take') { receivingHandoffTake(); return; } // v136
+    if (action === 'handoff-drop') { receivingHandoffDropLocal(); return; }
     if (action === 'on') { await sharedReceivingTogether(); return; }
     if (action === 'legacy') await restoreSharedReceiptLegacy();
     else if (action === 'cloud' || action === 'local') await sharedReceiving.resolveConflict(action === 'local');

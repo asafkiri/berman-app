@@ -1,13 +1,7 @@
-// (נגזר מ-none-arrived-browser.mjs) v135 — הסנכרון לא עולה (קריאת הקליטה המשותפת תקועה): "המשך בטלפון הזה בלבד",
-// ואז צילום, "זה כל הניירות", "לא הגיע כלום — שמור" — והתעודה נשמרת ישר לענן. אחרי פתיחה מחדש — עדיין טלפון אחד.
-// v132 — "לא הגיע כלום" גלוי בדפדפן אמיתי, ברוחב טלפון (390px), על נייר "ת.משלוח" קטן שצולם בכפתור שבפס.
-// A: צילום → מסך הניירות: "לא הגיע כלום" מתחת ל"לספירה", במסך הראשון בלי לגלול → "לספירה" → מסך הקליטה:
-//    שלוש הבחירות פתוחות, "לא הגיע כלום" מעל "סרוק פריט לתעודה" ובמסך הראשון → לחיצה → "לא הגיע כלום — שמור" →
-//    v133: הקליטה נשמרת (כל השורות 0) בלי מסך ההבדלים ובלי הסיכום.
-// B: צילום → "לא הגיע כלום" ישר ממסך הניירות → מסך הקליטה עם שאלת האישור → כל השורות 0.
-// בלי גלילה לצדדים, בלי שגיאות דף, בקשת קריאה אחת לכל טלפון.
-// Run: NODE_PATH=$(npm root -g) node tests/none-arrived-browser.mjs (Playwright + Chromium; BERMAN_CHROMIUM optional;
-// BERMAN_TEST_CSS=<קובץ CSS> — לצילומי מסך עם העיצוב המלא במקום ה-CSS המינימלי)
+// v136 — שני טלפונים בדפדפן אמיתי, במצב ברירת המחדל (בלי סנכרון בלייב): A מצלם נייר "ת.משלוח" קטן — הקליטה מגובה
+// לענן בשקט. B פותח: "יש קליטה פתוחה … המשך אותה כאן" → אותה קליטה. A: "ממשיכה בטלפון אחר". B: "לא הגיע כלום —
+// שמור" → התעודה נשמרת במזהה של הקליטה והגיבוי נסגר. A: "כבר נשמרה" → "נקה". בלי שגיאות, בלי רשת חיצונית, 390px.
+// Run: NODE_PATH=$(npm root -g) node tests/receiving-handoff-browser.mjs
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -28,7 +22,7 @@ const rpc = async (operation, args = {}) => {
     transactionQueue = new Promise(resolve => { args.release = resolve; });
     await previous; releaseTransaction = args.release; return true;
   }
-  if (operation === 'read') { if (/\/drafts\//.test(args.path)) await new Promise(() => {}); return documents.get(args.path) ?? null; } // הסנכרון תקוע
+  if (operation === 'read') return documents.get(args.path) ?? null;
   if (operation === 'commit' || operation === 'batch') {
     for (const [path, value, op] of args.writes) { if (op === 'delete') documents.delete(path); else documents.set(path, structuredClone(value)); }
   }
@@ -36,7 +30,6 @@ const rpc = async (operation, args = {}) => {
   return true;
 };
 const setup = `
-try{localStorage.setItem('bm_shared_receiving_live','1')}catch(e){} // v136: הבדיקה הזאת בודקת את הסנכרון בלייב (בחירה מפורשת)
 const initializeApp = () => ({}), getAuth = () => ({currentUser:{getIdToken:async()=> 'test'}});
 const initializeFirestore = () => ({}), getFirestore = () => ({});
 const persistentLocalCache = () => ({}), persistentMultipleTabManager = () => ({});
@@ -45,6 +38,7 @@ const doc = (_db, ...path) => path.join('/');
 const snapshot = value => ({exists:()=>value!==null,data:()=>structuredClone(value),metadata:{fromCache:false,hasPendingWrites:false}});
 const getDoc = async path => snapshot(await window.__sharedRpc('read',{path}));
 const onSnapshot = (path, opts, callback) => {
+  if (typeof opts === 'function') { callback = opts; }
   let stopped=false, previous;
   const poll=async()=>{
     if(stopped)return;
@@ -70,10 +64,10 @@ let scanRequests=0;
 window.fetch=async(url)=>{if(String(url)===AI_SCAN_WORKER_URL){scanRequests++;return{ok:true,status:200,json:async()=>structuredClone(testData.paper)}}throw new Error('External network is forbidden in local replay: '+url)};
 openScanner=async()=>{window.t.scanner=(window.t.scanner||0)+1;};
 window.t={
-  state:()=>({solo:sharedReceivingOff,canEdit:canEditSharedReceipt(),items:structuredClone(receiptList),mode:receiptCountingMode,paperState:receiptPaperScanState,view:currentView,requests:scanRequests,ready:!!sharedReceiving?.ready,small:!!(papers.concat(Object.values(paperLocalResults()).map(r=>r.paper)).find(p=>p&&p.number==='290095141')||{}).small}),
+  state:()=>({solo:sharedReceivingOff,canEdit:canEditSharedReceipt(),draftId:receiptDraftId,away:receivingHandoffAway(),notes:structuredClone(receiptNotes),items:structuredClone(receiptList),mode:receiptCountingMode,paperState:receiptPaperScanState,view:currentView,requests:scanRequests,ready:!!sharedReceiving?.ready,small:!!(papers.concat(Object.values(paperLocalResults()).map(r=>r.paper)).find(p=>p&&p.number==='290095141')||{}).small}),
   scrollOk:()=>document.scrollingElement.scrollWidth<=document.scrollingElement.clientWidth+1
 };
-setView('receiving');startSharedReceiving();window.t.loaded=true;
+setView('receiving');await startSharedReceiving();window.t.loaded=true;
 `;
 const css = process.env.BERMAN_TEST_CSS ? fs.readFileSync(process.env.BERMAN_TEST_CSS, 'utf8')
   : `.hidden{display:none!important}.flex{display:flex}.grid{display:grid}.grid-cols-2{grid-template-columns:1fr 1fr}.flex-wrap{flex-wrap:wrap}.flex-1{flex:1}.min-w-0{min-width:0}.fixed{position:fixed}.inset-0{inset:0}.items-center{align-items:center}.justify-center{justify-content:center}.w-full{width:100%}.gap-2{gap:.5rem}.font-black{font-weight:900}.min-h-\\[48px\\]{min-height:48px}.min-h-\\[52px\\]{min-height:52px}.min-h-\\[56px\\]{min-height:56px}body{margin:0;font:16px Arial}header{background:#92400e;padding:14px}button,input{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}img{max-width:100%}[id$="Modal"]{background:#0008;align-items:center;justify-content:center;z-index:50}[id$="Modal"]>div{background:white;max-height:90vh;overflow-y:auto;padding:16px;box-sizing:border-box}`;
@@ -140,32 +134,48 @@ async function confirmNone(page) {
   assert.equal(await page.locator('#receiptSummaryModal').isVisible(), false, 'בלי הסיכום');
   const s = await state(page);
   assert.deepEqual(s.items, [], 'הקליטה נסגרה');
-  assert.equal(s.requests, 1, 'בלי קריאה נוספת');
+  assert.ok(s.requests <= 1, 'בלי קריאה נוספת');
 }
+const handoffDoc = () => { const k = [...documents.keys()].find(x => x.endsWith('/drafts/receiving_handoff')); return k ? documents.get(k) : null; };
 try {
   const A = await device('A'), a = A.page;
-  // הסנכרון תקוע: צפייה בלבד, ואחרי 6 שניות — "המשך בטלפון הזה בלבד"
-  assert.equal((await state(a)).canEdit, false, 'צפייה בלבד');
-  await a.locator('#sharedReceivingBanner [data-shared-receiving="off"]').waitFor({ state: 'visible', timeout: 15000 });
-  assert.match(await a.locator('#sharedReceivingBanner').innerText(), /טוען את הקליטה/);
-  assert.ok(await a.evaluate(() => window.t.scrollOk()), 'בלי גלילה לצדדים');
-  await a.screenshot({ path: '/tmp/berman-v135-solo-offer.png' });
-  await a.locator('#sharedReceivingBanner [data-shared-receiving="off"]').click();
-  await a.locator('#confirmModal').waitFor({ state: 'visible' });
-  assert.equal(await a.locator('#confirmTitle').innerText(), 'להמשיך בטלפון הזה בלבד?');
-  await a.locator('#confirmOk').click();
-  await a.waitForFunction(() => window.t.state().solo && window.t.state().canEdit);
-  // v136: בטלפון אחד השורה העליונה אומרת רק מה קורה עם הגיבוי (כאן הענן תקוע) — בלי "לא סונכרנה" ובלי נעילה
-  assert.doesNotMatch(await a.locator('#sharedReceivingBanner').innerText(), /לא סונכרנה|טוען את הקליטה|המשך בטלפון הזה בלבד/);
-  // צילום, "זה כל הניירות", "לא הגיע כלום — שמור" — נשמר ישר לענן
+  assert.equal((await state(a)).solo, true, 'ברירת המחדל: טלפון אחד');
   await photographSmall(a);
-  await a.locator('#app [data-role="paper-none-arrived"]').click();
+  const draftId = (await state(a)).draftId;
+  // הגיבוי לענן — בשקט, בלי לחכות לו
+  for (let i = 0; i < 100 && !(handoffDoc() && handoffDoc().draftId === draftId); i++) await new Promise(r => setTimeout(r, 50));
+  assert.equal(handoffDoc().closed, false); assert.ok(handoffDoc().payload.length > 100);
+  await a.locator('#app [data-role="paper-count-now"]').click();
   await a.waitForFunction(() => window.t.state().view === 'receiving');
-  await confirmNone(a);
-  // פתיחה מחדש — עדיין טלפון אחד, ואפשר לערוך מיד
-  await a.reload(); await a.waitForFunction(() => window.t?.loaded);
-  const s2 = await state(a);
-  assert.equal(s2.solo, true); assert.equal(s2.canEdit, true);
+  await a.locator('#sharedReceivingBanner', { hasText: 'הקליטה מגובה בענן' }).waitFor();
+  // B פותח — ההצעה
+  const B = await device('B'), b = B.page;
+  await b.locator('#sharedReceivingBanner [data-shared-receiving="handoff-take"]').waitFor({ state: 'visible' });
+  assert.match(await b.locator('#sharedReceivingBanner').innerText(), /יש קליטה פתוחה[\s\S]*290095141[\s\S]*המשך אותה כאן/);
+  assert.ok(await b.evaluate(() => window.t.scrollOk()), 'בלי גלילה לצדדים');
+  await b.screenshot({ path: '/tmp/berman-v136-handoff-offer.png' });
+  await b.locator('#sharedReceivingBanner [data-shared-receiving="handoff-take"]').click();
+  await b.waitForFunction(id => window.t.state().draftId === id && window.t.state().paperState === 'ok', draftId);
+  assert.deepEqual((await state(b)).notes.map(n => [n.units, n.lines]), (await state(a)).notes.map(n => [n.units, n.lines]));
+  assert.equal((await state(b)).requests, 0, 'בלי קריאה בתשלום');
+  // A יודע שהקליטה עברה
+  await a.locator('#sharedReceivingBanner', { hasText: 'ממשיכה בטלפון אחר' }).waitFor({ timeout: 10000 });
+  await a.screenshot({ path: '/tmp/berman-v136-handoff-moved.png' });
+  assert.equal((await state(a)).away, 'moved');
+  // B: "לא הגיע כלום — שמור"
+  await b.locator('#app [data-role="rc-quantity-none"]').click();
+  await confirmNone(b);
+  const saved = [...documents.entries()].filter(([k]) => /\/receipts\//.test(k));
+  assert.equal(saved.length, 1); assert.ok(saved[0][0].endsWith('/' + draftId), 'במזהה של הקליטה');
+  for (let i = 0; i < 100 && !(handoffDoc() && handoffDoc().closed); i++) await new Promise(r => setTimeout(r, 50));
+  assert.equal(handoffDoc().closed, true, 'הגיבוי נסגר');
+  // A: "כבר נשמרה" → "נקה"
+  await a.locator('#sharedReceivingBanner [data-shared-receiving="handoff-drop"]').waitFor({ state: 'visible', timeout: 10000 });
+  await a.locator('#sharedReceivingBanner [data-shared-receiving="handoff-drop"]').click();
+  await a.locator('#confirmModal').waitFor({ state: 'visible' });
+  await a.locator('#confirmOk').click();
+  await a.waitForFunction(() => !window.t.state().draftId);
+  assert.equal([...documents.keys()].filter(k => /\/trash\//.test(k)).length, 0, 'בלי למחוק ניירות');
   assert.deepEqual(errors, []); assert.deepEqual(external, []);
-  console.log('✓ טלפון אחד בדפדפן: הסנכרון תקוע → "המשך בטלפון הזה בלבד" → קליטה ושמירה ישר לענן; נשמר אחרי פתיחה מחדש — /tmp/berman-v135-solo-offer.png');
+  console.log('✓ מעבר בין טלפונים בדפדפן: גיבוי שקט → "המשך אותה כאן" → "ממשיכה בטלפון אחר" → שמירה בטלפון השני → "נקה" — /tmp/berman-v136-handoff-*.png');
 } finally { await browser.close(); server.close(); }

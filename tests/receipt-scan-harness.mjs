@@ -45,6 +45,8 @@ export function fixture() {
 export function runtime({ storage = new Map(), data = fixture(), realCloudTasks = false,
   sharedReceiving = false, loadSharedEngine = false, globals = {} } = {}) {
   const nodes = new Map(), callbacks = [], events = new Map(), requests = [], writes = [], toasts = [];
+  // v136: ברירת המחדל באפליקציה היא טלפון אחד; בדיקות של הסנכרון בלייב בוחרות בו במפורש (כמו משתמש שבחר)
+  if (sharedReceiving && !storage.has('bm_shared_receiving_live') && !storage.has('bm_shared_receiving_off')) storage.set('bm_shared_receiving_live', '1');
   function node(id) {
     if (nodes.has(id)) return nodes.get(id);
     const classes = new Set(['hidden']);
@@ -88,10 +90,14 @@ export function runtime({ storage = new Map(), data = fixture(), realCloudTasks 
   run(`products = testData.products; promos = testData.promos;
     showToast = text => testToasts.push(text);
     const auditOriginalAnalyzer = aiRunAnalyzer; aiRunAnalyzer = async () => {};`);
+  // v136: בלי הסנכרון בלייב האפליקציה עצמה עורכת תמיד ושומרת ישר לענן (טלפון אחד) — הבדיקות רצות על הקוד האמיתי.
+  // אפליקציה ישנה (BERMAN_TEST_APP, לפני v136) — כמו קודם.
   if (!sharedReceiving) run(`
-    if (typeof canEditSharedReceipt === "function") canEditSharedReceipt = () => true;
-    if (typeof finishSharedReceipt === "function") finishSharedReceipt = (id, data) =>
-      runCloudTask('save receipt before clearing draft', {op:'set', path:dataPath('receipts', id), data, operationId:id});
+    if (typeof sharedReceivingOff === "undefined" || !sharedReceivingOff) {
+      if (typeof canEditSharedReceipt === "function") canEditSharedReceipt = () => true;
+      if (typeof finishSharedReceipt === "function") finishSharedReceipt = (id, data) =>
+        runCloudTask('save receipt before clearing draft', {op:'set', path:dataPath('receipts', id), data, operationId:id});
+    }
   `);
   if (!realCloudTasks) run('runCloudTask = async (label, task) => { testWrites.push(structuredClone(task)); return true; };');
   async function scan() {

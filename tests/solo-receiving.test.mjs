@@ -42,8 +42,8 @@ test('הסנכרון נכשל: הסיבה ו"המשך בטלפון הזה בלב
   assert.equal(storage.get('bm_shared_receiving_off'), '1', 'נשמר לטלפון');
   r.run('renderSharedReceivingBanner()');
   banner = r.node('sharedReceivingBanner').innerHTML;
-  assert.match(banner, /קליטה בטלפון הזה בלבד — בלי סנכרון בלייב/);
-  assert.match(banner, /data-shared-receiving="on"/);
+  // v136: בטלפון אחד השורה העליונה אומרת רק מה קורה עם הגיבוי לענן (וקליטה מטלפון אחר, אם יש)
+  assert.doesNotMatch(banner, /הקליטה עדיין לא סונכרנה|data-shared-receiving="off"/);
   // קליטה עד הסוף: סריקה (הנייר), ספירה תואמת, סיכום, שמירה
   await r.scan();
   r.run('receiptDupConfirmed = true; finishReceipt()');
