@@ -816,7 +816,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '130'; // v130: הכל בקליטה, בלי שאלות — נייר "ת.משלוח" קטן נקלט, "לא הגיע כלום", תיקון וקיזוז מזוהים לבד, והמאזן בסוף
+const APP_VERSION = '131'; // v131: "לאיזו החזרה?" על כרטיס הנייר מיד אחרי הצילום — רק כשלא ברור
 // v40: תג גרסה קבוע בפינת המסך — לדעת בשנייה איזו גרסה באמת רצה על המכשיר
 // (עוזר במיוחד מול מטמון ה-PWA). pointer-events:none — לעולם לא חוסם מגע.
 document.body.insertAdjacentHTML('beforeend', '<div id="appVerBadge" style="position:fixed;bottom:4px;left:6px;z-index:9999;pointer-events:none;font-size:10px;font-weight:800;color:#64748b;opacity:.55;direction:rtl">גרסה ' + APP_VERSION + '</div>');        // מוצג בהגדרות; תואם למטמון sw.js
@@ -13536,7 +13536,7 @@ function ledgerItemText(it, lg, papers) {
       const lines = prod.length, top = prod.slice().sort((a, b) => (b.part.sent || 0) - (a.part.sent || 0))[0];
       if (!lines) return { role: 'ledger-attach', label: 'ההחזרה מ-' + ledgerDayShort(lg.docDays[id]) + ' (לפני תחילת המאזן)', paperId: it.paper.id, returnId: id };
       return { role: 'ledger-attach', label: 'ההחזרה מ-' + ledgerDayShort(lg.docDays[id]) + ' · ' + ledgerRowsText(lines) + (top ? ' · ' + top.pr.name + ' ×' + mtxQty(top.part.sent) : ''), paperId: it.paper.id, returnId: id };
-    }).concat([{ role: 'ledger-attach', label: 'לא שייך להחזרה', paperId: it.paper.id, returnId: '' }]) };
+    }).concat([{ role: 'ledger-attach', label: it.why === 'registered' ? 'זיכוי לחוסר בקליטה' : 'לא שייך להחזרה', paperId: it.paper.id, returnId: '' }]) };
     case 'deliveryNotReceived': {
       // v126: התעודה כבר נקראה — "לקליטה" מכניס אותה כפי שנקראה (בלי קריאה חדשה, בלי להקליד).
       // רק המספרים שמודפסים בתחתית הנייר — סכום השורות שנקראו אינו עוגן, והכמויות לא מוצגות.
@@ -14738,7 +14738,7 @@ function paperIntakeItemHtml(item) {
     actions = j.inDraft ? btn('paper-goto-receiving', 'לספירה ←') : j.done || j.waiting ? '' : btn('ledger-start-receiving', 'לקליטה', ' data-paper="' + htmlEscape(p.id) + '"' + capAttr) +
       (item.join && item.join.reason === 'bare' ? btn('ledger-start-receiving', 'קליטה חדשה לתעודה הזאת', ' data-paper="' + htmlEscape(p.id) + '" data-new="1"' + capAttr) : '');
   } else if (p && (item.status === 'saved' || item.status === 'review')) {
-    let st = ''; try { st = currentLedger().states[p.id] || ''; } catch (e) {}
+    let st = '', lgNow = null; try { lgNow = currentLedger(); st = lgNow.states[p.id] || ''; } catch (e) {}
     const head = htmlEscape(paperLabel(p)) + ' · ' + ledgerRowsText((p.rows || []).length) + ' · ' + mtxQty(paperUnits(p)) + ' יח׳';
     if (rec && rec.conflict) {
       body = '<div class="font-black text-sm text-amber-800">' + head + '</div><div class="text-[11px] text-amber-800 font-bold mt-0.5">נייר אחר כבר שמור עם המספר הזה, עם שורות אחרות. מה נכון?</div>';
@@ -14751,7 +14751,7 @@ function paperIntakeItemHtml(item) {
       const pre = again ? 'צילום נוסף של נייר שכבר נשמר — ' : '';
       const sub = again && ok && st === 'counted' ? 'הנייר הזה כבר נשמר מצילום קודם — נספר פעם אחת.'
         : !ok ? pre + 'לא נקרא עד הסוף — לא נספר עד שתבדוק ותאשר אותו.'
-        : st === 'needs-attach' ? pre + 'נקרא — לא ברור לאיזו החזרה הוא שייך. ענה במאזן.'
+        : st === 'needs-attach' ? pre + (paperAttachChoice(p, lgNow).why === 'registered' ? 'נקרא — על מה הזיכוי הזה? בחר כאן (עד אז הוא לא נספר).' : 'נקרא — לאיזו החזרה הוא שייך? בחר כאן (עד אז הוא לא נספר).')
         : st === 'duplicate' ? 'זהה לנייר שכבר נספר — נספר פעם אחת.'
         : st === 'in-receipt' ? 'כבר כלול בקליטה — לא נספר פעמיים.'
         : st === 'outside' ? pre + 'מחוץ לתקופת המאזן — לא נספר.'
@@ -14763,6 +14763,16 @@ function paperIntakeItemHtml(item) {
         (p.otherPapersVisible ? '<div class="text-[11px] text-amber-700 font-bold mt-0.5"><i class="fa-solid fa-circle-exclamation"></i> נראה שיש בתמונה עוד נייר — צלם אותו בנפרד.</div>' : '');
       tone = good ? 'border-emerald-200 bg-emerald-50' : ok ? 'border-slate-200 bg-slate-50' : 'border-amber-200 bg-amber-50';
       actions = again && ok ? '' : btn('paper-open', ok ? 'פרטים / שנה' : 'לבדיקה', ' data-id="' + htmlEscape(p.id) + '"' + capAttr);
+      // v131: לאיזו החזרה — כאן, ברגע הצילום (הנייר ביד); השאלה היחידה, ורק כשבאמת לא ברור
+      if (ok && st === 'needs-attach') {
+        const ch = paperAttachChoice(p, lgNow);
+        if (ch.actions.length) {
+          tone = 'border-amber-300 bg-amber-50';
+          // כל בחירה בשורה משלה (תוויות ארוכות; ברוחב טלפון בלי גלילה לצדדים)
+          actions = ch.actions.map(a => '<button data-role="ledger-attach" data-paper="' + htmlEscape(p.id) + '" data-return="' + htmlEscape(a.returnId || '') + '"' + capAttr +
+            ' class="btn-tap w-full min-h-[44px] px-3 py-2 rounded-lg bg-white border border-amber-300 text-amber-900 text-xs font-black text-right break-words">' + htmlEscape(a.label) + '</button>').join('') + actions;
+        }
+      }
     }
   }
   return '<div class="rounded-2xl border ' + tone + ' p-2.5 flex gap-2.5 items-start">' + img + '<div class="flex-1 min-w-0">' + body + (actions ? '<div class="flex gap-1.5 mt-2 flex-wrap">' + actions + '</div>' : '') + '</div></div>';
@@ -14790,6 +14800,16 @@ function renderPaperIntake() {
     '<div id="paperIntakeList" class="space-y-2 mb-24">' + it.items.map(paperIntakeItemHtml).join('') + '</div>';
 }
 function refreshPaperIntake() { if (currentView === 'paperIntake') renderPaperIntake(); }
+// v131: הכפתורים של "לאיזו החזרה?" לנייר שלא נספר עד שבוחרים — אותם כפתורים כמו במסך המאזן
+function paperAttachChoice(p, lg) {
+  try {
+    lg = lg || currentLedger();
+    const it = lg.items.find(i => i.kind === 'needsAttach' && i.paper && i.paper.id === p.id);
+    if (!it) return { why: null, actions: [] };
+    const t = ledgerItemText(it, lg, ledgerAllPapers(lg));
+    return { why: it.why || null, actions: (t.actions || []).filter(a => a.role === 'ledger-attach') };
+  } catch (e) { return { why: null, actions: [] }; }
+}
 
 // ===== בדיקה ידנית של נייר =====
 // נייר שלא נסגר מול בלוק הסיכום, שורה שלא זוהתה, תאריך או סוג שלא נקראו — המשתמש
@@ -15137,6 +15157,7 @@ async function ledgerAnswer(role, itemId, returnId, paperId) {
   }
   ledgerInvalidate(); refreshLedgerBar();
   if (currentView === 'ledger') renderLedger();
+  else if (currentView === 'paperIntake') refreshPaperIntake(); // v131: הבחירה מכרטיס הנייר אחרי הצילום
   else if (currentView === 'receiving' || currentView === 'manage') rerender(); // v130: תשובה מהמשפט שבקליטה
 }
 // שורה על כרטיס תעודה בהיסטוריה: אילו ניירות הסבירו אותה, ומה עוד פתוח במאזן

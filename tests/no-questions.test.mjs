@@ -156,3 +156,35 @@ test('סבב 5: נייר זיכוי שלא נספר עד שבוחרים — מו
   assert.doesNotMatch(r.node('app').innerHTML, /הכל מאוזן/);
   assert.match(r.node('app').innerHTML, /data-role="ledger-attach"/);
 });
+
+// ===== v131: "לאיזו החזרה?" על כרטיס הנייר, מיד אחרי הצילום =====
+test('v131: נייר זיכוי שלא ברור לאיזו החזרה — הכפתורים על הכרטיס אחרי הצילום; לחיצה אחת — נספר', async () => {
+  const amb = { schema: 1, rev: 1, state: 'accepted', timestamp: 1, id: 'paper_amb', kind: 'credit', number: '290094992', docDay: '2026-10-02', captureId: 'capA',
+    rows: [{ line: 1, itemCode: '2381', barcode: null, description: '', qty: 1, productId: 'code_2381' }] };
+  const r = ledgerApp(L2.receipts.slice().reverse(), L2.returns.slice().reverse(), [amb]);
+  r.context.testWrites = [];
+  r.run(`runCloudTask = async (label, task) => { testWrites.push(JSON.parse(JSON.stringify(task))); return true; };
+    openPaperIntake({}); paperIntake.items = [{ captureId: 'capA', status: 'saved', paperId: 'paper_amb' }]; setView('paperIntake');`);
+  let card = r.run(`paperIntakeItemHtml(paperIntake.items[0])`);
+  assert.match(card, /לאיזו החזרה הוא שייך\? בחר כאן/);
+  const btns = [...card.matchAll(/data-role="ledger-attach" data-paper="paper_amb" data-return="([^"]*)"/g)].map(m => m[1]);
+  assert.ok(btns.length >= 3, 'כפתור לכל החזרה + "לא שייך להחזרה"');
+  assert.equal(btns.at(-1), '');
+  assert.match(card, />ההחזרה מ-\d+\.\d+ · /);
+  r.context.R1001 = 'returns_d7ca5e1b-a8b9-45dd-a7de-34fc4fad4378';
+  assert.ok(btns.includes(r.context.R1001));
+  await r.run(`paperUiClick({ dataset: { role: 'ledger-attach', paper: 'paper_amb', return: R1001 } })`);
+  for (let i = 0; i < 20; i++) await new Promise(res => setImmediate(res));
+  assert.equal(r.context.testWrites.at(-1).data.forReturnId, r.context.R1001, 'נכתב לענן');
+  assert.equal(r.run(`currentLedger().states.paper_amb`), 'counted');
+  assert.equal(r.run('currentView'), 'paperIntake', 'נשארים במסך הניירות');
+  card = r.run(`paperIntakeItemHtml(paperIntake.items[0])`);
+  assert.doesNotMatch(card, /data-role="ledger-attach"/);
+  assert.match(card, /✓ /);
+});
+
+test('v131: נייר שברור לאיזו החזרה — בלי שאלה על הכרטיס', () => {
+  const r = ledgerApp(L2.receipts.slice().reverse(), L2.returns.slice().reverse(), [L2.papers.p141, L2.papers.p142]);
+  r.run(`openPaperIntake({}); paperIntake.items = [{ captureId: 'c142', status: 'saved', paperId: 'paper_290095142' }];`);
+  assert.doesNotMatch(r.run(`paperIntakeItemHtml(paperIntake.items[0])`), /data-role="ledger-attach"|לאיזו החזרה/);
+});
