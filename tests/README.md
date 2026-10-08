@@ -553,3 +553,10 @@ an explicit **לא זוכה** action preserves the returned quantity, records ze
 credited units and leaves an identified product shortage. It checks saving and
 reopening, both history views, partial and surplus credits, correcting a mistaken
 selection, allocated credit, row metadata and failed saves. No production data is changed.
+
+
+## v140 — local-only receiving
+
+`receiving-handoff` and `receiving-handoff-edge` now assert the final-only contract (no draft offers or ownership writes). `shared-receiving-app` retains the legacy payload/serializer and stale-callback compatibility tests; startup and finalization assertions follow the new local contract. `solo-receiving` checks always-local startup and failure retention. The old standalone engine suites remain as compatibility regressions.
+
+`local-receiving-adversarial`, `local-receiving-papers-adversarial`, and `local-receiving-migration-adversarial` exercise atomic finalization, legacy queues, migration quota failures, preserved comparison decisions, staged delivery papers and late callbacks. `local-receiving-returns-browser.mjs` checks two real Chromium contexts: receiving is private to each phone while returns continue syncing, including offline work. No live shop data or paid OCR is used.

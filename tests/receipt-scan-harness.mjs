@@ -2,6 +2,7 @@
 // are faked; scan adaptation, storage, restoration, comparison and HTML are real.
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { createCloud } from './fake-firestore.mjs';
 
 export const appPath = process.env.BERMAN_TEST_APP || new URL('../index.html', import.meta.url);
 export const html = fs.readFileSync(appPath, 'utf8');
@@ -61,6 +62,11 @@ export function runtime({ storage = new Map(), data = fixture(), realCloudTasks 
       getBoundingClientRect() { return { top: 0, left: 0, width: 400, height: 600 }; } };
     nodes.set(id, n); return n;
   }
+  const finalCloud = createCloud(), finalClient = finalCloud.client();
+  const finalFs = { ...finalClient.fs, runTransaction: (db, action, opts) => finalClient.fs.runTransaction(db, async tx => {
+    const sets = []; const result = await action({ ...tx, set(ref, data) { sets.push({ op: 'set', path: ref.path.split('/'), data: structuredClone(data) }); tx.set(ref, data); } });
+    writes.push(...sets); return result;
+  }, opts) };
   const currentUser = { getIdToken: async () => 'local-test-token' };
   const context = vm.createContext({ console, URL, TextEncoder, TextDecoder, AbortController, structuredClone,
     crypto: { randomUUID: () => 'local-' + Math.random().toString(36).slice(2) },
@@ -80,13 +86,15 @@ export function runtime({ storage = new Map(), data = fixture(), realCloudTasks 
       if (!String(url).endsWith('/scan')) throw new Error('Unexpected network request: ' + url);
       return { ok: true, status: 200, json: async () => structuredClone(data.paper) };
     },
-    ...globals
+    ...finalFs, ...globals
   });
   if (loadSharedEngine) vm.runInContext(fs.readFileSync(new URL('../shared-receiving.js', import.meta.url), 'utf8'), context,
     { filename: 'shared-receiving.js', timeout: 5000 });
   // v137: המודול של המעבר בין טלפונים נטען תמיד, כמו בדף (בלי פונקציות Firestore בבדיקה — הוא פשוט לא עולה)
   const handoffFile = new URL('../draft-handoff.js', import.meta.url);
   if (fs.existsSync(handoffFile)) vm.runInContext(fs.readFileSync(handoffFile, 'utf8'), context, { filename: 'draft-handoff.js', timeout: 5000 });
+  const localFile = new URL('../local-receiving.js', import.meta.url);
+  if (fs.existsSync(localFile)) vm.runInContext(fs.readFileSync(localFile, 'utf8'), context, { filename: 'local-receiving.js', timeout: 5000 });
   const returnsFile = new URL('../shared-return-events.js', import.meta.url);
   if (fs.existsSync(returnsFile)) vm.runInContext(fs.readFileSync(returnsFile, 'utf8'), context, { filename: 'shared-return-events.js', timeout: 5000 });
   vm.runInContext(moduleSource, context, { filename: 'index.html', timeout: 5000 });
@@ -116,5 +124,5 @@ export function runtime({ storage = new Map(), data = fixture(), realCloudTasks 
     const target = { dataset: { role, id }, closest: selector => selector === '[data-role]' ? target : null };
     return events.get('app:click')({ target });
   }
-  return { context, run, scan, click, node, nodes, events, requests, storage, writes, toasts, callbacks };
+  return { context, run, scan, click, finalCloud, finalClient, node, nodes, events, requests, storage, writes, toasts, callbacks };
 }

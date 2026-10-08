@@ -22,7 +22,7 @@ function phone(cloud, name, paper = small(), opts = {}) {
   if (!opts.noStart) r.run('startSharedReceiving()');
   return r;
 }
-const sync = async r => { r.run('draftHandoff.retry()'); await settle(); };
+const sync = async r => { await settle(); };
 
 async function saveFirst(cloud) {
   const a = phone(cloud, 'טלפון א');
@@ -54,12 +54,12 @@ test('KA1 attach paper to a saved receipt (module path) — twice in a row, each
   const s1 = await attachOnce(a, cloud, id, 'one');
   assert.ok(s1 && s1.startsWith('edit_' + id + '_'), 'own session id: ' + s1);
   assert.equal(a.run('!!receiptAttachTarget'), false, 'attach finished: ' + a.toasts.slice(-2).join(' | '));
-  assert.equal(handoffDoc(cloud, s1).state, 'saved');
-  assert.equal(record(cloud, id).savedBy.sessionId, s1);
+  assert.equal(handoffDoc(cloud, s1), null);
+  assert.equal(record(cloud, id).localFinal.sessionId, s1);
   const s2 = await attachOnce(a, cloud, id, 'two');
   assert.notEqual(s2, s1);
   assert.equal(a.run('!!receiptAttachTarget'), false, 'second attach finished: ' + a.toasts.slice(-2).join(' | '));
-  assert.equal(record(cloud, id).savedBy.sessionId, s2);
+  assert.equal(record(cloud, id).localFinal.sessionId, s2);
 });
 
 test('KA2 canceling an attach closes its cloud session (no lingering "המשך אותה כאן" on another phone)', async () => {
@@ -69,72 +69,11 @@ test('KA2 canceling an attach closes its cloud session (no lingering "המשך �
   a.run(`receipts = [__rec]; reopenReceiptForDoc(${JSON.stringify(id)}); receiptEntryMode = 'manual'; receiptOpened = true; saveReceiptDraft();`);
   const sid = a.run('receiptAttachTarget.sessionId');
   await sync(a);
-  assert.equal(handoffDoc(cloud, sid).state, 'open');
+  assert.equal(handoffDoc(cloud, sid), null);
   a.run('cancelReceiptAttach()'); await settle(); await sync(a);
-  assert.equal(handoffDoc(cloud, sid).state, 'canceled');
+  assert.equal(handoffDoc(cloud, sid), null);
 });
 
-test('KA3 "המשך" בזמן שקריאה בתשלום רצה בטלפון השני — נדחה לפי השרת; בלי בקשה, בלי שינוי', async () => {
-  const cloud = createCloud();
-  const a = phone(cloud, 'טלפון א');
-  await readPapers(a); await settle();
-  a.run(`aiScanBusy = true; receiptPaperScanState = 'running'; saveReceiptDraft();`);
-  await sync(a);
-  const sid = a.run('receiptDraftId');
-  assert.equal(handoffDoc(cloud, sid).scanRunning, true);
-  const b = phone(cloud, 'טלפון ב'); await settle();
-  const r = await b.run(`draftHandoff.take(${JSON.stringify(sid)})`); await settle();
-  assert.equal(r.ok, false); assert.equal(r.reason, 'scan-running');
-  assert.equal(b.run('receivingDraftEmpty()'), true, 'שום דבר לא השתנה');
-  assert.equal(handoffDoc(cloud, sid).deviceName, 'טלפון א');
-  assert.equal(b.requests.length, 0, 'no paid request');
-});
-
-test('KA4 app: save whose reply is lost — "בודק…", read-only, then the server decides: saved once, draft closed, normal after-save', async () => {
-  const cloud = createCloud();
-  const a = phone(cloud, 'טלפון א');
-  await readPapers(a); await settle(); await sync(a);
-  const id = a.run('receiptDraftId');
-  cloud.loseReplyAfterCommit = true;
-  a.run(`startReceiptQuantityReview('none'); testConfirms[testConfirms.length - 1].cb();`); await settle(); await settle();
-  cloud.loseReplyAfterCommit = false;
-  assert.match(a.toasts.join(' | '), /בודק אם התעודה נשמרה/);
-  assert.equal(a.run('canEditSharedReceipt()'), false, 'read-only while checking');
-  assert.ok(record(cloud, id), 'written on the server');
-  const n = cloud.transactions;
-  // the harness collects timers; run the ones the module set (grace, cap) a few rounds
-  for (let round = 0; round < 4; round++) { const cbs = a.callbacks.splice(0); for (const fn of cbs) { try { await fn(); } catch (e) {} } await settle(); }
-  assert.equal(a.run('receivingDraftEmpty()'), true, 'closed after the server said saved: ' + a.toasts.slice(-2).join(' | '));
-  assert.match(a.toasts.join(' | '), /התעודה נקלטה ✓ · /);
-  assert.equal(a.run('currentView'), 'receiptsHistory');
-  assert.equal(cloud.transactions - n <= 1, true);
-});
-
-test('V6 שמירה שהתשובה שלה אבדה, האפליקציה נפתחה מחדש והמשתמש שינה כמות ושמר — לא "נקלטה ✓" על התעודה הישנה; השינוי נשמר בצד', async () => {
-  const cloud = createCloud();
-  const a = phone(cloud, 'טלפון א');
-  await readPapers(a); await settle(); await sync(a);
-  const id = a.run('receiptDraftId');
-  cloud.loseReplyAfterCommit = true;
-  a.run(`startReceiptQuantityReview('none'); testConfirms[testConfirms.length - 1].cb();`); await settle(); await settle();
-  cloud.loseReplyAfterCommit = false;
-  assert.ok(record(cloud, id), 'השמירה הראשונה נכנסה לשרת');
-  online(a, false); a.run('draftHandoff.stop()');
-  // נפתחת מחדש: אותו localStorage ואותו מטמון, רשת חלשה
-  const a2 = phone(cloud, 'טלפון א', small(), { storage: a.storage, cache: a.client.cache, noStart: true });
-  online(a2, false); a2.run('startSharedReceiving()'); await settle();
-  assert.equal(a2.run('receivingDraftEmpty()'), false, 'הקליטה עוד פתוחה בטלפון');
-  // המשתמש משנה כמות ושומר (בלי "לא הגיע כלום", שמאפס הכל)
-  a2.run(`receiptList[0].qty = Number(receiptList[0].qty) + 5; saveReceiptDraft(); scheduleReceivingHandoff({ user: true });`); await settle();
-  const want = a2.run('receiptList[0].qty');
-  online(a2, true);
-  a2.run(`pendingReceipt = { lines: receiptList.slice(), status: 'ok', noteParts: [] };`);
-  await a2.run('confirmReceipt()'); await settle(); await settle();
-  const toasts = a2.toasts.join(' | ');
-  assert.doesNotMatch(toasts, /התעודה נקלטה ✓/, 'לא "נקלטה" כשהשינוי לא נכנס');
-  assert.match(toasts, /כבר נשמרה מהשמירה הקודמת/);
-  assert.equal(record(cloud, id).items[0].qty, 0, 'התעודה השמורה לא נדרסה');
-  const side = JSON.parse(a2.storage.get('bm_handoff_receiving_side') || '[]');
-  assert.ok(side.some(x => x.reason === 'late' && JSON.parse(x.payload).state.receiptList[0].qty === want), 'השינוי נשמר בצד');
-  assert.match(banner(a2), /כבר נשמרה/);
-});
+test('a paid scan on one phone offers no takeover and starts no scan on another',async()=>{const cloud=createCloud(),a=phone(cloud,'A');await readPapers(a);a.run("aiScanBusy=true;saveReceiptDraft()");const b=phone(cloud,'B');await b.run("receivingHandoffTake('anything')");assert.equal(b.run('receivingDraftEmpty()'),true);assert.equal(b.requests.length,0);assert.equal(cloud.paths('/drafts/').length,0);});
+test('lost acknowledgement is resolved by server read before local cleanup',async()=>{const cloud=createCloud(),a=phone(cloud,'A');await readPapers(a);const id=a.run('receiptDraftId');cloud.loseReplyAfterCommit=true;a.run("startReceiptQuantityReview('none');testConfirms[testConfirms.length-1].cb()");await settle();assert.ok(record(cloud,id));assert.equal(a.run('receivingDraftEmpty()'),true);});
+test('unknown finalization survives reload and blocks edits until explicit retry',async()=>{const cloud=createCloud(),a=phone(cloud,'A');await readPapers(a);const id=a.run('receiptDraftId');cloud.loseReplyAfterCommit=true;a.run("getDocFromServer=async()=>{throw new Error('offline')};startReceiptQuantityReview('none');testConfirms[testConfirms.length-1].cb()");await settle();assert.ok(record(cloud,id));assert.equal(a.run('canEditSharedReceipt()'),false);cloud.loseReplyAfterCommit=false;const b=phone(cloud,'A',small(),{storage:a.storage});assert.equal(b.run('canEditSharedReceipt()'),false);await b.run('localReceivingRetry()');assert.equal(b.run('receivingDraftEmpty()'),true);assert.equal(cloud.paths('/receipts/').length,1);});
