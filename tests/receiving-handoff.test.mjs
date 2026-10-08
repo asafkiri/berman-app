@@ -1,385 +1,78 @@
-// v137 — קליטה בטלפון, גיבוי בענן ו"המשך אותה כאן" בטלפון אחר, על המודול draft-handoff.js (docs/local-first-sync.md).
-// שני טלפונים אמיתיים (האפליקציה כולה) על ענן מדומה אחד (tests/fake-firestore.mjs: מטמון לכל טלפון, טרנזקציות, השרת מכריע).
-// מה שנבדק:
-// - ברירת המחדל: טלפון אחד — עורכים תמיד; לכל קליטה מסמך משלה בענן (בלי תמונות ובלי סיכום פתוח), עם מספר התעודה ומה שנספר.
-// - בטלפון השני: "יש קליטה פתוחה … המשך אותה כאן" → אותה קליטה (מזהה, עוגנים, קריאה, ספירה), בלי קריאה בתשלום.
-// - הטלפון הראשון: "ממשיכה בטלפון אחר" — לקריאה בלבד (לא עורך, לא שומר, לא מבטל), ו"החזר אותה לכאן".
-// - סיום בשני: התעודה נשמרת בטרנזקציה במזהה של הקליטה (עם savedBy), והמסמך נסגר; בראשון — "כבר נשמרה" + "נקה" (בלי למחוק ניירות).
-// - "החזר אותה לכאן" — הספירה העדכנית חוזרת; הספירה המקומית נשמרת בצד.
-// - קליטה אחרת פתוחה בטלפון השני — שואלים; היא נשמרת בצד, ואפשר לפתוח אותה אחר כך מהשורה העליונה.
-// - ביטול אצל המחזיק — בשני "בוטלה" (לא "נשמרה").
-// - קריאה בתשלום רצה בראשון — בשני אין "המשך" עד שהיא נגמרת.
-// - קליטה שהייתה פתוחה לפני העדכון — לא נתבעת בפתיחה, רק בעריכה של המשתמש.
-// - בלי רשת: "שמור" אומר "אין חיבור", הקליטה נשארת, ושום שמירה לא נוחתת מאוחר.
-// - מעבר מ-v136: הקליטה ש-v136 שם "בצד" מקבלת דרך חזרה; שמירה עיוורת שממתינה בתור לא תדרוס.
-// הרצה: node --test tests/receiving-handoff.test.mjs
+// v140 replaces cross-device draft handoff with local persistence and final-only commits.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { app, days, delivery, printed, readPapers } from './one-button-helpers.mjs';
+import { app, delivery, readPapers, credit } from './one-button-helpers.mjs';
 import { createCloud } from './fake-firestore.mjs';
-
-const json = (r, expr) => JSON.parse(r.run('JSON.stringify(' + expr + ')'));
-const settle = async () => { for (let i = 0; i < 60; i++) await new Promise(res => setImmediate(res)); };
-const small = (number = '290095141') => delivery(number, { internalNumber: null, headerText: 'ת.משלוח', docDate: printed(days(0)) });
 const ROOT = 'artifacts/berman-app-classic/public/data/';
-const handoffDoc = (cloud, sid) => cloud.get(ROOT + 'drafts/handoff_berman_receiving_' + sid);
-const record = (cloud, id) => cloud.get(ROOT + 'receipts/' + id);
-// טלפון: האפליקציה כולה + "Firestore" של אותו טלפון (מטמון משלו, רשת משלו)
-function phone(cloud, name, paper = small(), opts = {}) {
-  const client = cloud.client({ cache: opts.cache });
-  const r = app(paper, { storage: opts.storage });
-  r.client = client; r.context.__fs = client.fs;
-  r.run(`for (const k of ['doc', 'collection', 'query', 'where', 'onSnapshot', 'runTransaction', 'getDocFromServer']) globalThis[k] = __fs[k];
-    deviceName = ${JSON.stringify(name)}; currentView = 'receiving'; mainMode = 'receiving';`);
-  if (!opts.noStart) r.run('startSharedReceiving()');
-  return r;
+const json = (r, expr) => JSON.parse(r.run('JSON.stringify(' + expr + ')'));
+function phone(cloud, opts = {}) {
+ const r = app(opts.paper || delivery(), opts), c = cloud.client(); r.context.__fs = c.fs;
+ r.run("for (const k of ['doc', 'collection', 'query', 'where', 'onSnapshot', 'runTransaction', 'getDocFromServer']) globalThis[k] = __fs[k]; currentView = 'receiving'; mainMode = 'receiving'; startSharedReceiving();");
+ r.client = c; return r;
 }
-const online = (r, v) => { r.run('navigator.onLine = ' + !!v); r.client.setOnline(!!v); };
-const sync = async r => { r.run('draftHandoff.retry()'); await settle(); };
-const banner = r => { r.run(`currentView = 'receiving'; renderSharedReceivingBanner()`); return r.node('sharedReceivingBanner').innerHTML; };
-const sessionIn = html => (html.match(/data-shared-receiving="handoff-take" data-session="([^"]+)"/) || [])[1];
-const bannerClick = async (r, action, session = '') => {
-  await r.events.get('sharedReceivingBanner:click')({ target: { closest: sel => sel === '[data-shared-receiving]' ? { dataset: { sharedReceiving: action, session } } : null } });
-  await settle();
-};
-const lastConfirm = r => r.run('testConfirms[testConfirms.length - 1]');
-async function startOnA(cloud, opts) {
-  const a = phone(cloud, 'טלפון א', small(), opts);
-  await readPapers(a); await settle();
-  await sync(a);
-  return a;
-}
-async function takeOnB(cloud, a) {
-  const b = phone(cloud, 'טלפון ב'); await settle();
-  await bannerClick(b, 'handoff-take', a.run('receiptDraftId'));
-  await settle(); await settle();
-  return b;
-}
+const seed = (r, id='receipt-local') => r.run(`receiptDraftId=${JSON.stringify(id)};receiptOpened=true;receiptNoDoc=true;receiptList=[{productId:products[0].id,name:products[0].name,qty:9}];saveReceiptDraft();pendingReceipt={lines:receiptList.slice(),noDoc:true,status:'ok'};`);
 
-test('ברירת המחדל: טלפון אחד — עורכים תמיד; לכל קליטה מסמך משלה בענן (בלי תמונות ובלי סיכום פתוח)', async () => {
-  const cloud = createCloud();
-  const a = phone(cloud, 'טלפון א');
-  assert.equal(a.run('sharedReceivingOff'), true, 'ברירת המחדל');
-  assert.equal(a.run('!!draftHandoff'), true, 'המודול עלה');
-  assert.equal(a.run('canEditSharedReceipt()'), true);
-  await readPapers(a); await settle();
-  a.run(`pendingReceipt = { lines: [] }; aiScanDocuments = [{ noteIndex: 0, pages: [{ dataUrl: 'data:image/jpeg;base64,' + 'x'.repeat(5000) }] }];`);
-  await sync(a);
-  const id = a.run('receiptDraftId');
-  const h = handoffDoc(cloud, id);
-  assert.ok(h, 'גובה');
-  assert.equal(h.state, 'open'); assert.equal(h.gen, 1); assert.equal(h.deviceName, 'טלפון א'); assert.equal(h.sessionId, id); assert.equal(h.recordId, id);
-  assert.equal(h.openKey, 'berman:receiving');
-  assert.deepEqual(h.summary.docs, ['290095141']); assert.equal(h.summary.paperUnits, 30);
-  const p = JSON.parse(h.payload);
-  assert.equal(p.state.pendingReceipt, null, 'בלי סיכום פתוח');
-  assert.ok(p.state.aiScanDocuments.every(d => d.pages.length === 0), 'בלי תמונות');
-  assert.equal(p.state.receiptNotes[0].units, 30);
-  assert.match(banner(a), /הקליטה מגובה בענן/);
-  assert.equal(cloud.paths('receiving_handoff').length, 0, 'לא המסמך האחד של v136');
+test('two phones: counting stays local, old live flag cannot start any shared engine', async () => {
+ const cloud=createCloud(), a=phone(cloud,{storage:new Map([['bm_shared_receiving_live','1']])}), b=phone(cloud);
+ seed(a); a.run('scheduleReceivingHandoff({user:true});scheduleSharedReceiptSave()');
+ assert.equal(a.run('sharedReceivingOff'),true);assert.equal(a.run('draftHandoff'),null);assert.equal(a.run('sharedReceiving'),null);
+ assert.deepEqual(cloud.paths(),[]);assert.equal(b.run('receiptList.length'),0);
+ const reload=phone(cloud,{storage:a.storage});assert.equal(reload.run('receiptList[0].qty'),9);
+});
+test('final receipt is transactionally created once and local draft clears after acknowledgement',async()=>{
+ const cloud=createCloud(),r=phone(cloud);seed(r);await r.run('confirmReceipt()');
+ assert.equal(cloud.get(ROOT+'receipts/receipt-local').items[0].qty,9);assert.equal(r.run('receiptList.length'),0);
+ assert.equal(cloud.paths('/drafts/').length,0);assert.equal(cloud.paths('/receipts/').length,1);
+ await r.run('confirmReceipt()');assert.equal(cloud.paths('/receipts/').length,1);
+});
+test('offline finish keeps current counts and sends no queue task',async()=>{
+ const cloud=createCloud(),r=phone(cloud);seed(r);r.run('navigator.onLine=false');r.client.setOnline(false);await r.run('confirmReceipt()');
+ assert.equal(r.run('receiptList[0].qty'),9);assert.deepEqual(cloud.paths(),[]);assert.equal(r.run('cloudFailedWrites.length'),0);
+});
+test('lost commit response resolves via server read and does not duplicate',async()=>{
+ const cloud=createCloud(),r=phone(cloud);seed(r);cloud.loseReplyAfterCommit=true;await r.run('confirmReceipt()');
+ assert.equal(cloud.paths('/receipts/').length,1);assert.equal(r.run('receiptList.length'),0);
+});
+test('existing receipt is never overwritten by a stale local draft',async()=>{
+ const cloud=createCloud(),r=phone(cloud);seed(r);cloud.put(ROOT+'receipts/receipt-local',{items:[{qty:17}],status:'ok'});await r.run('confirmReceipt()');
+ assert.equal(cloud.get(ROOT+'receipts/receipt-local').items[0].qty,17);assert.equal(r.run('receiptList[0].qty'),9);
+});
+test('late acknowledgement cannot erase edits made while save waited',async()=>{
+ const cloud=createCloud(),r=phone(cloud);seed(r);let release;cloud.commitGate=new Promise(res=>release=res);
+ const save=r.run('confirmReceipt()');await new Promise(res=>setImmediate(res));r.run('receiptList[0].qty=23;saveReceiptDraft()');release();await save;
+ assert.equal(cloud.get(ROOT+'receipts/receipt-local').items[0].qty,9);assert.equal(r.run('receiptList[0].qty'),23);
+});
+test('delivery paper and paid OCR stay local until receipt finalization, then commit together',async()=>{
+ const cloud=createCloud(),r=phone(cloud);await readPapers(r);assert.equal(r.run('receiptOpened'),true);assert.equal(r.writes.filter(x=>x.paperCreate).length,0);
+ assert.equal(cloud.paths('/papers/').length,0);assert.equal(cloud.paths('/paperScans/').length,0);
+ r.run("receiptList=[{productId:products[0].id,name:products[0].name,qty:30}];saveReceiptDraft();pendingReceipt={lines:receiptList.slice(),status:'ok'}");
+ const id=r.run('receiptDraftId');await r.run('confirmReceipt()');assert.ok(cloud.get(ROOT+'receipts/'+id));assert.equal(cloud.paths('/papers/').length,1);assert.equal(cloud.paths('/paperScans/').length,1);
+});
+test('credit paper continues syncing during receiving',async()=>{
+ const cloud=createCloud(),r=phone(cloud,{paper:credit()});await readPapers(r);assert.equal(r.writes.filter(x=>x.paperCreate).length,1);
+});
+test('guarded attach preserves links and rejects concurrently changed receipt',async()=>{
+ const cloud=createCloud(),r=phone(cloud);const old={items:[{productId:r.run('products[0].id'),qty:9}],noDoc:true,timestamp:1,date:'2026-10-08',shortCreditNotes:[{id:'credit-link'}]};
+ cloud.put(ROOT+'receipts/old',old);r.context.__old=old;r.run("receipts=[{id:'old',...__old}];reopenReceiptForDoc('old');pendingReceipt={lines:receiptList.slice(),status:'ok'}");
+ await r.run('confirmReceipt()');assert.deepEqual(cloud.get(ROOT+'receipts/old').shortCreditNotes,old.shortCreditNotes);
+ const b=phone(cloud);b.context.__old=old;b.run("receipts=[{id:'old',...__old}];reopenReceiptForDoc('old');pendingReceipt={lines:receiptList.slice(),status:'ok'}");await b.run('confirmReceipt()');assert.ok(b.run('receiptList.length'));
+});
+test('legacy side remains accessible despite history containing same receipt ID',()=>{
+ const cloud=createCloud(),r=phone(cloud);seed(r,'same');const payload=json(r,'receivingHandoffPayload()');r.storage.set('bm_handoff_receiving_side',JSON.stringify([{sessionId:'same',payload:JSON.stringify(payload)}]));
+ r.run("receiptList=[];receiptOpened=false;receiptNoDoc=false;receiptDraftId=null;receipts=[{id:'same'}]");assert.equal(r.run('localReceivingRestore(0)'),true);assert.equal(r.run('receiptDraftId'),'same');assert.equal(r.run('receiptList[0].qty'),9);assert.ok(r.storage.has('bm_handoff_receiving_side'));
+});
+test('legacy queued blind receipt write is archived and cannot be replayed',async()=>{
+ const cloud=createCloud(),r=phone(cloud);r.run("cloudFailedWrites=[{id:'q',actionName:'save receipt',task:{op:'set',path:dataPath('receipts','old'),data:{items:[{qty:99}]}}}];migrateLocalReceivingQueues()");
+ assert.equal(r.run('cloudFailedWrites.length'),0);assert.equal(JSON.parse(r.storage.get('bm_local_receiving_legacy_queue')).length,1);assert.deepEqual(cloud.paths(),[]);
+});
+test('old quantity modal cannot create a new receipt after final save',async()=>{
+ const cloud=createCloud(),r=phone(cloud);seed(r);r.run("qtyProduct=products[0];qtyTarget='receipt';qtyReceiptEpoch=localReceivingEpoch;$('qtyVal').value='99'");await r.run('confirmReceipt()');r.run('commitQty(false)');assert.equal(r.run('receiptList.length'),0);
 });
 
-test('"המשך אותה כאן" — אותה קליטה בלי קריאה בתשלום; הראשון — "ממשיכה בטלפון אחר", לקריאה בלבד: לא עורך, לא שומר, לא דורס', async () => {
-  const cloud = createCloud();
-  const a = await startOnA(cloud);
-  a.run(`receiptList = [{ productId: products[0].id, name: products[0].name, barcode: products[0].barcode, qty: 3 }]; saveReceiptDraft();`);
-  await sync(a);
-  const b = phone(cloud, 'טלפון ב'); await settle();
-  const bb = banner(b);
-  assert.match(bb, /יש קליטה פתוחה בטלפון "טלפון א"/);
-  assert.match(bb, /תעודה 290095141/); assert.match(bb, /30 יח׳ בנייר/); assert.match(bb, /נספרו 3 יח׳ ב-שורה אחת/);
-  assert.equal(sessionIn(bb), a.run('receiptDraftId'));
-  assert.match(bb, /data-shared-receiving="handoff-take"[^>]*>המשך אותה כאן/);
-  await bannerClick(b, 'handoff-take', sessionIn(bb)); await settle();
-  assert.equal(b.run('receiptDraftId'), a.run('receiptDraftId'), 'אותה קליטה');
-  assert.deepEqual(json(b, 'receiptList.map(l => l.qty)'), [3]);
-  assert.deepEqual(json(b, 'receiptNotes.map(n => [n.units, n.lines])'), [[30, 5]]);
-  assert.deepEqual(json(b, 'aiScanResponse.perDocument.map(d => d.paperId)'), ['paper_290095141']);
-  assert.equal(b.run('receiptPaperScanState'), 'ok');
-  assert.equal(b.requests.length, 0, 'בלי קריאה בתשלום');
-  const h = handoffDoc(cloud, a.run('receiptDraftId'));
-  assert.equal(h.deviceName, 'טלפון ב'); assert.equal(h.gen, 2);
-  // הראשון
-  await settle();
-  const ab = banner(a);
-  assert.match(ab, /הקליטה הזאת ממשיכה בטלפון "טלפון ב"/);
-  assert.match(ab, /data-shared-receiving="handoff-take"[^>]*>החזר אותה לכאן/);
-  assert.equal(a.run('canEditSharedReceipt()'), false, 'לקריאה בלבד');
-  // שמירה באישור — לא נשמרת, וההודעה אומרת למה
-  a.run(`pendingReceipt = { lines: receiptList.slice(), status: 'ok' };`);
-  await a.run('confirmReceipt()'); await settle();
-  assert.equal(record(cloud, a.run('receiptDraftId')), null, 'לא נשמרה בטלפון הראשון');
-  assert.match(a.toasts[a.toasts.length - 1], /ממשיכה בטלפון "טלפון ב"/);
-  // גם נייר שמגיע עכשיו לא נכנס לעותק הישן, וההסבר נכון
-  assert.match(a.run(`paperJoinReasonText({ reason: 'readonly' })`), /ממשיכה בטלפון/);
-  // לא דורס את הגיבוי
-  a.run(`receiptList[0].qty = 9; saveReceiptDraft();`); await sync(a);
-  assert.equal(handoffDoc(cloud, a.run('receiptDraftId')).deviceName, 'טלפון ב');
-  assert.deepEqual(JSON.parse(handoffDoc(cloud, a.run('receiptDraftId')).payload).state.receiptList.map(l => l.qty), [3]);
-});
-
-test('סיום בשני: נשמרת בטרנזקציה במזהה של הקליטה (savedBy) והמסמך נסגר; בראשון — "כבר נשמרה" ו"נקה" (בלי למחוק ניירות)', async () => {
-  const cloud = createCloud();
-  const a = await startOnA(cloud);
-  const draftId = a.run('receiptDraftId');
-  const b = await takeOnB(cloud, a);
-  assert.equal(b.run('receiptDraftId'), draftId);
-  b.run(`startReceiptQuantityReview('none'); testConfirms[testConfirms.length - 1].cb();`);
-  await settle(); await settle();
-  const rec = record(cloud, draftId);
-  assert.ok(rec, 'נשמרה');
-  assert.equal(rec.savedBy.sessionId, draftId); assert.equal(rec.savedBy.gen, 2); assert.equal(rec.operationId, draftId);
-  assert.equal(handoffDoc(cloud, draftId).state, 'saved'); assert.equal(handoffDoc(cloud, draftId).payload, null);
-  assert.equal(b.run('receivingDraftEmpty()'), true, 'הקליטה נסגרה בשני');
-  assert.match(b.toasts.join(' | '), /התעודה נקלטה ✓/);
-  assert.deepEqual(json(b, `testWrites.filter(w => w.path && w.path[w.path.length - 2] === 'receipts')`), [], 'לא בשמירה העיוורת הישנה');
-  await settle();
-  assert.match(banner(a), /הקליטה הזאת כבר נשמרה/);
-  await bannerClick(a, 'handoff-drop');
-  assert.equal(lastConfirm(a).title, 'לנקות את העותק הישן?');
-  a.run('testConfirms[testConfirms.length - 1].cb()'); await settle();
-  assert.equal(a.run('receivingDraftEmpty()'), true, 'העותק הישן נוקה');
-  assert.deepEqual(json(a, `testWrites.filter(w => w.op === 'batch' && w.writes.some(x => x.path && x.path.includes('trash')))`), [], 'בלי למחוק ניירות');
-  assert.equal(record(cloud, draftId).savedBy.gen, 2, 'התעודה השמורה לא השתנתה');
-});
-
-test('"החזר אותה לכאן" — הספירה העדכנית מהשני חוזרת (ובלי "גרסה קודמת" כשלא היה שינוי מקומי)', async () => {
-  const cloud = createCloud();
-  const a = await startOnA(cloud);
-  const b = await takeOnB(cloud, a);
-  b.run(`receiptList = [{ productId: products[1].id, name: products[1].name, barcode: products[1].barcode, qty: 7 }]; saveReceiptDraft();`);
-  await sync(b); await settle();
-  const ab = banner(a);
-  await bannerClick(a, 'handoff-take', sessionIn(ab)); await settle();
-  assert.deepEqual(json(a, 'receiptList.map(l => l.qty)'), [7], 'הספירה מהשני');
-  assert.equal(handoffDoc(cloud, a.run('receiptDraftId')).deviceName, 'טלפון א');
-  assert.equal(a.run('canEditSharedReceipt()'), true);
-  await settle();
-  assert.match(banner(b), /ממשיכה בטלפון "טלפון א"/);
-  assert.equal(JSON.parse(a.storage.get('bm_handoff_receiving_side') || '[]').length, 0, 'בא\' לא היה שום שינוי שלא הגיע — אין "גרסה קודמת"');
-});
-
-test('קליטה אחרת פתוחה בטלפון השני — שואלים; היא נשמרת בצד, ואחרי הסיום נפתחת מהשורה העליונה', async () => {
-  const cloud = createCloud();
-  const a = await startOnA(cloud);
-  const b = phone(cloud, 'טלפון ב', delivery('77001234'));
-  await readPapers(b); await settle(); await sync(b);
-  const bDraft = b.run('receiptDraftId');
-  assert.notEqual(bDraft, a.run('receiptDraftId'));
-  const bb = banner(b);
-  assert.match(bb, /המשך אותה כאן/);
-  await bannerClick(b, 'handoff-take', sessionIn(bb));
-  assert.equal(lastConfirm(b).title, 'להחליף את הקליטה שפתוחה כאן?');
-  assert.equal(b.run('receiptDraftId'), bDraft, 'לפני האישור — כלום');
-  await b.run('testConfirms[testConfirms.length - 1].cb()'); await settle();
-  assert.equal(b.run('receiptDraftId'), a.run('receiptDraftId'));
-  const side = JSON.parse(b.storage.get('bm_handoff_receiving_side'));
-  assert.equal(side[0].sessionId, bDraft); assert.equal(side[0].reason, 'other');
-  assert.ok(JSON.parse(side[0].payload).state.aiScanDocuments.every(d => d.pages.length === 0), 'בלי תמונות');
-  // מסיימים את הקליטה שהגיעה מא' — והקליטה שבצד מוצעת
-  b.run(`startReceiptQuantityReview('none'); testConfirms[testConfirms.length - 1].cb();`); await settle(); await settle();
-  const after = banner(b);
-  assert.match(after, /קליטה שנשמרה בצד בטלפון הזה/); assert.match(after, /פתח אותה/);
-  await bannerClick(b, 'side-open', bDraft); await settle();
-  assert.equal(b.run('receiptDraftId'), bDraft, 'הקליטה שבצד חזרה');
-  assert.equal(b.run('canEditSharedReceipt()'), true);
-});
-
-test('ביטול אצל המחזיק — בשני "בוטלה" (לא "נשמרה"), ו"נקה" שומר קודם עותק בצד', async () => {
-  const cloud = createCloud();
-  const a = await startOnA(cloud);
-  const draftId = a.run('receiptDraftId');
-  const b = await takeOnB(cloud, a);
-  b.click('rc-cancel'); b.run('testConfirms[testConfirms.length - 1].cb()'); await settle();
-  assert.equal(b.run('receivingDraftEmpty()'), true);
-  await sync(b);
-  assert.equal(handoffDoc(cloud, draftId).state, 'canceled');
-  await settle();
-  const ab = banner(a);
-  assert.match(ab, /בוטלה בטלפון "טלפון ב"/); assert.doesNotMatch(ab, /נשמרה/);
-  await bannerClick(a, 'handoff-drop'); a.run('testConfirms[testConfirms.length - 1].cb()'); await settle();
-  assert.equal(a.run('receivingDraftEmpty()'), true);
-  assert.equal(JSON.parse(a.storage.get('bm_handoff_receiving_side'))[0].reason, 'canceled');
-});
-
-test('קריאה בתשלום רצה בראשון — בשני אין "המשך" עד שהיא נגמרת', async () => {
-  const cloud = createCloud();
-  const a = await startOnA(cloud);
-  // תחילת קריאה — הגיבוי מתעדכן מיד (פעם אחת לכל שינוי, לא בכל ציור)
-  a.run(`globalThis.__changed = 0; const __orig = draftHandoff.changed; draftHandoff.changed = o => { __changed++; return __orig(o); };`);
-  a.run(`aiScanBusy = true; receiptPaperScanState = 'running'; refreshScanHost(); refreshScanHost();`);
-  assert.equal(a.run('__changed'), 1, 'הקריאה התחילה — עדכון אחד');
-  await sync(a);
-  assert.equal(handoffDoc(cloud, a.run('receiptDraftId')).scanRunning, true);
-  const b = phone(cloud, 'טלפון ב'); await settle();
-  let bb = banner(b);
-  assert.match(bb, /קריאת הנייר רצה שם/); assert.doesNotMatch(bb, /המשך אותה כאן/);
-  a.run(`aiScanBusy = false; receiptPaperScanState = 'ok'; refreshScanHost();`); await sync(a); await settle();
-  bb = banner(b);
-  assert.match(bb, /המשך אותה כאן/);
-});
-
-test('קליטה שהייתה פתוחה לפני העדכון — לא נתבעת בפתיחה; שמירה אוטומטית לא תובעת; עריכה של המשתמש — כן', async () => {
-  const cloud = createCloud();
-  const a = phone(cloud, 'טלפון א', small(), { noStart: true });
-  await readPapers(a); await settle();
-  a.run('startSharedReceiving()'); await sync(a);
-  const id = a.run('receiptDraftId');
-  assert.equal(handoffDoc(cloud, id), null, 'פתיחה לא תובעת');
-  a.run('saveReceiptDraft()'); await sync(a);
-  assert.equal(handoffDoc(cloud, id), null, 'שמירה אוטומטית לא תובעת');
-  assert.doesNotMatch(banner(a), /מגובה/);
-  // לחיצה של המשתמש בלי שינוי בתוכן (למשל ניווט) — לא תובעת: אולי בטלפון אחר יש עותק חדש יותר מהסנכרון הישן
-  const target = { closest: sel => (sel === '#app' ? {} : null) };
-  a.events.get('click')({ type: 'click', target }); await sync(a);
-  assert.equal(handoffDoc(cloud, id), null, 'לחיצה בלי שינוי — לא נתבעת');
-  // עריכה אמיתית של המשתמש: אירוע על מסך הקליטה + התוכן השתנה
-  a.run(`receiptList = [{ productId: products[0].id, name: products[0].name, barcode: products[0].barcode, qty: 1 }]; saveReceiptDraft();`);
-  a.events.get('input')({ type: 'input', target }); await sync(a);
-  assert.equal(handoffDoc(cloud, id).deviceName, 'טלפון א', 'עריכה של המשתמש — נתבעת ומגובה');
-});
-
-test('בלי רשת: "שמור" אומר "אין חיבור" — הקליטה והסיכום נשארים, ושום שמירה לא נוחתת אחר כך', async () => {
-  const cloud = createCloud();
-  const a = await startOnA(cloud);
-  const id = a.run('receiptDraftId');
-  online(a, false);
-  a.run(`startReceiptQuantityReview('none'); testConfirms[testConfirms.length - 1].cb();`); await settle();
-  assert.match(a.toasts.join(' | '), /אין חיבור — הקליטה שמורה בטלפון/);
-  assert.equal(a.run('receivingDraftEmpty()'), false);
-  assert.equal(a.run('!!pendingReceipt'), true, 'הסיכום מחכה');
-  online(a, true); await sync(a);
-  assert.equal(record(cloud, id), null, 'שום שמירה לא נוחתת לבד');
-  await a.run('confirmReceipt()'); await settle();
-  assert.ok(record(cloud, id), 'ושמירה חוזרת עובדת');
-});
-
-test('מעבר מ-v136: מה ש-v136 שם "בצד" מקבל דרך חזרה; שמירה עיוורת שממתינה בתור — לא תדרוס', async () => {
-  const cloud = createCloud();
-  const a = phone(cloud, 'טלפון א', small(), { noStart: true });
-  await readPapers(a); await settle();
-  const id = a.run('receiptDraftId');
-  const old = { savedAt: Date.now() - 3600000, payload: { version: 1, ui: { view: 'receiving', forms: {} }, state: { receiptDraftId: 'receipt_old1', receiptOpened: true,
-    receiptList: [{ productId: 'p1', qty: 4 }], aiScanDocuments: [{ noteIndex: 0, pages: [{ dataUrl: 'data:image/jpeg;base64,eA==' }] }] } } };
-  a.storage.set('bm_receipt_before_handoff', JSON.stringify(old));
-  a.storage.set('bm_receiving_claim_v1', JSON.stringify({ draftId: id, at: 1 }));
-  a.run(`cloudFailedWrites = [
-    { id: 'w1', actionName: 'save receipt', task: { op: 'set', path: dataPath('receipts', ${JSON.stringify(id)}), data: { a: 1 }, operationId: ${JSON.stringify(id)} } },
-    { id: 'w2', actionName: 'save receipt', task: { op: 'set', path: dataPath('receipts', 'receipt_other'), data: { b: 1 }, operationId: 'receipt_other' } },
-    { id: 'w3', actionName: 'save product', task: { op: 'set', path: dataPath('products', 'x'), data: {} } }]; saveCloudFailedWrites();`);
-  a.run('startSharedReceiving()'); await settle();
-  assert.deepEqual(json(a, 'cloudFailedWrites.map(w => [w.id, w.task.op])'), [['w2', 'create-if-absent'], ['w3', 'set']]);
-  assert.equal(a.storage.has('bm_receipt_before_handoff'), false);
-  assert.equal(a.storage.has('bm_receiving_claim_v1'), false);
-  const side = JSON.parse(a.storage.get('bm_handoff_receiving_side'));
-  assert.equal(side[0].sessionId, 'receipt_old1');
-  assert.ok(JSON.parse(side[0].payload).state.aiScanDocuments.every(d => d.pages.length === 0), 'בלי תמונות');
-});
-
-test('שורה עליונה: תאריך להצעה ישנה, "שורה אחת", "תעודות" ברבים', () => {
-  const r = app(small());
-  assert.match(r.run(`receivingHandoffWhen(Date.now() - 2 * 86400000)`), /\d+\.\d+/);
-  assert.doesNotMatch(r.run(`receivingHandoffWhen(Date.now())`), /\d+\.\d+\s/);
-  assert.match(r.run(`receivingHandoffWhat({ lines: 1, units: 3 })`), /ב-שורה אחת/);
-  assert.match(r.run(`receivingHandoffWhat({ lines: 2, units: 3, docs: ['1', '2'] })`), /תעודות 1, 2 · נספרו 3 יח׳ ב-2 שורות/);
-});
-
-test('לחיצה כפולה על "שמור" — תעודה אחת; בזמן השמירה אי אפשר לערוך', async () => {
-  const cloud = createCloud();
-  const a = await startOnA(cloud);
-  const id = a.run('receiptDraftId');
-  a.run(`pendingReceipt = { lines: receiptList.slice(), status: 'ok', noteTotal: 0, noteParts: [] };`);
-  const first = a.run('confirmReceipt()');
-  assert.equal(a.run('canEditSharedReceipt()'), false, 'בזמן השמירה — לא עורכים');
-  const second = a.run('confirmReceipt()');
-  await first; await second; await settle();
-  assert.equal(cloud.transactions >= 1, true);
-  assert.ok(record(cloud, id), 'נשמרה');
-  assert.equal(cloud.paths('/receipts/').length, 1, 'תעודה אחת');
-});
-
-test('בלי רשת בזמן עבודה — השורה העליונה אומרת "הגיבוי לענן מתעכב", והעבודה ממשיכה', async () => {
-  const cloud = createCloud();
-  const a = await startOnA(cloud);
-  online(a, false);
-  a.run(`receiptList = [{ productId: products[0].id, name: products[0].name, barcode: products[0].barcode, qty: 2 }]; saveReceiptDraft();`);
-  await sync(a);
-  assert.match(banner(a), /הגיבוי לענן מתעכב — הקליטה שמורה בטלפון/);
-  assert.equal(a.run('canEditSharedReceipt()'), true);
-  online(a, true); await sync(a);
-  assert.match(banner(a), /הקליטה מגובה בענן/);
-  assert.deepEqual(JSON.parse(handoffDoc(cloud, a.run('receiptDraftId')).payload).state.receiptList.map(l => l.qty), [2]);
-});
-
-test('קליטה שמגיעה מטלפון אחר עם קריאה "רצה": בלי קריאה — "צלם שוב או הקלד"; עם קריאה — העוגנים ממנה, בלי בקשה', async () => {
-  const cloud = createCloud();
-  const a = await startOnA(cloud);
-  const p = JSON.parse(handoffDoc(cloud, a.run('receiptDraftId')).payload);
-  const b = phone(cloud, 'טלפון ב');
-  // עם קריאה: הקריאה כבר יש — לוקחים ממנה את העוגנים
-  p.state.aiScanBusy = true; p.state.receiptPaperScanState = 'running'; p.state.receiptNotes = []; p.state.receiptAnchorSource = null;
-  b.context.__p = p; b.run('receivingHandoffApply(JSON.parse(JSON.stringify(__p)), {})');
-  assert.equal(b.run('aiScanBusy'), false); assert.equal(b.run('receiptPaperScanState'), 'ok');
-  assert.deepEqual(json(b, 'receiptNotes.map(n => n.units)'), [30]);
-  // בלי קריאה: "צלם שוב או הקלד"
-  p.state.aiScanResponse = null; p.state.receiptDraftId = 'receipt_other';
-  b.context.__p = p; b.run('receivingHandoffApply(JSON.parse(JSON.stringify(__p)), {})');
-  assert.equal(b.run('receiptPaperScanState'), 'failed');
-  assert.match(b.run('receiptPaperScanProblems[0]'), /לא הסתיימה בטלפון השני/);
-  assert.equal(b.requests.length, 0);
-});
-
-test('ביטול: תעודות המשלוח של הקליטה יוצאות לסל רק אחרי שהענן אישר שהיא של הטלפון הזה; הקליטה לא מוצעת בחזרה', async () => {
-  const cloud = createCloud();
-  const a = await startOnA(cloud);
-  a.run(`globalThis.__discarded = []; paperDiscard = async p => { __discarded.push(p.id); return { ok: true }; };`);
-  online(a, false);
-  a.click('rc-cancel'); a.run('testConfirms[testConfirms.length - 1].cb()'); await settle();
-  assert.equal(a.run('receivingDraftEmpty()'), true);
-  assert.deepEqual(json(a, '__discarded'), [], 'עוד לא — הענן לא אישר');
-  assert.doesNotMatch(banner(a), /המשך אותה כאן/, 'הקליטה שבוטלה לא מוצעת בחזרה');
-  online(a, true); await sync(a); await settle();
-  assert.deepEqual(json(a, '__discarded'), ['paper_290095141'], 'אחרי האישור — לסל');
-});
-
-test('צירוף נייר לתעודה ששוחזרה (יש בה שדה id) — נשמר, במושב צירוף משלו', async () => {
-  const cloud = createCloud();
-  const a = phone(cloud, 'טלפון א');
-  const rec = { schemaVersion: 2, timestamp: Date.now() - 86400000, date: '2026-10-05', docDate: '2026-10-05', noDoc: true, status: 'open', units: 3, count: 1,
-    items: [{ productId: 'x', name: 'לחם', barcode: '1', qty: 3 }], operationId: 'rc1', id: 'rc1' };
-  cloud.put(ROOT + 'receipts/rc1', rec);
-  a.context.__rec = rec; a.run(`receipts = [JSON.parse(JSON.stringify(__rec))];`);
-  a.run(`reopenReceiptForDoc('rc1')`);
-  assert.match(a.run('receiptAttachTarget.sessionId'), /^edit_rc1_/);
-  a.run(`pendingReceipt = { lines: receiptList.slice(), status: 'ok', noteParts: [], noDoc: false };`);
-  await a.run('confirmReceipt()'); await settle();
-  const saved = record(cloud, 'rc1');
-  assert.match(saved.savedBy.sessionId, /^edit_rc1_/, 'נשמר — בלי "התעודה השתנתה"');
-  assert.doesNotMatch(a.toasts.join(' | '), /השתנתה/);
-});
-
-test('טיוטה שהתרוקנה (למשל הצילום בוטל) — לא נשארת "קליטה פתוחה" בענן; השומר לא בונה את הקליטה בכל לחיצה', async () => {
-  const cloud = createCloud();
-  const a = await startOnA(cloud);
-  const id = a.run('receiptDraftId');
-  // השומר והשורה העליונה — בלי לבנות את ה-payload (התמונות לא משוכפלות בכל לחיצה)
-  a.run(`globalThis.__pc = 0; const __o = receivingHandoffPayload; receivingHandoffPayload = () => { __pc++; return __o(); };`);
-  for (let i = 0; i < 20; i++) a.run('canEditSharedReceipt()');
-  a.run('renderSharedReceivingBanner()');
-  assert.equal(a.run('__pc'), 0);
-  a.run(`receiptList = []; receiptNotes = []; recomputeNoteTotal(); receiptOpened = false; aiScanDocuments = []; aiScanResponse = null; receiptAttachTarget = null; saveReceiptDraft();`);
-  assert.equal(a.run('receiptDraftId'), id, 'המזהה נשאר (כמו בביטול צילום)');
-  await sync(a); await settle();
-  assert.equal(handoffDoc(cloud, id).openKey, null, 'חונה');
-  const b = phone(cloud, 'טלפון ב'); await settle();
-  assert.doesNotMatch(banner(b), /יש קליטה פתוחה/);
-});
-
-test('ביטול שהגיע לענן באיחור — נייר שבינתיים נכנס לקליטה הפתוחה לא יוצא לסל', async () => {
-  const cloud = createCloud();
-  const a = await startOnA(cloud);
-  a.run(`globalThis.__discarded = []; paperDiscard = async p => { __discarded.push(p.id); return { ok: true }; };`);
-  // הנייר בקליטה הפתוחה עכשיו (ביטול ו"מתחילים מחדש" עם אותו נייר)
-  a.run(`receivingDiscardCanceledPapers(['paper_290095141'])`); await settle();
-  assert.deepEqual(json(a, '__discarded'), [], 'בשימוש — נשאר');
+test('queued OCR pages from a canceled round cannot reopen receiving after cancellation',async()=>{
+ const cloud=createCloud(),r=phone(cloud);const release=r.hold();const task=readPapers(r,2);
+ for(let i=0;i<40&&!r.requests.length;i++)await new Promise(res=>setImmediate(res));
+ r.run('fenceLocalReceivingUI();receivingHandoffEmpty()');release();await task;
+ assert.equal(r.run('receivingDraftEmpty()'),true);assert.equal(cloud.paths('/receipts/').length,0);
+ assert.ok(r.run('Object.values(paperLocalResults()).some(r=>r&&r.scan)'),'paid result retained locally');
 });

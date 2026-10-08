@@ -131,6 +131,7 @@ test('תעודת משלוח שצולמה מחוץ לקליטה, מהיום וב�
 test('"לקליטה" אחרי ריענון: מהמכשיר, ואחרי שהענן אישר — מ-paperScans; בלי חיבור — בתור', async () => {
   const storage = new Map();
   const r = app(delivery('77001234', { docDate: printed(days(-1)) }), { storage });
+  r.run("currentView='ledger';mainMode='manage'");
   await readPapers(r);
   const scan = plain(r.run('paperIntake.items[0].scan'));
   assert.equal(r.run(`!!paperLocalResults().cap0.ackedAt && !paperLocalResults().cap0.scan`), true, 'הענן אישר והתשובה הכבדה נמחקה מהמכשיר');

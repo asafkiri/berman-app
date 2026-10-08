@@ -18,9 +18,9 @@ const json = (r, expr) => JSON.parse(r.run('JSON.stringify(' + expr + ')'));
 const settle = async () => { for (let i = 0; i < 30; i++) await new Promise(res => setImmediate(res)); };
 // גבולות הענן: מחיקה לסל, טרנזקציה לשחזור, וההודעה עם "בטל"
 function cloud(r) {
-  r.run(`globalThis.doc = (db, ...path) => path.join('/');
+  r.run(`globalThis.__baseFinalDoc = doc; globalThis.__baseFinalTx = runTransaction; globalThis.doc = (db, ...path) => sharedReceiptFinalizing ? __baseFinalDoc(db,...path) : path.join('/');
     globalThis.getDoc = async () => ({ exists: () => false, data: () => null });
-    globalThis.runTransaction = async (db, body) => body({ get: async () => ({ exists: () => !!globalThis.__cloudPaper, data: () => globalThis.__cloudPaper }),
+    globalThis.runTransaction = async (db, body) => sharedReceiptFinalizing ? __baseFinalTx(db,body) : body({ get: async () => ({ exists: () => !!globalThis.__cloudPaper, data: () => globalThis.__cloudPaper }),
       set: (ref, v) => testWrites.push({ tx: 'set', ref, v }), delete: ref => testWrites.push({ tx: 'delete', ref }) });
     hardDeleteDocWithBackup = async (name, id, data, reason) => { testWrites.push({ hardDelete: name, id, reason }); if (name === 'receipts') receipts = receipts.filter(x => x.id !== id); return true; };
     showToast = (text, label, cb) => { testToasts.push(text); globalThis.__undo = cb || null; };`);
@@ -36,6 +36,9 @@ async function photographed(d = days(-2)) {
   const r = cloud(app(small('290095141', d)));
   await readPapers(r);
   assert.equal(r.run('receiptPaperScanState'), 'ok', 'הנייר הקטן נכנס לקליטה');
+  // Simulate the legacy already-uploaded delivery paper whose deletion/undo this suite protects.
+  r.run('papers=paperPendingLocal().slice()');
+  for (const paper of json(r,'papers')) r.finalCloud.put('artifacts/berman-app-classic/public/data/papers/'+paper.id,paper);
   assert.equal(r.run(`papers.some(p => p.id === '${PID}' && p.kind === 'delivery' && p.small)`), true, 'נשמר בענן כנייר משלוח קטן');
   return r;
 }
@@ -45,7 +48,7 @@ async function savedNothingArrived(r) {
   r.run('testConfirms[testConfirms.length - 1].cb()');
   if (!r.run('!!pendingReceipt')) r.click('ai-close-receipt');
   assert.ok(r.run('!!pendingReceipt'), 'סיכום');
-  await r.run('confirmReceipt()');
+  await r.run('confirmReceipt()'); await settle();
   const saved = json(r, `testWrites.filter(w => w.op === 'set' && w.path && w.path[w.path.length - 2] === 'receipts').pop()`);
   assert.ok(saved, 'הקליטה נשמרה');
   r.context.__saved = saved;

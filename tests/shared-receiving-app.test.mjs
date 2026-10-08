@@ -211,7 +211,7 @@ test('late crop confirmation cannot clear a new remote OCR result or dismiss its
   assert.equal(source.node('aiOrientationModal').classList.contains('hidden'), false);
 });
 
-test('an unresolved conflict blocks finalization and paid OCR without losing the summary', async () => {
+test('an in-flight local finalization blocks paid OCR and retains the summary', async () => {
   const source = device();
   await source.scan();
   source.run(`openReconcile(); showConfirm = (title, text, button, confirm) => confirm();`);
@@ -220,6 +220,7 @@ test('an unresolved conflict blocks finalization and paid OCR without losing the
   const target = device({ canEdit: false });
   await transfer(source, target);
   assert.ok(target.run('pendingReceipt'));
+  target.run('sharedReceiptFinalizing=true');
   await target.run('confirmReceipt()');
   await target.run('aiRunInvoiceScan()');
   assert.equal(target.finished.length, 0);
@@ -228,8 +229,8 @@ test('an unresolved conflict blocks finalization and paid OCR without losing the
   assert.ok(target.run('pendingReceipt'), 'A denied viewer action must retain the shared summary');
 });
 
-test('the capture event guard blocks receiving and summary edits during conflicts but permits navigation', () => {
-  const viewer = device({ canEdit: false });
+test('the capture event guard blocks edits during local finalization but permits navigation', () => {
+  const viewer = device({ canEdit: false }); viewer.run('sharedReceiptFinalizing=true');
   for (const area of ['#app', '#receiptSummaryModal, #receiptQuantityModal, #aiOrientationModal, #aiLiveCameraModal']) {
     let prevented = false, stopped = false;
     viewer.context.testEvent = {
@@ -248,27 +249,10 @@ test('the capture event guard blocks receiving and summary edits during conflict
   assert.equal(blocked, false);
 });
 
-test('final confirmation uses the fenced shared finish and retains the draft if it fails', async () => {
-  const source = device();
-  await source.scan();
-  source.run('openReconcile(); showConfirm = (title, text, button, confirm) => confirm();');
-  source.click('ai-close-receipt');
-  const finish = source.coordinator.finish;
-  source.coordinator.finish = async () => { throw new Error('revision-changed'); };
-  const originalId = source.run('receiptDraftId');
-  await source.run('confirmReceipt()');
-  assert.equal(source.run('receiptDraftId'), originalId);
-  assert.ok(source.run('pendingReceipt'));
-  assert.ok(source.run('aiScanResponse'));
-  source.coordinator.finish = finish;
-  await source.run('confirmReceipt()');
-  assert.equal(source.finished.length, 1);
-  assert.equal(source.finished[0].receiptId, originalId);
-  assert.ok(source.finished[0].data.paperScan.response.scan.documents.length);
-  assert.equal(source.finished[0].empty.state.receiptList.length, 0);
-  assert.equal(source.run('receiptDraftId'), null);
-  assert.equal(source.run('pendingReceipt'), null);
-  assert.equal(source.writes.length, 0, 'Finalization must not use an unfenced receipt-only write');
+test('final confirmation uses independent guarded transaction; failures retain local data', async () => {
+ const source=device();await source.scan();source.run('openReconcile();showConfirm=(a,b,c,fn)=>fn()');source.click('ai-close-receipt');
+ source.finalCloud.reject='permission-denied';const id=source.run('receiptDraftId');await source.run('confirmReceipt()');assert.equal(source.run('receiptDraftId'),id);assert.ok(source.run('pendingReceipt'));
+ source.finalCloud.reject=null;await source.run('confirmReceipt()');assert.equal(source.finished.length,0);assert.ok(source.finalCloud.get('artifacts/berman-app-classic/public/data/receipts/'+id));assert.equal(source.run('receiptDraftId'),null);
 });
 
 test('server-cleared draft replaces an old local receipt and does not replay OCR on reload', async () => {
@@ -289,43 +273,9 @@ test('server-cleared draft replaces an old local receipt and does not replay OCR
   assert.equal(next.requests.length, 0);
 });
 
-for (const previouslyShared of [false, true]) test(previouslyShared
-  ? 'startup does not offer a previously synchronized local receipt as a legacy draft after the server cleared it'
-  : 'startup retains a legacy local backup but uses the authoritative empty shared state', async () => {
-  const previous = device();
-  await previous.scan();
-  const storage = new Map(previous.storage);
-  if (!previouslyShared) {
-    const legacy = JSON.parse(storage.get('bm_receipt_draft'));
-    delete legacy.sharedReceivingVersion;
-    storage.set('bm_receipt_draft', JSON.stringify(legacy));
-  }
-  const noop = () => {};
-  const restored = runtime({ storage, sharedReceiving: true,
-    globals: { doc: noop, getDoc: noop, onSnapshot: noop, runTransaction: noop, setDoc: noop, writeBatch: noop } });
-  let claims = 0;
-  restored.context.BermanSharedReceiving = { create(options) {
-    return { head: { owner: 'other-device' }, payload: null, ready: true, isOwner: false,
-      async start() {
-        options.onState(null, { source: 'remote', isOwner: false });
-        options.onStatus({ ready: true, isOwner: false, busy: false, dirty: false, status: 'synced' });
-      },
-      async claim() { claims++; },
-      async save() { throw new Error('Legacy draft must never be saved automatically'); }
-    };
-  } };
-  await restored.run('startSharedReceiving()');
-  assert.equal(restored.run('receiptList.length'), 0);
-  assert.equal(restored.run('aiScanResponse'), null);
-  if (previouslyShared) {
-    assert.equal(restored.run('sharedReceiptLegacy'), null);
-    assert.equal(storage.has('bm_receipt_before_shared_v101'), false);
-  } else {
-    assert.equal(restored.run('sharedReceiptLegacy.state.receiptList.length'), fixture().items.length);
-    assert.ok(storage.get('bm_receipt_before_shared_v101'));
-  }
-  assert.equal(claims, 0);
-  assert.equal(restored.requests.length, 0);
+for (const previouslyShared of [false,true]) test('startup retains local receipt regardless of old shared flag: '+previouslyShared,async()=>{
+ const previous=device();await previous.scan();const storage=new Map(previous.storage);if(previouslyShared)storage.set('bm_shared_receiving_live','1');
+ const restored=runtime({storage});await restored.run('startSharedReceiving()');assert.equal(restored.run('receiptList.length'),fixture().items.length);assert.ok(restored.run('aiScanResponse'));assert.equal(restored.run('sharedReceiving'),null);assert.equal(restored.requests.length,0);
 });
 
 test('a shared summary can be confirmed by another device, but a changed quantity requires a new review',async()=>{
@@ -333,7 +283,7 @@ test('a shared summary can be confirmed by another device, but a changed quantit
   source.run('openReconcile();showConfirm=(title,text,button,confirm)=>confirm();');
   source.click('ai-close-receipt');assert.ok(source.run('pendingReceipt.sharedBasis'));
   const unchanged=device();await transfer(source,unchanged);
-  await unchanged.run('confirmReceipt()');assert.equal(unchanged.finished.length,1);
+  await unchanged.run('confirmReceipt()');assert.equal(unchanged.finished.length,0);assert.equal(unchanged.finalCloud.paths('/receipts/').length,1);
   const edited=device();await transfer(source,edited);
   edited.run('receiptList[0].qty++;');
   await edited.run('confirmReceipt()');assert.equal(edited.finished.length,0);

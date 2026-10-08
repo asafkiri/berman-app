@@ -535,8 +535,8 @@
       </div>
     </div>
 
-    <script src="shared-receiving.js?v=102"></script>
-    <script src="draft-handoff.js?v=137"></script>
+
+    <script src="local-receiving.js?v=140"></script>
     <script src="shared-return-events.js?v=138"></script>
     <script type="module">
 // ===== Firebase (מפתח הענן של גלוברנס) =====
@@ -811,6 +811,9 @@ let creditSplit = null;           // v66: חלון שיוך עודף מתעוד�
 let signMaker = null;             // הכנת שלטי מבצע (בחירה + עריכה + תצוגה)
 let receiptDupConfirmed = false; // אישור שמירה למרות חשד לכפילות
 const RECEIPT_DRAFT_KEY = 'bm_receipt_draft';
+let localReconcileSource = null, localReconcilePaper = null;
+let rcStep = null;
+let reconcileCheckMode = false;
 let sharedReceiving = null, sharedReceiptApplying = false, sharedReceiptHooksReady = false;
 let sharedReceiptSaveTimer = null, sharedReceiptFinalizing = false;
 let sharedReceiptStatus = { ready: false, status: 'loading' }, sharedReceiptLegacy = null;
@@ -823,12 +826,12 @@ const SHARED_RECEIVING_OFF_KEY = 'bm_shared_receiving_off';
 // ("המשך אותה כאן"). הסנכרון בלייב נשאר רק למי שבחר בו במפורש (המפתח הזה בטלפון).
 const SHARED_RECEIVING_LIVE_KEY = 'bm_shared_receiving_live';
 let sharedReceivingOff = true, sharedReceivingStartedAt = 0;
-try { sharedReceivingOff = localStorage.getItem(SHARED_RECEIVING_LIVE_KEY) !== '1' || localStorage.getItem(SHARED_RECEIVING_OFF_KEY) === '1'; } catch (e) {}
+// Receiving drafts are always local; old per-device live flags cannot enable cloud sync.
 let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '139'; // המאזן מתעדכן אוטומטית אחרי טעינת כל המקורות
+const APP_VERSION = '140'; // קליטה מקומית; שמירת תעודה בענן רק בסיום
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -1363,7 +1366,7 @@ function saveReceiptDraft() {
   scheduleSharedReceiptSave();
   if ((receiptOpened || receiptList.length || receiptNotes.length || aiScanDocuments.some(d => d.pages.length)) && !receiptDraftId) receiptDraftId = makeOperationId('receipt');
   scheduleReceivingHandoff(); // v136/v137: גיבוי לענן ברקע (בלי לחכות לו), אחרי שיש לקליטה מזהה
-  const draft = { countingMode: receiptCountingMode, quantityReview: receiptQuantityReview, schemaVersion: 2, draftId: receiptDraftId, items: receiptList, notes: receiptNotes, opened: receiptOpened, docDate: receiptDocDate || null, entryMode: receiptEntryMode, anchorSource: receiptAnchorSource, noDoc: receiptNoDoc, attach: receiptAttachTarget, paperScan: null, sharedReceivingVersion: sharedReceiving ? 1 : null, updatedAt: Date.now() };
+  const draft = { localReconcile: reconcileData ? sharedReceiptEncode({ rows: reconcileData, source: localReconcileSource, paper: localReconcilePaper, audit: reconcileAiAudit, entered: reconcilePaperEntered, checkMode: reconcileCheckMode, step: rcStep }) : null, countingMode: receiptCountingMode, quantityReview: receiptQuantityReview, schemaVersion: 2, draftId: receiptDraftId, items: receiptList, notes: receiptNotes, opened: receiptOpened, docDate: receiptDocDate || null, entryMode: receiptEntryMode, anchorSource: receiptAnchorSource, noDoc: receiptNoDoc, attach: receiptAttachTarget, paperScan: null, sharedReceivingVersion: sharedReceiving ? 1 : null, updatedAt: Date.now() };
   try {
     draft.paperScan = receiptScanSnapshot();
     localStorage.setItem(RECEIPT_DRAFT_KEY, JSON.stringify(draft));
@@ -1406,6 +1409,9 @@ function restoreReceiptDraft() {
         if (paper.ok && paper.notes.length === aiScanDocuments.length && sameAnchors) bermanSetPaperAnchors(paper);
         else { receiptPaperScanState = 'failed'; receiptPaperScanProblems = paper.problems.length ? paper.problems : ['הפענוח השמור אינו תואם לכל נתוני התעודות']; }
       } else if (receiptAnchorSource === 'paper' && receiptNotes.length) receiptPaperScanState = 'summary-only';
+      if (o.localReconcile && Array.isArray(o.localReconcile.rows)) {
+        const local = sharedReceiptDecode(o.localReconcile); reconcileData = local.rows; localReconcileSource = local.source; localReconcilePaper = local.paper; reconcileAiAudit = local.audit; reconcilePaperEntered = !!local.entered; reconcileCheckMode = !!local.checkMode; rcStep = local.step || null;
+      }
     }
     if ((receiptOpened || receiptList.length || receiptNotes.length) && !receiptDraftId) receiptDraftId = makeOperationId('receipt');
     recomputeNoteTotal();
@@ -4626,7 +4632,7 @@ function scanBeep() {
   } catch (beepError) {}
 }
 // ===== סריקת ברקוד במצלמה =====
-let scanStream = null, scanTimer = null, barcodeDetector = null;
+let scanStream = null, scanTimer = null, barcodeDetector = null, scanGeneration = 0;
 let zxingReader = null, zxingActive = false;
 let wasmDetectorCls = null;
 let scanUsingWasm = false, scanRoiCanvas = null, scanTickCount = 0;
@@ -4738,6 +4744,9 @@ function applyAutoZoom(stream) {
   } catch (e) {}
 }
 async function openScanner() {
+  const generation = ++scanGeneration;
+  const active = () => generation === scanGeneration;
+  const acceptStream = stream => { if (!active()) { try { stream.getTracks().forEach(t => t.stop()); } catch(e) {} return false; } scanStream = stream; return true; };
   ensureScanAudio();
   acquireScreenWakeLock();
   scanTickCount = 0;
@@ -4750,11 +4759,12 @@ async function openScanner() {
     if (nativeScanSupported() && !isIOSDevice()) {
       scanUsingWasm = false;
       if (!barcodeDetector) barcodeDetector = new window.BarcodeDetector();
-      scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
-      const v = $('scanVideo'); v.srcObject = scanStream; await v.play();
+      const acquired = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+      if (!acceptStream(acquired)) return;
+      const v = $('scanVideo'); v.srcObject = scanStream; await v.play(); if (!active()) return;
       applyScanFocus(scanStream);
       // זום אוטומטי רק בסמסונג (בעיית פוקוס קרוב) — שיאומי ושאר האנדרואידים ללא שינוי
-      if (await isSamsungDevice()) applyAutoZoom(scanStream);
+      const samsung = await isSamsungDevice(); if (!active()) return; if (samsung) applyAutoZoom(scanStream);
       setupScanTorch(scanStream);
       setScanDiag(scanStream, 'מובנה');
       setScanHint(readyHint);
@@ -4763,13 +4773,14 @@ async function openScanner() {
       // אייפון/ספארי: אין BarcodeDetector מובנה — טוענים מנוע WASM ומשתמשים באותו מסלול סריקה
       setScanHint('טוען מנוע סריקה...');
       try {
-        await ensureWasmDetector();
+        await ensureWasmDetector(); if (!active()) return;
         scanUsingWasm = true;
         if (!barcodeDetector) barcodeDetector = new wasmDetectorCls({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'qr_code'] });
         // רזולוציה גבוהה (4K כשאפשר): יותר פיקסלים לכל קו בברקוד — המנוע התוכנתי מתמודד
         // הרבה יותר טוב עם הדפסה מרוחה/צפופה. במכשירים ישנים הדפדפן יורד לבד ל-1080p
-        scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } } });
-        const v = $('scanVideo'); v.srcObject = scanStream; await v.play();
+        const acquired = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } } });
+        if (!acceptStream(acquired)) return;
+        const v = $('scanVideo'); v.srcObject = scanStream; await v.play(); if (!active()) return;
         applyScanFocus(scanStream);
         applyAutoZoom(scanStream);
         setupScanTorch(scanStream);
@@ -4778,15 +4789,17 @@ async function openScanner() {
         setScanHint(readyHint);
         scanTimer = setTimeout(scanTick, 400);
       } catch (err) {
+        if (!active()) return;
         // גיבוי: המנוע הישן (ZXing-JS) — כמו שהיה עד היום
         console.error('WASM scanner failed, falling back to ZXing-JS', err);
         setScanHint('טוען מנוע סריקה...');
-        await ensureZxing();
+        await ensureZxing(); if (!active()) return;
         setScanHint(readyHint);
         await startZxing();
       }
     }
   } catch (e) {
+    if (!active()) return;
     console.error(e);
     showToast('לא ניתן להפעיל את המצלמה (בדוק הרשאה/חיבור)', null, null, 4000);
     closeScanner();
@@ -4900,6 +4913,7 @@ function grabFullFrame(v) {
   } catch (e) { return v; }
 }
 function scanTick() {
+  const generation = scanGeneration, stream = scanStream;
   if (!scanStream || !barcodeDetector) return;
   const v = $('scanVideo');
   if (!v || v.readyState < 2) { scanTimer = setTimeout(scanTick, 200); return; }
@@ -4934,10 +4948,10 @@ function scanTick() {
     }
   }
   barcodeDetector.detect(src).then(codes => {
-    if (!scanStream) return;
+    if (!scanStream || stream !== scanStream || generation !== scanGeneration) return;
     if (codes && codes.length && codes[0].rawValue) onScanned(codes[0].rawValue);
     else scanTimer = setTimeout(scanTick, scanUsingWasm ? 80 : 200);
-  }).catch(() => { if (scanStream) scanTimer = setTimeout(scanTick, scanUsingWasm ? 150 : 300); });
+  }).catch(() => { if (stream === scanStream && generation === scanGeneration && scanStream) scanTimer = setTimeout(scanTick, scanUsingWasm ? 150 : 300); });
 }
 function loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -4951,13 +4965,14 @@ async function ensureZxing() {
   await loadScript('https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js');
 }
 async function startZxing() {
+  const generation = scanGeneration;
   if (!zxingReader) zxingReader = new window.ZXing.BrowserMultiFormatReader();
   try { zxingReader.timeBetweenDecodingAttempts = 200; } catch (e) {}
   zxingActive = true;
   await zxingReader.decodeFromConstraints(
     { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } },
     $('scanVideo'),
-    (result) => { if (result && zxingActive) { const t = result.getText ? result.getText() : (result.text || ''); if (t) onScanned(t); } }
+    (result) => { if (result && zxingActive && generation === scanGeneration) { const t = result.getText ? result.getText() : (result.text || ''); if (t) onScanned(t); } }
   );
   const vEl = $('scanVideo'); if (vEl && vEl.srcObject) { applyScanFocus(vEl.srcObject); applyAutoZoom(vEl.srcObject); setupScanTorch(vEl.srcObject); setScanDiag(vEl.srcObject, 'גיבוי'); }
 }
@@ -4995,6 +5010,7 @@ function onScanned(val) {
   closeScanner();
 }
 function closeScanner() {
+  scanGeneration++;
   const restoreProductEditor = productEditorScanReturn;
   productEditorScanReturn = false;
   if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
@@ -5271,6 +5287,7 @@ function clearPendingUnitIntentForTask(actionName, task) {
   if (pendingUnitIntents[id] && pendingUnitIntents[id].updatedAt <= at) delete pendingUnitIntents[id];
 }
 async function retryCloudFailedWrites() {
+  if (!migrateLocalReceivingQueues()) return;
   if (!cloudFailedWrites.length) return;
   if (!db) { showToast('אין חיבור לענן — נסה שוב כשהאפליקציה מחוברת', null, null, 3500); return; }
   if (cloudWriteInFlight) { showToast('פעולה קודמת עדיין נשמרת — המתן רגע', null, null, 2500); return; }
@@ -5807,6 +5824,7 @@ function openCratePicker(target) {
   document.body.appendChild(ov);
 }
 function promptQty(p, target, nextMode) {
+  qtyReceiptEpoch = localReceivingEpoch;
   qtyProduct = p; qtyTarget = target || 'receipt'; qtyNextMode = nextMode === 'crates' ? 'crates' : 'scanner';
   closeScanner();
   $('qtyName').textContent = p.name;
@@ -5958,6 +5976,7 @@ function addQtyToTarget(p, q, target) {
   updateCart();
 }
 function commitQty(again) {
+  if (qtyTarget === 'receipt' && qtyReceiptEpoch !== localReceivingEpoch) { hideQty(); return; }
   if (qtyTarget === 'receipt' && !canEditSharedReceipt()) { sharedReceiptReadOnlyNotice(); return; }
   const p = qtyProduct, tgt = qtyTarget, nextMode = qtyNextMode; if (!p) { hideQty(); return; }
   let q = parseInt(($('qtyVal').value || '').replace(/[^0-9]/g, ''), 10);
@@ -6697,6 +6716,9 @@ function openReconcile() {
 // v121: בניית שורות ההשוואה מהספירה הנוכחית, בלי לעבור מסך — כדי שסיום
 // הקליטה יוכל להשוות את הספירה לנייר שנקרא ולהחליט אם יש מה להראות.
 function buildReconcileData() {
+  const paper = JSON.stringify({ response: aiScanResponse, notes: receiptNotes });
+  const source = receiptList.map(l => [String(l.productId), Number(l.qty) || 0]);
+  const previous = localReconcilePaper === paper && Array.isArray(localReconcileSource) && Array.isArray(reconcileData) ? { rows: cloneSafe(reconcileData), source: new Map(localReconcileSource), audit: cloneSafe(reconcileAiAudit), entered: reconcilePaperEntered, checkMode: reconcileCheckMode, step: rcStep } : null;
   const day = activeReceiptDate();
   reconcileData = receiptList.map(it => {
     const p = products.find(x => x.id === it.productId);
@@ -6721,6 +6743,22 @@ function buildReconcileData() {
   // v25: לא מוחקים סריקה קיימת. יצא למסך הקליטה לתקן משהו וחזר לסגור את
   // התעודה — הצילומים והקריאה מהנייר עדיין כאן, וההשוואה מחושבת מחדש.
   prepareAiInvoiceScan();
+  if (previous) {
+    const physical = new Map(source), ids = new Set();
+    const merge = (row, old) => {
+      const id = String(row.productId); ids.add(id);
+      if (!old) return row;
+      const before = previous.source.get(id) || 0, now = physical.get(id) || 0;
+      return before === now ? old : { ...old, received: now, checked: false };
+    };
+    reconcileData = reconcileData.map(row => merge(row, previous.rows.find(l => String(l.productId) === String(row.productId))));
+    for (const old of previous.rows) if (!ids.has(String(old.productId)) && !old.isDeposit) reconcileData.push(merge(old, old));
+    const unchanged = JSON.stringify(Array.from(previous.source)) === JSON.stringify(source);
+    if (unchanged) { reconcileAiAudit = previous.audit; reconcilePaperEntered = previous.entered; reconcileCheckMode = previous.checkMode; rcStep = previous.step; }
+    if (aiScanResponse) aiScanEvaluation = aiEvaluateInvoiceScan(aiScanResponse);
+  }
+  localReconcileSource = source; localReconcilePaper = paper;
+  saveReceiptDraft();
 }
 // v121: הנייר שנקרא סוגר את עצמו בכמויות — בלי חוסר/עודף, בלי שורה שלא
 // שויכה, בלי מוצר לא מוכר, וסך היחידות של כל תעודה אומת. ממצאי מחיר אינם
@@ -6735,7 +6773,7 @@ function aiScanQuantitiesGood(ev) {
 function reconcileScannedUnits() { let u = 0; (reconcileData || []).forEach(l => { if (!l.isDeposit) u += (Number(l.noteQty) || 0); }); return u; } // v176: פיקדון בכסף בלבד
 function reconcileUnitsGap() { if (receiptNoteUnits == null) return null; return receiptNoteUnits - reconcileScannedUnits(); }
 function reconcileUnitsBalanced() { const g = reconcileUnitsGap(); return g == null || g === 0; }
-let reconcileCheckMode = false; // ✓ ויזואלי מופיע רק כשההפרש הוא בכמויות (כל הברקודים תואמים)
+// ✓ ויזואלי מופיע רק כשההפרש הוא בכמויות (כל הברקודים תואמים)
 function refreshReconcile() { if (currentView === 'reconcile') renderReconcile(); }
 // v62: כרטיס הצילום חי משני מסכים — מסך הקליטה (צילום-תחילה) ומסך ההשוואה
 // (כשהכמויות לא נסגרות). כל צעד בצנרת הצילום מרענן דרך כאן, כדי שלא יקרא בכוח
@@ -11796,7 +11834,7 @@ function aiApplyInvoiceResult() {
 // כמה חויב, או מצלמים), 'ai' (הנייר נקרא בסריקה), 'balanced'. הבלש, שלבי
 // המחירים והמבצעים והבדיקה הידנית של הכסף ירדו: בלי כסף אין לפער של יחידה
 // אחת פתרון אריתמטי, והנייר הוא העד היחיד. הקוד שלהם נמחק ב-v124.
-let rcStep = null;
+// rcStep is initialized with local receipt state before draft restoration.
 function aiScanHasMaterial() {
   return !!(AI_SCAN_ENABLED && (aiScanResponse || (aiScanDocuments || []).some(d => d && Array.isArray(d.pages) && d.pages.length)));
 }
@@ -12294,6 +12332,7 @@ function reopenReceiptForDoc(id) {
   setView('receiving');
 }
 function cancelReceiptAttach() {
+  fenceLocalReceivingUI();
   if (sharedReceivingOff && draftHandoff) draftHandoff.cancel(); // v137
   rcMultiPhotoWanted = false;
   receiptList = []; receiptQuantityReview = null; receiptCountingMode = 'scan'; receiptNotes = []; receiptDocDate = null; receiptDraftId = null;
@@ -12316,7 +12355,7 @@ async function confirmReceipt() {
   if (!pendingReceipt) { hideReceiptSummary(); return; }
   if (pendingReceipt.sharedBasis && pendingReceipt.sharedBasis !== sharedReceiptSummaryBasis()) {
     pendingReceipt = null; hideReceiptSummary(); saveReceiptDraft();
-    showToast('הקליטה התעדכנה במכשיר אחר. בדוק וסכם שוב לפני השמירה.', null, null, 4500);
+    showToast('נתוני הקליטה השתנו. בדוק וסכם שוב לפני השמירה.', null, null, 4500);
     return;
   }
   // v121: התעודה הנשמרת היא כמויות בלבד (schemaVersion 2). שדות הכסף של
@@ -12341,11 +12380,17 @@ async function confirmReceipt() {
 }
 // אחרי שהתעודה נשמרה: הטיוטה מתרוקנת, וההודעה (גם כשהשמירה אושרה רק אחר כך — v137)
 async function receiptAfterSave(opId, data, attach, noDoc) {
+  if (!localReceivingSavedFence || localReceivingSavedFence.id !== opId || localReceivingSavedFence.fingerprint !== localReceivingFingerprint()) { showToast('התעודה נשמרה; שינויים מאוחרים נשארו בטלפון לבדיקה.', null, null, 5000); return; }
+  try { localStorage.setItem(RECEIPT_DRAFT_KEY, JSON.stringify({ schemaVersion: 2, draftId: null, items: [], notes: [], opened: false })); }
+  catch(e) { showToast('התעודה נשמרה בענן, אך לא ניתן לסגור את העותק בטלפון. הוא נשאר לבדיקה.', null, null, 5000); return; }
+  localReceivingSavedFence = null;
+  fenceLocalReceivingUI();
   hideReceiptSummary();
   aiCloseOrientationReview();
   aiScanSession++;
   rcMultiPhotoWanted = false;
   receiptList = []; receiptQuantityReview = null; receiptCountingMode = 'scan'; pendingReceipt = null; receiptNotes = []; receiptDocDate = null; receiptDraftId = null; receiptEntryMode = 'photo'; receiptAnchorSource = null; receiptPaperScanState = ''; receiptPaperScanProblems = []; recomputeNoteTotal(); receiptOpened = false; editingNotes = false; reconcileData = null; reconcileAiAudit = null; aiScanDocuments = []; aiScanBusy = false; aiScanProgressText = ''; aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAutoRotationNote = ''; aiScanAttemptCount = 0; aiScanBasis = null; receiptDupConfirmed = false; receiptLinesConfirmed = false; receiptNoDoc = false; receiptAttachTarget = null; saveReceiptDraft(); // v25: תעודה שנסגרה משחררת גם את בסיס הסריקה
+  if (localReceivingFinalizer && readLocalJson(RECEIPT_DRAFT_KEY, {}).draftId == null) localReceivingFinalizer.forget(attach && attach.sessionId || opId);
   setView('receiptsHistory');
   const autoApplied = await autoApplyExactOffsets(); // v106: זוג מדויק מתקזז לבד
   const newOpen = receipts.filter(r => receiptDiscrepancyInfo(r).open).find(r => findOffsetMatch(r));
@@ -13976,6 +14021,7 @@ async function paperFlushPending() {
       for (const cap of Object.keys(paperLocalResults())) {
         let rec = paperLocalResults()[cap];
         if (!rec || !rec.paper || rec.ackedAt || rec.conflict || rec.discarded) continue;
+        if ((rec.paper.kind === 'delivery' || !rec.paper.kind) && rec.localOnlyReceiving !== false) continue; // v140: delivery paper and scan commit atomically with its receipt; credit/charge still sync.
         // קריאה שנשמרה לפני האימות הנוסף: כל עוד היא רצה — מחכים לה; אחרי ריענון — נשלחת כמו שהיא, לבדיקה
         if (rec.interim) {
           if (paperUploadBusy) continue;
@@ -14440,7 +14486,7 @@ function paperSleep(ms) { return new Promise(res => setTimeout(res, ms)); }
 // שנקראה — עוד לפני השמירה בענן, מהקריאה שבזיכרון.
 async function paperIntakeRun() {
   const it = paperIntake; if (!it) return;
-  it.items.forEach(x => { if (x.status === 'photo') x.status = 'queued'; });
+  it.items.forEach(x => { if (x.status === 'photo') { x.status = 'queued'; if (x.localEpoch == null) x.localEpoch = localReceivingEpoch; } });
   if (it.busy) { refreshPaperIntake(); return; }
   const back = () => it.items.forEach(x => { if (x.status === 'queued') x.status = 'photo'; });
   if (!it.items.some(x => x.status === 'queued')) return;
@@ -14517,11 +14563,13 @@ function paperErrorText(e) {
 async function paperIntakeReadOne(token, item) {
   paperUploadBusy = true; // מיד, בלי המתנה לפני: הקליטה בודקת את הדגל לפני שהיא מעלה
   const cap = item.captureId;
+  if (item.localEpoch == null) item.localEpoch = localReceivingEpoch;
+  const localOnlyReceiving = !item.forReturnId && (item.forDraftId != null || ['receiving', 'reconcile'].includes(paperIntake && paperIntake.from));
   const ctx = { captureId: cap, hash: item.hash, forReturnId: item.forReturnId || '' };
   const mark = extra => { try { localStorage.setItem(PAPER_INFLIGHT_KEY, JSON.stringify({ captureId: cap, hash: item.hash, at: Date.now(), ...(extra || {}) })); } catch (e) {} };
   const keep = (result, interim) => {
     let scan = null; try { scan = paperScanAudit(result); } catch (e) {}
-    paperPatchLocal(cap, cur => ({ ...(cur || {}), captureId: cap, hash: item.hash, at: Date.now(), scan: scan || (cur && cur.scan) || null, paper: (cur && cur.paper) || null, interim: true }));
+    paperPatchLocal(cap, cur => ({ ...(cur || {}), captureId: cap, hash: item.hash, localOnlyReceiving, at: Date.now(), scan: scan || (cur && cur.scan) || null, paper: (cur && cur.paper) || null, interim: true }));
     let rec;
     try { rec = bermanPaperRecord(result, ctx); } catch (e) { console.error('paper record failed', e); rec = { failed: true }; }
     if (rec.paper && interim) { rec.paper.state = 'needs-review'; rec.paper.review = rec.paper.review || { notes: ['הקריאה נקטעה לפני הבדיקה הנוספת — השווה את השורות לנייר'], mustCheck: true }; }
@@ -14839,6 +14887,7 @@ function receivingJoinDelivery(opts) {
 }
 // retry — ניסיון חוזר מהתור: בלי הודעות ובלי מעבר מסך (רק שאלה, אם המשתמש לחץ "לקליטה" בעצמו)
 async function receivingJoinDeliveryNow({ paperId, cap, item, explicit, force, scan, retry, fresh }) {
+  const epoch = localReceivingEpoch;
   item = item || null; cap = cap || (item && item.captureId) || null;
   const pend = paperJoinPending.get(paperId);
   const toast = (t, ms) => { if (explicit && !retry) showToast(t, null, null, ms); };
@@ -14847,6 +14896,7 @@ async function receivingJoinDeliveryNow({ paperId, cap, item, explicit, force, s
   const said = (state, r, paper) => ({ state, reason: r.reason, text: paperJoinReasonText(r, paper) });
   const queue = (j, src) => { paperJoinPending.set(paperId, { paperId, cap, item, explicit: !!explicit, fresh: !!fresh, scan: src ? src.scan : (pend && pend.scan) || null }); setJoin(j); return j.state; };
   const src = await paperDeliveryScan(paperId, cap, item, scan || (pend && pend.scan));
+  if (epoch !== localReceivingEpoch || (item && item.localEpoch != null && item.localEpoch !== epoch)) { paperJoinPending.delete(paperId); return 'stale'; }
   if (!src) {
     // הנייר כבר לא תעודת משלוח חיה (נמחק, בוטל, הסוג תוקן) — יוצא מהתור
     const f = paperFind(paperId, cap);
@@ -14878,6 +14928,7 @@ async function receivingJoinDeliveryNow({ paperId, cap, item, explicit, force, s
     if (!act(r)) return 'none';
     // מה שיש בטלפון הזה נשמר קודם, ואז בודקים שוב מול מה שהגיע מהטלפונים האחרים
     try { await sharedFlush(); } catch (e) { return queue(lost(), src); }
+    if (epoch !== localReceivingEpoch) { paperJoinPending.delete(paperId); return 'stale'; }
     if (route().action !== r.action) continue;
     let token = null, acquired = false;
     if (sharedReceiving && receiptDraftId && r.action !== 'new' && r.action !== 'bare') {
@@ -14902,6 +14953,7 @@ async function receivingJoinDeliveryNow({ paperId, cap, item, explicit, force, s
         if (r.action === 'replace-typed') { receiptNotes = []; recomputeNoteTotal(); receiptAnchorSource = null; }
         res = receivingInstallDelivery(src.scan, s, r.action === 'append' ? 'append' : 'replace');
       }
+      if (cap) paperPatchLocal(cap, cur => cur ? { ...cur, localOnlyReceiving: true, localReceiptId: receiptDraftId } : cur);
       saveReceiptDraft();
       try { await sharedFlush(); }
       catch (e) { return queue(lost(), src); }
@@ -21315,6 +21367,7 @@ app.addEventListener('click', (e) => {
     const dropPapers = receiptDraftDeliveryPapers();
     showConfirm('ביטול תעודה', 'לבטל את התעודה הנוכחית? כל הפריטים שנסרקו יימחקו' + (dropPapers.length ? ', וגם ' + paperPhotosText(dropPapers) + ' (לסל המחזור — אפשר לשחזר)' : '') + '.', 'בטל תעודה', () => {
     // רק מה שנאמר בשאלה, ורק אם הוא עוד בקליטה הזאת
+    fenceLocalReceivingUI();
     const still = receiptDraftDeliveryPapers().filter(p => dropPapers.some(d => d.id === p.id));
     // v137: בענן — "בוטלה" (בטלפון אחר לא יוצע להמשיך אותה). הניירות יוצאים לסל רק כשהענן אישר שהקליטה הייתה של הטלפון
     // הזה — אחרת (טלפון אחר כבר לקח אותה) הם שייכים לקליטה שממשיכה שם
@@ -21569,19 +21622,10 @@ function sharedReceiptReadOnlyNotice() {
     : 'ממתין לקבלת הקליטה העדכנית מהענן', null, null, 4200);
 }
 function canEditSharedReceipt() {
-  if (sharedReceivingOff) return !sharedReceiptFinalizing && !(draftHandoff && draftHandoff.state().readOnly); // v135: טלפון אחד — תמיד אפשר לערוך; v137: חוץ מקליטה שעברה / נשמרה / בבדיקה
-  return !!(sharedReceiving && sharedReceiving.ready && sharedReceiving.canEdit !== false && !sharedReceiptStatus.conflict && navigator.onLine && !sharedReceiptFinalizing);
+  return !sharedReceiptFinalizing && !localReceivingPending();
 }
 function scheduleSharedReceiptSave() {
-  if (sharedReceivingOff || !sharedReceiptHooksReady || sharedReceiptApplying || !canEditSharedReceipt()) return; // v135: טלפון אחד — בלי
-  clearTimeout(sharedReceiptSaveTimer);
-  sharedReceiptSaveTimer = setTimeout(() => {
-    sharedReceiptSaveTimer = null;
-    if (sharedReceiptApplying || !canEditSharedReceipt() || !sharedReceiving) return;
-    // A photo-only draft needs an identity before its first OCR request.
-    if (!receiptDraftId && (receiptOpened || receiptList.length || receiptNotes.length || aiScanDocuments.some(d => d.pages.length))) receiptDraftId = makeOperationId('receipt');
-    sharedReceiving.save(captureSharedReceipt()).catch(sharedReceiptSyncError);
-  }, 120);
+  // Local draft writes are performed by saveReceiptDraft; no background cloud writes.
 }
 function sharedReceiptSyncError(error) {
   sharedReceiptLastError = error && error.message || 'sync_failed';
@@ -21723,27 +21767,8 @@ function applySharedReceipt(payload, meta = {}) {
   paperJoinRetry();
 }
 async function startSharedReceiving() {
-  if (sharedReceivingOff) { startDraftHandoff(); renderSharedReceivingBanner(); return; } // v135–v137: טלפון אחד + גיבוי ומעבר בין טלפונים
-  if (sharedReceiving || !db || !sharedReceiptHooksReady) return;
-  sharedReceivingStartedAt = Date.now(); setTimeout(renderSharedReceivingBanner, 6500); // v135: לא עלה תוך 6 שניות — מציעים טלפון אחד
-  if (!globalThis.BermanSharedReceiving) { sharedReceiptSyncError(new Error('shared_receiving_script_missing')); return; }
-  const legacy = captureSharedReceipt();
-  let localWasShared = false;
-  try { localWasShared = !!JSON.parse(localStorage.getItem(RECEIPT_DRAFT_KEY) || '{}').sharedReceivingVersion; } catch (e) {}
-  if (!localWasShared && sharedReceiptHasWork(legacy)) {
-    sharedReceiptLegacy = legacy;
-    try { if (!localStorage.getItem('bm_receipt_before_shared_v101')) localStorage.setItem('bm_receipt_before_shared_v101', localStorage.getItem(RECEIPT_DRAFT_KEY) || '{}'); } catch (e) {}
-  }
-  // A tab identifier deduplicates paid scans; it never locks ordinary editing.
-  const clientId = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : makeOperationId('receiving-device');
-  sharedReceiving = BermanSharedReceiving.create({ db, doc, getDoc, onSnapshot, runTransaction, setDoc, writeBatch,
-    rootPath: ['artifacts', appId, 'public', 'data'], clientId,
-    isOnline: () => navigator.onLine, getLocal: captureSharedReceipt,
-    onState: (payload, meta) => applySharedReceipt(payload, meta), onStatus: sharedReceivingStatusChanged });
-  try {
-    await sharedReceiving.start();
-    scheduleSharedReceiptSave();
-  } catch (error) { sharedReceiptSyncError(error); }
+  migrateLocalReceivingQueues();
+  renderSharedReceivingBanner();
 }
 // v135: מעבר לטלפון אחד — מה שעל המסך נשאר (הספירה, הניירות), נשמר בטלפון, והתעודה תישמר לענן בסיום
 function sharedReceivingSolo() {
@@ -21765,11 +21790,7 @@ function sharedReceivingSolo() {
 }
 // v135: חזרה לסנכרון — טיוטה שיש בטלפון ולא בענן מוצעת לשחזור (כמו מעבר מגרסה ישנה)
 async function sharedReceivingTogether() {
-  sharedReceivingOff = false;
-  try { localStorage.removeItem(SHARED_RECEIVING_OFF_KEY); localStorage.setItem(SHARED_RECEIVING_LIVE_KEY, '1'); } catch (e) {}
-  logAction('receipt', 'סנכרון קליטה בין טלפונים', 'הסנכרון הופעל שוב בטלפון הזה', {});
-  await startSharedReceiving();
-  renderSharedReceivingBanner();
+  showToast('הקליטה נשמרת בטלפון הזה. התעודה תסתנכרן רק בסיום.', null, null, 3500);
 }
 // ===== v137: קליטה בטלפון, גיבוי בענן ומעבר בין טלפונים — המודול draft-handoff.js =====
 // המפרט: docs/local-first-sync.md. הקליטה רצה בטלפון ולא מחכה לענן. לכל קליטה מסמך אחד בענן
@@ -21891,49 +21912,12 @@ function migrateV136Handoff() {
 // טלפון שעוד פתוח על v136 מציע "המשך אותה כאן" לפי המסמך הישן drafts/receiving_handoff — סוגרים אותו פעם אחת
 // (v136 לא מציע מסמך סגור, ולא נוגע בקליטה שלו עצמו בגללו)
 function retireV136HandoffDoc() {
-  try {
-    if (localStorage.getItem('bm_v136_handoff_retired') || !navigator.onLine) return;
-    setDoc(doc(db, ...dataPath('drafts', 'receiving_handoff')), { schema: 1, closed: true, draftId: null, deviceId: 'v137', payload: null, updatedAt: Date.now(), writtenBy: APP_VERSION })
-      .then(() => { try { localStorage.setItem('bm_v136_handoff_retired', '1'); } catch (e) {} }).catch(() => {});
-  } catch (e) {}
+  // No writes to legacy draft documents. Old clients cannot pull a new local draft.
 }
 function startDraftHandoff() {
-  if (draftHandoff || !db || !globalThis.DraftHandoff) return;
-  const fsApi = draftHandoffFs(); if (!fsApi) return;
-  try {
-    draftHandoff = DraftHandoff.create({ app: 'berman', kind: 'receiving', prefix: 'bm', db, fs: fsApi,
-      rootPath: ['artifacts', appId, 'public', 'data'], recordCollection: 'receipts', appVersion: APP_VERSION, maxScanMs: RECEIVING_SCAN_MAX_MS,
-      adapter: {
-        getDraft: receivingHandoffDraft,
-        getPayload: receivingHandoffPayloadNow,
-        // טביעה יציבה של מה שנספר (לא משתנה מעצמה אחרי פתיחה מחדש) — לדעת אם השמירה שנכנסה היא בדיוק מה שבטלפון
-        fingerprint: () => JSON.stringify({ l: receiptList.map(l => [String(l.productId), Number(l.qty) || 0]).sort(), n: receiptNotes.map(n => [n.units, n.lines, n.kind || '']),
-          d: receiptDocDate || '', nd: !!receiptNoDoc, a: receiptAttachTarget ? receiptAttachTarget.id : '' }),
-        // ביטול שהענן אישר (הקליטה הייתה של הטלפון הזה) — רק עכשיו תעודות המשלוח שלה יוצאות לסל
-        onClosed: meta => receivingDiscardCanceledPapers(meta && meta.paperIds),
-        validatePayload: (p, d) => !!(p && p.version === 1 && p.state && p.ui && receivingSessionOf(p.state) === d.sessionId),
-        applyPayload: (text, meta) => receivingHandoffApply(JSON.parse(text), meta),
-        emptyDraft: receivingHandoffEmpty,
-        // קליטה שבוטלה בטלפון אחר — נפתחת כאן כקליטה חדשה (מזהה חדש), כדי שאפשר יהיה להמשיך ולשמור אותה
-        reviveDraft: text => { const p = JSON.parse(text); const id = makeOperationId('receipt'); p.state.receiptDraftId = id; p.state.receiptAttachTarget = null; receivingHandoffApply(p, { source: 'revive' }); return id; },
-        recordSaved: id => receipts.some(r => r && r.id === id),
-        deviceName: () => deviceName || '',
-        onChange: st => {
-          // הקליטה עברה / חזרה — המסך כולו מתעדכן (כפתורים שלא שייכים לטלפון הזה יורדים)
-          if (st && st.readOnly !== receivingHandoffReadOnlyShown) { receivingHandoffReadOnlyShown = st.readOnly; if (currentView === 'receiving' || currentView === 'reconcile') renderView(); }
-          renderSharedReceivingBanner();
-          if (currentView === 'paperIntake' && paperIntakeChoiceShown !== paperIntakeChoiceNow()) refreshPaperIntake();
-        },
-        onNotice: receivingHandoffNotice,
-        finishedLate: receivingFinishedLate,
-        log: (title, text, meta) => logAction('receipt', title, text, meta || {})
-      } });
-    migrateV136Handoff();
-    draftHandoff.start();
-    retireV136HandoffDoc();
-  } catch (e) { console.warn('draft handoff failed to start', e); draftHandoff = null; }
+  migrateLocalReceivingQueues();
 }
-function scheduleReceivingHandoff(opts) { if (sharedReceivingOff && draftHandoff && !sharedReceiptApplying) draftHandoff.changed(opts); }
+function scheduleReceivingHandoff(opts) { /* Local-only receiving; deliberately no cloud draft. */ }
 function receivingHandoffState() { return sharedReceivingOff && draftHandoff ? draftHandoff.state() : null; }
 const receivingWho = n => n ? 'בטלפון "' + htmlEscape(n) + '"' : 'בטלפון אחר';
 function receivingHandoffWhen(at) {
@@ -21954,6 +21938,7 @@ function receivingHandoffWhat(sm) {
 // מה לומר כשמנסים לערוך קליטה שלא בידיים של הטלפון הזה
 function receivingHandoffBlockedText(st) {
   if (sharedReceiptFinalizing) return 'שומר את התעודה — רגע.';
+  if (localReceivingPending()) return 'השמירה לא אושרה עדיין. לחץ על בדיקה וניסיון חוזר בראש מסך הקליטה.';
   if (!st) return 'רגע…';
   if (st.checking === 'finish') return 'בודק אם התעודה נשמרה בענן — רגע.';
   if (st.checking === 'take') return 'בודק אם הקליטה עברה לטלפון הזה — רגע.';
@@ -21966,68 +21951,16 @@ function receivingHandoffBlockedText(st) {
   return 'רגע…';
 }
 function receivingHandoffBannerHtml() {
-  const st = receivingHandoffState();
-  if (!st) return '';
-  const box = (tone, inner) => '<div class="rounded-xl border-2 border-' + tone + '-300 bg-' + tone + '-50 text-' + tone + '-900 p-3 text-xs font-bold mb-1">' + inner + '</div>';
-  const btn = (action, label, tone, session, strong) => '<button data-shared-receiving="' + action + '"' + (session ? ' data-session="' + htmlEscape(session) + '"' : '') +
-    ' class="block w-full mt-2 rounded-lg ' + (strong ? 'bg-' + tone + '-600 text-white px-3 py-2.5 font-black text-sm' : 'border border-' + tone + '-300 bg-white px-3 py-2 font-black') + '">' + label + '</button>';
-  if (st.checking === 'finish') return box('amber', 'בודק אם התעודה נשמרה בענן… (התשובה מהענן לא הגיעה). הקליטה שמורה בטלפון.');
-  if (st.checking === 'take') return box('blue', 'בודק אם הקליטה עברה לטלפון הזה…');
-  let html = '';
-  const a = st.away;
-  if (a && a.away === 'moved') html += box('amber', 'הקליטה הזאת ממשיכה ' + receivingWho(a.by) + (a.at ? ' (מ-' + receivingHandoffWhen(a.at) + ')' : '') + '. כאן היא לקריאה בלבד.' +
-    (a.localAhead ? '<div class="font-normal mt-1">בטלפון הזה יש ספירה שלא הגיעה לשם — ב"החזר" היא תישמר בצד, ואפשר לפתוח אותה.</div>' : '') +
-    (st.canTakeBack ? btn('handoff-take', 'החזר אותה לכאן', 'amber', st.sessionId)
-      : st.scanThere ? '<div class="font-normal mt-1">קריאת הנייר רצה שם — עוד רגע אפשר להחזיר אותה לכאן.</div>'
-      : btn('handoff-drop', 'נקה אותה מהטלפון הזה', 'amber')));
-  else if (a && a.away === 'saved') html += box('emerald', 'הקליטה הזאת כבר נשמרה — כאן היא עותק ישן.' + btn('handoff-drop', 'נקה אותה מהטלפון הזה', 'emerald'));
-  else if (a && a.away === 'canceled') html += box('slate', 'הקליטה הזאת בוטלה ' + receivingWho(a.by) + '.' + btn('handoff-drop', 'נקה', 'slate'));
-  for (const o of st.offers || []) {
-    const what = receivingHandoffWhat(o.summary), when = receivingHandoffWhen(o.updatedAt);
-    const head = (o.mine ? 'יש קליטה פתוחה שלך בענן' : 'יש קליטה פתוחה ' + receivingWho(o.deviceName)) + (when || what ? ' (' + [when ? 'מ-' + when : '', what].filter(Boolean).join(' · ') + ')' : '') + '.';
-    html += box('blue', head + (o.button ? btn('handoff-take', 'המשך אותה כאן', 'blue', o.sessionId, true)
-      : '<div class="font-normal mt-1">' + (o.scanRunning ? 'קריאת הנייר רצה שם — עוד רגע אפשר להמשיך כאן.' : 'גדולה מדי להעברה — סיים אותה שם.') + '</div>'));
-  }
-  for (const x of st.side || []) {
-    const what = receivingHandoffWhat(x.summary), when = receivingHandoffWhen(x.savedAt);
-    const head = x.reason === 'late' ? 'מה שנספר אחרי שמירה שנכנסה באיחור (לא נכנס לתעודה) — נשמר בצד'
-      : x.sessionId === st.sessionId ? 'הגרסה הקודמת של הקליטה הזאת (מהטלפון הזה) נשמרה בצד'
-      : x.reason === 'canceled' ? 'קליטה שבוטלה בטלפון אחר — העותק מהטלפון הזה נשמר בצד' : 'קליטה שנשמרה בצד בטלפון הזה';
-    html += box('slate', head + (when || what ? ' (' + [when, what].filter(Boolean).join(' · ') + ')' : '') + '.' +
-      (x.reason === 'late' ? '<div class="font-normal mt-1">התעודה כבר שמורה בלי זה. אם צריך — תקן אותה מההיסטוריה.</div>' : '') +
-      (x.canOpen ? btn('side-open', x.sessionId === st.sessionId ? 'החלף לגרסה הזאת' : x.reason === 'canceled' ? 'פתח אותה כקליטה חדשה' : 'פתח אותה', 'slate', x.sessionId) : '') +
-      '<button data-shared-receiving="side-drop" data-session="' + htmlEscape(x.sessionId) + '" class="block w-full mt-1 text-[11px] underline text-slate-500">מחק את העותק</button>');
-  }
-  const s = st.status;
-  const text = a ? '' : st.legacy ? '' : s === 'failed' ? 'הגיבוי לענן מתעכב — הקליטה שמורה בטלפון, וננסה שוב לבד.'
-    : s === 'blocked' ? 'הגיבוי לענן לא אפשרי — הקליטה שמורה בטלפון הזה.'
-    : s === 'too-big' ? 'הקליטה גדולה מדי לגיבוי בענן — היא שמורה בטלפון הזה.'
-    : s === 'saving' ? 'מגבה לענן…'
-    : s === 'saved' && st.sessionId ? 'הקליטה מגובה בענן — אפשר להמשיך אותה גם בטלפון אחר.' : '';
-  if (text) html += '<div class="text-[11px] font-bold ' + (s === 'failed' || s === 'blocked' || s === 'too-big' ? 'text-amber-700' : 'text-slate-500') + '">' + text + '</div>';
-  return html;
+  const waiting = localReceivingPending() ? '<div class="border rounded-xl p-3 text-sm mb-2">השמירה לא אושרה עדיין. הנתונים נשמרו בטלפון.<button data-shared-receiving="local-retry" class="block underline font-bold mt-2">בדוק ונסה לשמור שוב</button></div>' : '';
+  const rows = localReceivingRecoveryList();
+  return waiting + '<div class="text-xs font-bold text-slate-500 mb-2">הקליטה נשמרת בטלפון הזה בלבד. התעודה תישמר בענן בסיום.</div>' +
+    ((!receivingDraftEmpty() && (localReceivingPending() || receipts.some(r => r.id === receiptDraftId))) ? '<button data-shared-receiving="local-archive" class="block underline text-xs mb-2">שמור עותק בצד ופנה את המסך</button>' : '') +
+    rows.map((r, i) => '<details class="border rounded-xl p-2 mb-2 text-xs"><summary>' + htmlEscape(r.label) + '</summary>' + localReceivingRecoveryHtml(r) +
+      (r.payload ? '<button data-shared-receiving="local-recovery" data-session="' + i + '" class="font-bold underline">פתח כשהקליטה הנוכחית ריקה</button>' : '') + '</details>').join('');
 }
 // "המשך אותה כאן" / "החזר אותה לכאן"
 async function receivingHandoffTake(sessionId) {
-  if (!draftHandoff || !sessionId) return;
-  const go = async () => {
-    const r = await draftHandoff.take(sessionId);
-    if (r.ok) { showToast('הקליטה עברה לטלפון הזה ✓', null, null, 2500); return; }
-    if (r.unknown) { showToast('בודק אם הקליטה עברה…', null, null, 2500); return; }
-    showToast({ offline: 'אין חיבור — הקליטה לא הועברה. נסה שוב כשיש רשת.', saved: 'הקליטה הזאת כבר נשמרה.', canceled: 'הקליטה הזאת בוטלה.',
-      gone: 'הקליטה כבר לא פתוחה בענן.', 'too-big-move': 'הקליטה גדולה מדי להעברה — סיים אותה בטלפון שבו היא פתוחה.',
-      'side-full': 'יש בטלפון 3 קליטות שמורות בצד — פתח וסיים אחת קודם.', storage: 'אין מקום בטלפון לשמור בצד את הקליטה שפתוחה כאן — סיים או בטל אותה קודם.',
-      invalid: 'הגיבוי בענן לא תקין — הקליטה לא הועברה.', busy: 'רגע — פעולה אחרת עוד רצה.',
-      'scan-running': 'קריאת הנייר רצה שם — עוד רגע אפשר להמשיך כאן.', 'scan-running-here': 'קריאת הנייר רצה בקליטה שפתוחה כאן — חכה שתסתיים.' }[r.reason] || 'הקליטה לא הועברה. נסה שוב.', null, null, 4500);
-    renderSharedReceivingBanner();
-  };
-  const st = draftHandoff.state();
-  if (st.sessionId && st.sessionId !== sessionId && !st.away) {
-    go.allowReadOnly = true;
-    showConfirm('להחליף את הקליטה שפתוחה כאן?', 'כאן פתוחה קליטה אחרת. היא תישמר בצד בטלפון הזה (לא נמחקת, ואפשר לפתוח אותה אחר כך), והקליטה מהטלפון השני תיפתח במקומה.', 'המשך את הקליטה מהטלפון השני', go);
-    return;
-  }
-  await go();
+  showToast('הקליטה נשמרת רק בטלפון שבו התחילה.', null, null, 3500);
 }
 // "נקה אותה מהטלפון הזה" — רק העותק שבטלפון; התעודה השמורה והניירות שלה לא משתנים
 function receivingHandoffDropLocal() {
@@ -22058,42 +21991,176 @@ async function restoreSharedReceiptLegacy() {
   try { await sharedReceiving.save(captureSharedReceipt()); await sharedReceiving.flush(); }
   catch (error) { sharedReceiptSyncError(error); }
 }
-async function finishSharedReceipt(id, data) {
-  if (!canEditSharedReceipt()) { sharedReceiptReadOnlyNotice(); return false; }
-  // v135: טלפון אחד — התעודה נשמרת ישר לענן, במזהה של הטיוטה (שמירה חוזרת דורסת את אותה תעודה, לא יוצרת שנייה)
-  if (sharedReceivingOff) {
-    sharedReceiptFinalizing = true;
-    try {
-      // v137: בטרנזקציה — רק אם הטלפון הזה עדיין מחזיק בקליטה ואם היא לא נשמרה כבר ממקום אחר; לא נכנסת לתור, לא דורסת
-      if (draftHandoff) {
-        const r = await draftHandoff.finish(id, data);
-        if (r.ok) { logCloudActionIfNeeded('save receipt', { op: 'set', path: dataPath('receipts', id), data, operationId: id }); return true; }
-        if (r.unknown) { receivingFinishPending = { sessionId: receivingSessionOf({ receiptDraftId, receiptAttachTarget }), opId: id, data, attach: receiptAttachTarget, noDoc: !!(pendingReceipt && pendingReceipt.noDoc) }; showToast('השמירה לא אושרה עדיין — בודק אם התעודה נשמרה בענן…', null, null, 4000); renderSharedReceivingBanner(); return false; }
-        showToast({ offline: 'אין חיבור — הקליטה שמורה בטלפון. לחץ "שמור" שוב כשיש רשת.', moved: 'הקליטה הזאת ממשיכה ' + receivingWho((draftHandoff.state().away || {}).by) + '. כדי לסיים כאן — "החזר אותה לכאן" למעלה.',
-          saved: 'הקליטה הזאת כבר נשמרה — לא נשמרת פעמיים.', canceled: 'הקליטה הזאת בוטלה בטלפון אחר.', exists: 'התעודה הזאת כבר נשמרה (בטלפון אחר) — לא נשמרת פעמיים.',
-          changed: 'התעודה השתנתה מאז שהתחלת לצרף את הנייר — פתח אותה שוב מההיסטוריה.', busy: 'רגע — פעולה אחרת עוד רצה.',
-          'saved-late': 'התעודה כבר נשמרה מהשמירה הקודמת (שהתשובה שלה התעכבה) — בלי השינויים שעשית אחריה. הם נשמרו בצד בטלפון הזה ("פתח אותה" למעלה).' }[r.reason]
-          || 'השמירה בענן נכשלה — הקליטה נשארה פתוחה. נסה שוב.', null, null, 5000);
-        renderSharedReceivingBanner();
-        return false;
-      }
-      return await runCloudTask('save receipt', { op: 'set', path: dataPath('receipts', id), data, operationId: id }); // בלי המודול (לא נטען) — כמו v135
-    } finally { sharedReceiptFinalizing = false; }
-  }
-  clearTimeout(sharedReceiptSaveTimer); sharedReceiptSaveTimer = null;
+let localReceivingFinalizer = null, localReceivingSavedFence = null, localReceivingEpoch = 0, qtyReceiptEpoch = 0;
+function localReceivingPending() {
+  const id = receivingSessionOf({ receiptDraftId, receiptAttachTarget });
+  if (!id) return false;
+  try { const raw = localStorage.getItem('bm_receiving_final_v1'); return !!(raw && JSON.parse(raw)[id]); } catch (e) { return true; }
+}
+function localReceivingRecoveryHtml(row) {
+  const items = row.payload && row.payload.state && row.payload.state.receiptList;
+  return Array.isArray(items) ? items.map(l => '<div>' + htmlEscape(l.name || 'מוצר') + ' × ' + mtxQty(Number(l.qty) || 0) + '</div>').join('') : '<div>עותק ישן שמור בטלפון לעיון.</div>';
+}
+function localReceivingArchive() {
+  if (sharedReceiptFinalizing) return false;
+  try {
+    const key = 'bm_local_receiving_archived', rows = JSON.parse(localStorage.getItem(key) || '[]');
+    rows.push({ savedAt: Date.now(), payload: JSON.stringify(receivingHandoffPayload()) });
+    localStorage.setItem(key, JSON.stringify(rows));
+    // Persist empty draft before clearing live state; archive preserves original identity and counts.
+    localStorage.setItem(RECEIPT_DRAFT_KEY, JSON.stringify({schemaVersion:2,items:[],notes:[],opened:false,draftId:null}));
+  } catch(e) { showToast('אין מקום לשמור עותק בטוח; הקליטה נשארה פתוחה.', null, null, 4000); return false; }
+  fenceLocalReceivingUI(); receivingHandoffEmpty(); renderSharedReceivingBanner(); return true;
+}
+async function localReceivingRetry() {
+  if (sharedReceiptFinalizing || !localReceivingPending()) return;
+  if (!localReceivingFinalizer) getLocalReceivingFinalizer();
+  if (!localReceivingFinalizer) return;
+  const sessionId = receivingSessionOf({ receiptDraftId, receiptAttachTarget }), attempt = localReceivingFinalizer.attempt(sessionId);
+  if (!attempt) return;
   sharedReceiptFinalizing = true;
   try {
-    const reviewed = captureSharedReceipt();
-    await sharedReceiving.save(reviewed);
-    await sharedReceiving.flush();
-    if (JSON.stringify(reviewed.state) !== JSON.stringify(captureSharedReceipt().state)) throw new Error('הקליטה התעדכנה. בדוק שוב את הסיכום לפני השמירה.');
-    await sharedReceiving.finish(id, data, emptySharedReceipt(), { expectedReceipt: receiptAttachTarget && receiptAttachTarget.expectedReceipt });
+    const result = await localReceivingFinalizer.finish(attempt);
+    if (result.ok) {
+      localReceivingAckPapers(attempt.extras);
+      localReceivingSavedFence = { id: attempt.recordId, fingerprint: attempt.fingerprint };
+      await receiptAfterSave(attempt.recordId, attempt.data, receiptAttachTarget, attempt.data.noDoc);
+    } else {
+      showToast(result.reason === 'saved-late' ? 'התעודה כבר נשמרה. השינויים המאוחרים נשארו בטלפון לבדיקה.' : 'השמירה לא אושרה. הקליטה נשמרה בטלפון.', null, null, 4500);
+    }
+  } finally { sharedReceiptFinalizing = false; renderSharedReceivingBanner(); }
+}
+function getLocalReceivingFinalizer() {
+  if (!localReceivingFinalizer && globalThis.LocalReceiving && db) localReceivingFinalizer = LocalReceiving.create({ storage: localStorage, prefix: 'bm', app: 'berman', db,
+    fs: { doc, runTransaction, getDocFromServer }, rootPath: ['artifacts', appId, 'public', 'data'],
+    makeId: () => makeOperationId('finish'), deviceName: () => deviceName || '', appVersion: APP_VERSION, getFingerprint: localReceivingFingerprint, getSession: () => receivingSessionOf({ receiptDraftId, receiptAttachTarget }) });
+  return localReceivingFinalizer;
+}
+function localReceivingFingerprint() {
+  const ids = new Set((aiScanResponse && aiScanResponse.perDocument || []).map(d => d && d.paperId));
+  const localPapers = Object.values(paperLocalResults()).filter(r => r && r.paper && ids.has(r.paper.id) && !r.discarded).map(r => ({ paper: r.paper, scan: r.scan || null }));
+  return JSON.stringify({ localPapers, id: receiptDraftId, attach: receiptAttachTarget, state: sharedReceiptSummaryBasis(), mode: receiptCountingMode, quantities: receiptQuantityReview, paper: receiptScanSnapshot() });
+}
+function fenceLocalReceivingUI() {
+  localReceivingEpoch++;
+  localReconcileSource = null; localReconcilePaper = null;
+  if (qtyTarget === 'receipt') hideQty();
+  if (scanPurpose === 'receiving') closeScanner();
+  hideReceiptSummary();
+  if ($('receiptQuantityModal')) $('receiptQuantityModal').classList.add('hidden');
+  if ($('confirmModal')) $('confirmModal').classList.add('hidden');
+  confirmCb = null;
+  aiCloseOrientationReview(); aiScanSession++;
+  paperJoinPending.clear(); paperRoundEndPending = null;
+}
+function migrateLocalReceivingQueues() {
+  const legacy = cloudFailedWrites.filter(item => {
+    const receivingWrite = t => {
+      if (!t) return false;
+      if (Array.isArray(t.writes) && t.writes.some(receivingWrite)) return true;
+      if (Array.isArray(t.tasks) && t.tasks.some(receivingWrite)) return true;
+      if (!Array.isArray(t.path)) return false;
+      const collection = t.path[t.path.length - 2], id = String(t.path[t.path.length - 1]);
+      return collection === 'drafts' && /receiv|receipt/i.test(id) || collection === 'receipts' && /^save receipt(?:$| )/.test(String(item.actionName || ''));
+    };
+    return receivingWrite(item && item.task);
+  });
+  if (!legacy.length) return true;
+  try {
+    const key = 'bm_local_receiving_legacy_queue';
+    const saved = JSON.parse(localStorage.getItem(key) || '[]');
+    for (const row of legacy) if (!saved.some(x => JSON.stringify(x) === JSON.stringify(row))) saved.push(row);
+    localStorage.setItem(key, JSON.stringify(saved));
+    cloudFailedWrites = cloudFailedWrites.filter(x => !legacy.includes(x)); saveCloudFailedWrites();
     return true;
-  } catch (error) {
-    sharedReceiptSyncError(error);
-    showToast('התעודה לא נסגרה. הקליטה התעדכנה או שהחיבור נקטע. בדוק שוב את הסיכום ונסה לשמור.', null, null, 4500);
-    return false;
-  } finally { sharedReceiptFinalizing = false; }
+  } catch (e) { showToast('לא ניתן לשמור עותק של פעולות ישנות בטלפון — הן לא נשלחו.', null, null, 5000); return false; }
+}
+function localReceivingRecoveryList() {
+  const out = [];
+  const add = (raw, label) => {
+    let payload = raw && raw.payload;
+    try { if (typeof payload === 'string') payload = JSON.parse(payload); } catch (e) { payload = null; }
+    if (payload && (!payload.state || payload.version !== 1)) payload = null;
+    out.push({ raw, payload, label });
+  };
+  for (const key of ['bm_receipt_before_handoff', 'bm_handoff_receiving_side', 'bm_local_receiving_legacy_queue', 'bm_receipt_before_shared_v101', 'bm_local_receiving_archived']) {
+    try { const raw = JSON.parse(localStorage.getItem(key) || 'null'); if (!raw) continue;
+      (Array.isArray(raw) ? raw : [raw]).forEach((x, i) => add(x, 'עותק קודם ' + (out.length + 1)));
+    } catch (e) { out.push({ raw: localStorage.getItem(key), payload: null, label: 'עותק קודם שלא ניתן לפענח' }); }
+  }
+  return out;
+}
+function localReceivingRestore(index) {
+  if (sharedReceiptFinalizing || !receivingDraftEmpty()) { showToast('סיים את הקליטה הנוכחית לפני פתיחת העותק.', null, null, 4000); return false; }
+  const row = localReceivingRecoveryList()[index]; if (!row || !row.payload) return false;
+  // Keep both source and current local copy even if storage fails during application.
+  try {
+    const previous = localStorage.getItem(RECEIPT_DRAFT_KEY) || '{}';
+    localStorage.setItem('bm_local_receiving_before_restore', previous);
+    localStorage.setItem(RECEIPT_DRAFT_KEY, JSON.stringify({ ...JSON.parse(previous), recoveryPayload: row.payload }));
+  }
+  catch (e) { showToast('אין מקום בטלפון לשחזור בטוח — העותק נשאר ללא שינוי.', null, null, 4000); return false; }
+  const prior = captureSharedReceipt();
+  fenceLocalReceivingUI();
+  const payload = cloneSafe(row.payload); payload.state.pendingReceipt = null; payload.ui = { view: 'receiving', forms: {} };
+  receivingHandoffApply(payload, { source: 'local' });
+  if (Array.isArray(payload.state.reconcileData)) {
+    reconcileData = sharedReceiptDecode(payload).state.reconcileData;
+    localReconcileSource = (payload.state.receiptList || []).map(l => [String(l.productId), Number(l.qty) || 0]);
+    localReconcilePaper = JSON.stringify({ response: aiScanResponse, notes: receiptNotes });
+    reconcilePaperEntered = !!payload.state.reconcilePaperEntered; reconcileCheckMode = !!payload.state.reconcileCheckMode; reconcileAiAudit = sharedReceiptDecode(payload).state.reconcileAiAudit || null;
+  }
+  if (!saveReceiptDraft()) {
+    const bindings = sharedReceiptBindings(); for (const [key, value] of Object.entries(sharedReceiptDecode(prior).state)) if (bindings[key]) bindings[key][1](value);
+    recomputeNoteTotal(); try { localStorage.setItem(RECEIPT_DRAFT_KEY, localStorage.getItem('bm_local_receiving_before_restore') || '{}'); } catch(e) {}
+    renderReceiving(); return false;
+  }
+  showToast('נפתח עותק מקומי. אם התעודה כבר נשמרה, השמירה תיעצר לבדיקה.', null, null, 4500);
+  return true;
+}
+function localReceivingAckPapers(extras) {
+  for (const extra of extras || []) {
+    if (extra.collection !== 'papers') continue;
+    if (!papers.some(p => p.id === extra.id)) papers.push(cloneSafe(extra.data));
+    for (const rec of Object.values(paperLocalResults())) if (rec && rec.paper && rec.paper.id === extra.id && paperFingerprint(rec.paper) === paperFingerprint(extra.data)) paperPatchLocal(rec.captureId, cur => cur ? { ...cur, ackedAt: Date.now(), outcome: 'receipt-finalized' } : cur);
+  }
+  ledgerInvalidate();
+}
+function localReceivingPaperExtras() {
+  const per = aiScanResponse && aiScanResponse.perDocument || [], ids = new Set(per.map(p => p && p.paperId).filter(Boolean));
+  const extras = [], records = [];
+  for (const rec of Object.values(paperLocalResults())) {
+    if (!rec || !rec.paper || rec.ackedAt || rec.discarded || rec.paper.kind !== 'delivery' || !ids.has(rec.paper.id)) continue;
+    const current = papers.find(p => p.id === rec.paper.id);
+    if (current && !current.deleted && paperFingerprint(current) === paperFingerprint(rec.paper)) { extras.push({ collection: 'papers', id: current.id, data: cloneSafe(current), expected: cloneSafe(current), guardOnly: true }); records.push(rec); continue; }
+    extras.push({ collection: 'papers', id: rec.paper.id, data: cloneSafe(rec.paper), expected: null });
+    if (rec.scan) extras.push({ collection: 'paperScans', id: rec.paper.id, data: cloneSafe(rec.scan), expected: null });
+    records.push(rec);
+  }
+  return { extras, records };
+}
+async function finishSharedReceipt(id, data) {
+  if (!canEditSharedReceipt()) { sharedReceiptReadOnlyNotice(); return false; }
+  if (!navigator.onLine || !db) { showToast('אין חיבור — הקליטה נשארת בטלפון. נסה לשמור כשיש רשת.', null, null, 4500); return false; }
+  if (!globalThis.LocalReceiving) { showToast('מנגנון השמירה לא נטען. הקליטה נשארת בטלפון; פתח שוב את האפליקציה.', null, null, 4500); return false; }
+  if (!saveReceiptDraft()) return false;
+  getLocalReceivingFinalizer();
+  const fingerprint = localReceivingFingerprint(), sessionId = receivingSessionOf({ receiptDraftId, receiptAttachTarget });
+  const staged = localReceivingPaperExtras();
+  sharedReceiptFinalizing = true;
+  try {
+    const result = await localReceivingFinalizer.finish({ sessionId, recordId: id, data, expected: receiptAttachTarget && receiptAttachTarget.expectedReceipt || null, fingerprint, extras: staged.extras });
+    if (!result.ok) { showToast(({ exists: 'התעודה כבר קיימת בענן. העותק המקומי נשמר לבדיקה; לא נוצרה כפילות.', changed: 'התעודה השתנתה בענן. השינויים המקומיים נשמרו — בדוק את התעודה בהיסטוריה.', 'saved-late': 'התעודה נשמרה אך הספירה השתנתה בזמן השמירה. השינויים נשארו בטלפון.', storage: 'אין מקום בטלפון לשמירה בטוחה. הטיוטה נשארה פתוחה.' })[result.reason] || 'השמירה לא אושרה. הקליטה נשארה בטלפון — נסה שוב כשיש רשת.', null, null, 5000); return false; }
+    localReceivingAckPapers(staged.extras);
+    for (const rec of staged.records) {
+      paperPatchLocal(rec.captureId, cur => cur && JSON.stringify(cur.paper) === JSON.stringify(rec.paper) ? { ...cur, ackedAt: Date.now(), outcome: 'receipt-finalized' } : cur);
+      if (!papers.some(p => p.id === rec.paper.id)) papers.push(cloneSafe(rec.paper));
+    }
+    ledgerInvalidate();
+    if (fingerprint !== localReceivingFingerprint() || receiptDraftId !== id) { showToast('התעודה נשמרה; שינויים מאוחרים נשארו בטלפון לבדיקה.', null, null, 4500); return false; }
+    localReceivingSavedFence = { id, fingerprint };
+    return true;
+  } finally { sharedReceiptFinalizing = false; renderSharedReceivingBanner(); }
 }
 function sharedReceiptEventTouchesWorkflow(target) {
   if (!target || !target.closest) return false;
@@ -22131,7 +22198,7 @@ function guardSharedReceiptEvent(event) {
   document.addEventListener(type, guardSharedReceiptEvent, true);
   document.addEventListener(type, event => {
     if (!sharedReceiptEventTouchesWorkflow(event.target)) return;
-    scheduleSharedReceiptSave();
+    saveReceiptDraft();
     // v137: עריכה של המשתמש בטלפון הזה — קליטה שנשארה מלפני המנגנון נתבעת רק ככה (לא בפתיחת האפליקציה)
     if (type !== 'keydown' && canEditSharedReceipt()) scheduleReceivingHandoff({ user: true });
   });
@@ -22140,6 +22207,9 @@ $('sharedReceivingBanner').addEventListener('click', async event => {
   const actionEl = event.target.closest('[data-shared-receiving]');
   const action = actionEl?.dataset.sharedReceiving, session = actionEl?.dataset.session || '';
   try {
+    if (action === 'local-retry') { await localReceivingRetry(); return; }
+    if (action === 'local-archive') { localReceivingArchive(); return; }
+    if (action === 'local-recovery') { localReceivingRestore(Number(session)); return; }
     if (action === 'off') { sharedReceivingSolo(); return; }
     if (action === 'handoff-take') { await receivingHandoffTake(session); return; } // v136/v137
     if (action === 'handoff-drop') { receivingHandoffDropLocal(); return; }

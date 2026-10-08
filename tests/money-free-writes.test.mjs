@@ -36,6 +36,7 @@ test('צירוף נייר לקליטה שנשמרה: רישומי הקישור �
     shortGoodsNotes: [{ at: 4, items: [{ productId: 'code_2381', name: 'x', qty: 1 }] }]
   };
   r.context.rc = noDocReceipt(links);
+  r.finalCloud.put('artifacts/berman-app-classic/public/data/receipts/rc_nodoc', r.context.rc);
   const units = r.context.rc.units, lines = r.context.rc.count;
   r.run(`receipts = [rc]; reopenReceiptForDoc('rc_nodoc');
     receiptEntryMode = 'manual'; receiptOpened = true;

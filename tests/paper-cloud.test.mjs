@@ -171,7 +171,9 @@ test('מספר שכבר נשמר בענן — לא משתנה בשקט; ההוד
 test('תעודת משלוח שצולמה פעמיים ונקראה קצת אחרת — לא התנגשות, השמורה נשארת', async () => {
   const cloud = makeCloud();
   const A = phone(cloud, scan(DELIVERY(18)));
+  A.run("currentView='ledger';mainMode='manage'");
   await read(A);
+  A.run("currentView='ledger';paperIntake=null");
   A.setResp(scan(DELIVERY(17)));
   A.run(`openPaperIntake({}); paperIntake.items = [{ captureId: 'capB', hash: 'hB', page: { dataUrl: 'data:y', baseDataUrl: 'data:y', rotation: 0, orientationConfirmed: true }, status: 'photo' }];`);
   await A.run('paperIntakeRun()'); await tick();
@@ -185,8 +187,10 @@ test('תעודת משלוח שצולמה פעמיים ונקראה קצת אחר
 test('תעודת משלוח: צילום שנקרא עד הסוף מחליף בענן קריאה של אותה תעודה שלא נקראה עד הסוף — והקריאה שלו נשמרת', async () => {
   const cloud = makeCloud();
   const A = phone(cloud, scan(DELIVERY(17)));
+  A.run("currentView='ledger';mainMode='manage'");
   await read(A);
   assert.equal(cloud.papers()[0].state, 'needs-review');
+  A.run("currentView='ledger';paperIntake=null");
   A.setResp(scan(DELIVERY(18)));
   A.run(`openPaperIntake({}); paperIntake.items = [{ captureId: 'capB', hash: 'hB', page: { dataUrl: 'data:y', baseDataUrl: 'data:y', rotation: 0, orientationConfirmed: true }, status: 'photo' }];`);
   await A.run('paperIntakeRun()'); await tick();
@@ -268,6 +272,7 @@ test('נייר שהסוג שלו לא נקרא — בלי כמויות עד שב
   const cloud = makeCloud();
   const kindless = { ...DELIVERY(18), docType: 'unknown', headerText: null, internalNumber: null };
   const A = phone(cloud, scan(kindless));
+  A.run("currentView='ledger';mainMode='manage'");
   await read(A);
   const id = cloud.papers()[0].id;
   await A.run(`openPaperReview(${JSON.stringify(id)})`);

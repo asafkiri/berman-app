@@ -241,10 +241,10 @@ test('final save carries the full scan and clears it only after the cloud write 
   r.click('ai-close-receipt');
   assert.ok(r.run('pendingReceipt'));
   const expected = plain(r.run('aiScanResponse'));
-  r.run('runCloudTask = async () => false');
+  r.finalCloud.reject = 'permission-denied';
   await r.run('confirmReceipt()');
   assert.ok(draft(r).paperScan);
-  r.run('runCloudTask = async (label, task) => {testWrites.push(structuredClone(task)); return true;}');
+  r.finalCloud.reject = null;
   await r.run('confirmReceipt()');
   const saved = r.writes.find(task => task.path?.includes('receipts'));
   assert.deepEqual(saved.data.paperScan.response, expected);
