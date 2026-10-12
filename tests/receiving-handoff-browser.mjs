@@ -1,6 +1,10 @@
-// v136/v137 — שני טלפונים בדפדפן אמיתי, במצב ברירת המחדל (בלי סנכרון בלייב): A מצלם נייר "ת.משלוח" קטן — הקליטה מגובה
-// לענן בשקט. B פותח: "יש קליטה פתוחה … המשך אותה כאן" → אותה קליטה. A: "ממשיכה בטלפון אחר". B: "לא הגיע כלום —
-// שמור" → התעודה נשמרת במזהה של הקליטה והגיבוי נסגר. A: "כבר נשמרה" → "נקה". בלי שגיאות, בלי רשת חיצונית, 390px.
+// v140 (היה v136/v137: "המשך אותה כאן" בטלפון אחר) — שני טלפונים בדפדפן אמיתי: הקליטה נשמרת רק בטלפון שבו התחילה,
+// והתעודה נכתבת לענן פעם אחת, בסיום. A מצלם נייר "ת.משלוח" קטן — שום דבר לא נכתב לענן (בלי גיבוי, בלי drafts, בלי
+// הנייר והפענוח); ריענון — אותה קליטה, בלי קריאה בתשלום. B פותח: אין "יש קליטה פתוחה … המשך אותה כאן", הקליטה שלו ריקה
+// ונפרדת, וגם הפעולה הישנה "המשך" לא מושכת אליו את הקליטה של A. A לא עובר ל"לקריאה בלבד", וגם B לא. B סופר משלו — רק
+// בטלפון. A: "לא הגיע כלום — שמור", התשובה מהענן אובדת → "בדוק ונסה לשמור שוב" → התעודה (במזהה של הקליטה), הנייר, הפענוח
+// ושורת היומן — בטרנזקציה אחת, בלי כפילות. הקליטה של B לא נפגעת, שורדת ריענון ונשמרת בתעודה משלה. בלי "כבר נשמרה"/"נקה",
+// בלי למחוק ניירות, בלי טעינת draft-handoff.js/shared-receiving.js, בלי שגיאות, בלי רשת חיצונית, 390px.
 // Run: NODE_PATH=$(npm root -g) node tests/receiving-handoff-browser.mjs
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -15,6 +19,8 @@ Object.assign(data.paper, { serviceVersion: 7, verification: { version: 1, statu
 // נייר "ת.משלוח" קטן מהמסופון: מספר 2900…, בלי מספר פנימי
 Object.assign(data.paper.scan.documents[0], { docNumber: '290095141', internalNumber: null, headerText: 'ת.משלוח', docDate: pad(now.getDate()) + '/' + pad(now.getMonth() + 1) + '/' + now.getFullYear() });
 const photo = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="500"><rect width="300" height="500" fill="white"/><path d="M20 60h260M20 120h200" stroke="black" stroke-width="6"/></svg>');
+// v140: כל כתיבה לענן נרשמת (commit = טרנזקציה, batch = כתיבה רגילה), ואפשר "לאבד" את התשובה של טרנזקציה שנכנסה
+const commits = [], net = { loseReply: false, down: false };
 let transactionQueue = Promise.resolve(), releaseTransaction;
 const rpc = async (operation, args = {}) => {
   if (operation === 'begin') {
@@ -22,13 +28,16 @@ const rpc = async (operation, args = {}) => {
     transactionQueue = new Promise(resolve => { args.release = resolve; });
     await previous; releaseTransaction = args.release; return true;
   }
-  if (operation === 'read') return documents.get(args.path) ?? null;
+  if (operation === 'read') { if (net.down) throw new Error('unavailable'); return documents.get(args.path) ?? null; }
   if (operation === 'list') return [...documents.entries()].filter(([k, v]) => k.startsWith(args.prefix + '/') && k.split('/').length === args.prefix.split('/').length + 1
     && v && (args.wheres || []).every(w => v[w.field] === w.value)).map(([k, v]) => ({ id: k.split('/').pop(), value: v }));
   if (operation === 'commit' || operation === 'batch') {
     for (const [path, value, op] of args.writes) { if (op === 'delete') documents.delete(path); else if(op === 'update'){const data=structuredClone(documents.get(path)||{});for(const [key,v] of Object.entries(value)){const parts=key.split('.');let obj=data;for(const p of parts.slice(0,-1)){obj[p]||={};obj=obj[p];}if(v?.__deleteField)delete obj[parts.at(-1)];else obj[parts.at(-1)]=structuredClone(v);}documents.set(path,data);}else documents.set(path, structuredClone(value)); }
+    commits.push({ operation, paths: args.writes.map(w => w[0]) });
   }
-  if (operation === 'commit' || operation === 'abort') { releaseTransaction(); releaseTransaction = null; }
+  if (operation === 'commit' || operation === 'abort') { if (releaseTransaction) releaseTransaction(); releaseTransaction = null; }
+  // הטרנזקציה נכנסה לענן — והתשובה לא הגיעה לטלפון (וגם הבדיקה מול השרת נכשלת, עד שהרשת חוזרת)
+  if (operation === 'commit' && net.loseReply) { net.loseReply = false; net.down = true; throw new Error('unavailable: reply lost'); }
   return true;
 };
 const setup = `
@@ -78,8 +87,13 @@ let scanRequests=0;
 window.fetch=async(url)=>{if(String(url)===AI_SCAN_WORKER_URL){scanRequests++;return{ok:true,status:200,json:async()=>structuredClone(testData.paper)}}throw new Error('External network is forbidden in local replay: '+url)};
 openScanner=async()=>{window.t.scanner=(window.t.scanner||0)+1;};
 window.t={
-  state:()=>({solo:sharedReceivingOff,canEdit:canEditSharedReceipt(),draftId:receiptDraftId,away:(draftHandoff&&draftHandoff.state().away||{}).away||'',notes:structuredClone(receiptNotes),items:structuredClone(receiptList),mode:receiptCountingMode,paperState:receiptPaperScanState,view:currentView,requests:scanRequests,ready:!!sharedReceiving?.ready,small:!!(papers.concat(Object.values(paperLocalResults()).map(r=>r.paper)).find(p=>p&&p.number==='290095141')||{}).small}),
-  scrollOk:()=>document.scrollingElement.scrollWidth<=document.scrollingElement.clientWidth+1
+  // v140: handoff/shared — אין מנגנון גיבוי/העברה ואין קליטה משותפת; pending — שמירה בסיום שעוד לא אושרה; stored — מזהה הטיוטה
+  // ששמורה בטלפון (bm_receipt_draft); disabled — שדות שננעלו ל"לקריאה בלבד"
+  state:()=>({solo:sharedReceivingOff,canEdit:canEditSharedReceipt(),pending:localReceivingPending(),handoff:!!draftHandoff,shared:!!sharedReceiving,draftId:receiptDraftId,stored:(JSON.parse(localStorage.getItem(RECEIPT_DRAFT_KEY)||'null')||{}).draftId||null,away:(draftHandoff&&draftHandoff.state().away||{}).away||'',notes:structuredClone(receiptNotes),items:structuredClone(receiptList),mode:receiptCountingMode,paperState:receiptPaperScanState,view:currentView,requests:scanRequests,disabled:document.querySelectorAll('[data-shared-receiving-disabled]').length,toast:$('toast').classList.contains('hidden')?'':$('toastMsg').textContent,small:!!(papers.concat(Object.values(paperLocalResults()).map(r=>r.paper)).find(p=>p&&p.number==='290095141')||{}).small}),
+  scrollOk:()=>document.scrollingElement.scrollWidth<=document.scrollingElement.clientWidth+1,
+  // B סופר משלו (כמו local-receiving-returns-browser) ומסיים קליטה בלי תעודה
+  receive:(id,n)=>{receiptOpened=true;addReceiptQtyToTop(products.find(p=>p.id===id),n);saveReceiptDraft();},
+  finish:async()=>{receiptNoDoc=true;pendingReceipt={lines:receiptList.map(x=>({...x})),noDoc:true,status:'open',noteParts:[]};await confirmReceipt();}
 };
 setView('receiving');await startSharedReceiving();window.t.loaded=true;
 `;
@@ -88,13 +102,15 @@ const css = process.env.BERMAN_TEST_CSS ? fs.readFileSync(process.env.BERMAN_TES
 const pageHtml = html.replace(/<script\s+src="https:[^"]+"><\/script>/g, '').replace(/<link[^>]+(?:href="https:[^"]+"|rel="(?:manifest|preconnect)")[^>]*>/g, '')
   .replace(/<script type="module">[\s\S]*?<\/script>/, () => '<script type="module">' + setup + moduleSource + replay + '</script>')
   .replace('</head>', '<style>' + css + '</style></head>');
+// v140: הדף טוען local-receiving.js?v=140 (השמירה בסיום) ו-shared-return-events.js?v=138 — לא draft-handoff.js ולא shared-receiving.js
+const served = [], missing = [];
 const server = http.createServer((req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Content-Security-Policy', "default-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; worker-src 'none'");
-  if(req.url.startsWith('/shared-return-events.js')){res.setHeader('Content-Type','text/javascript');res.end(fs.readFileSync(new URL('../shared-return-events.js',import.meta.url)));}else if (req.url.startsWith('/draft-handoff.js')) { res.setHeader('Content-Type', 'text/javascript'); res.end(fs.readFileSync(new URL('../draft-handoff.js', import.meta.url))); }
-  else if (req.url.startsWith('/shared-receiving.js')) { res.setHeader('Content-Type', 'text/javascript'); res.end(fs.readFileSync(new URL('../shared-receiving.js', import.meta.url))); }
-  else if (req.url === '/') { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(pageHtml); }
-  else { res.statusCode = 404; res.end(); }
+  const file = req.url.split('?')[0]; served.push(file);
+  if (/^\/(local-receiving|shared-return-events|draft-handoff|shared-receiving)\.js$/.test(file)) { res.setHeader('Content-Type', 'text/javascript'); res.end(fs.readFileSync(new URL('..' + file, import.meta.url))); }
+  else if (file === '/') { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(pageHtml); }
+  else { if (/\.js$/.test(file)) missing.push(file); res.statusCode = 404; res.end(); }
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const url = 'http://127.0.0.1:' + server.address().port;
@@ -111,6 +127,12 @@ async function device(name) {
   return { page, context };
 }
 const state = page => page.evaluate(() => window.t.state());
+const reload = async page => { await page.reload(); await page.waitForFunction(() => window.t?.loaded); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const keys = re => [...documents.keys()].filter(k => re.test(k));
+// כתיבות של קליטה: תעודה, טיוטה/גיבוי (drafts — גם המסמך האחד של v136), נייר ופענוח
+const RECEIVING = /\/(receipts|drafts|papers|paperScans)\//;
+const receivingWrites = () => commits.filter(c => c.paths.some(p => RECEIVING.test(p)));
 // צילום בכפתור שבפס → הקריאה רצה לבד → הנייר הקטן פותח קליטה ונכנס אליה
 async function photographSmall(page) {
   const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.locator('#ledgerBar [data-role="paper-photo"]').click()]);
@@ -133,13 +155,38 @@ async function inFirstScreen(page, selector, label) {
   assert.ok(box && box.y >= 0 && box.y + box.height <= H, label + ': במסך הראשון בלי לגלול (' + JSON.stringify(box) + ')');
   return box;
 }
-async function confirmNone(page) {
+// replyLost (v140): הטרנזקציה נכנסת לענן אבל התשובה אובדת — הקליטה נשארת בטלפון עד "בדוק ונסה לשמור שוב"
+async function confirmNone(page, { replyLost = false } = {}) {
   await page.locator('#confirmModal').waitFor({ state: 'visible' });
   assert.equal(await page.locator('#confirmTitle').innerText(), 'לא הגיע כלום?');
   assert.deepEqual((await state(page)).items, [], 'כלום לא נרשם לפני האישור');
   assert.equal(await page.locator('#confirmOk').innerText(), 'לא הגיע כלום — שמור');
   const before = [...documents.keys()].filter(k => /\/receipts\//.test(k)).length;
+  const draftId = (await state(page)).draftId;
+  net.loseReply = replyLost;
   await page.locator('#confirmOk').click();
+  if (replyLost) {
+    const retry = page.locator('#sharedReceivingBanner [data-shared-receiving="local-retry"]');
+    await retry.waitFor({ state: 'visible', timeout: 10000 });
+    assert.match(await page.locator('#sharedReceivingBanner').innerText(), /השמירה לא אושרה עדיין[\s\S]*בדוק ונסה לשמור שוב/);
+    const p = await state(page);
+    assert.equal(p.pending, true, 'השמירה ממתינה לאישור');
+    assert.equal(p.draftId, draftId, 'הקליטה לא נסגרה לפני אישור'); assert.equal(p.stored, draftId, 'ושמורה בטלפון');
+    assert.notEqual(p.view, 'receiptsHistory');
+    assert.equal(keys(/\/receipts\//).length, before + 1, 'הטרנזקציה עצמה נכנסה פעם אחת');
+    // הסיכום מחכה פתוח; "אשר וקלוט" שוב לא שולח עוד שמירה — מפנה לבדיקה שבראש מסך הקליטה
+    await page.locator('#receiptSummaryModal').waitFor({ state: 'visible' });
+    await page.screenshot({ path: '/tmp/berman-v140-save-unconfirmed.png' });
+    await page.locator('#rs_ok').click();
+    await page.waitForFunction(() => /השמירה לא אושרה עדיין/.test(window.t.state().toast));
+    assert.equal(keys(/\/receipts\//).length, before + 1, 'בלי כפילות');
+    assert.equal((await state(page)).pending, true);
+    await page.locator('#rs_cancel').click();
+    await page.locator('#receiptSummaryModal').waitFor({ state: 'hidden' });
+    assert.ok(await page.evaluate(() => window.t.scrollOk()), 'בלי גלילה לצדדים');
+    net.down = false; // הרשת חזרה
+    await retry.click();
+  }
   // v133: נשמר מיד — בלי מסך ההבדלים ובלי הסיכום
   await page.waitForFunction(() => window.t.state().view === 'receiptsHistory');
   const saved = [...documents.entries()].filter(([k]) => /\/receipts\//.test(k));
@@ -151,51 +198,131 @@ async function confirmNone(page) {
   assert.deepEqual(s.items, [], 'הקליטה נסגרה');
   assert.ok(s.requests <= 1, 'בלי קריאה נוספת');
 }
-const handoffDoc = id => documents.get([...documents.keys()].find(x => x.endsWith('/drafts/handoff_berman_receiving_' + id))) || null;
 try {
   const A = await device('A'), a = A.page;
-  assert.equal((await state(a)).solo, true, 'ברירת המחדל: טלפון אחד');
+  let s = await state(a);
+  assert.equal(s.solo, true, 'ברירת המחדל: טלפון אחד');
+  // v140: אין גיבוי/מעבר בין טלפונים (draft-handoff) ואין קליטה משותפת — גם לא ברקע
+  assert.equal(s.handoff, false, 'בלי מנגנון המעבר'); assert.equal(s.shared, false, 'בלי קליטה משותפת');
   await photographSmall(a);
   const draftId = (await state(a)).draftId;
-  // הגיבוי לענן — בשקט, בלי לחכות לו
-  for (let i = 0; i < 100 && !handoffDoc(draftId); i++) await new Promise(r => setTimeout(r, 50));
-  assert.equal(handoffDoc(draftId).state, 'open'); assert.equal(handoffDoc(draftId).gen, 1); assert.ok(handoffDoc(draftId).payload.length > 100);
-  // המסמך האחד של v136 — רק סימן "סגור" (כדי שטלפון שעוד על v136 לא יציע ממנו)
-  const old = [...documents.entries()].filter(([k]) => k.endsWith('/drafts/receiving_handoff')).map(([, v]) => v);
-  assert.ok(old.every(v => v.closed === true && v.draftId === null), 'לא המסמך האחד של v136: ' + JSON.stringify(old));
+  assert.ok(draftId, 'לקליטה יש מזהה');
+  // היה (v136/v137): "הגיבוי לענן — בשקט" — drafts/handoff_berman_receiving_<מזהה> נוצר (open, gen 1, payload). v140: הקליטה
+  // נשמרת בטלפון בלבד — גם אחרי יותר מזמן ההשהיה של הגיבוי הישן (1.5 שניות) אין שום כתיבה של קליטה לענן: לא גיבוי,
+  // לא תעודה, לא הנייר ולא הפענוח שלו
+  await sleep(2500);
+  assert.deepEqual(receivingWrites(), [], 'בלי כתיבות קליטה לענן באמצע הקליטה');
+  // המסמך האחד של v136 (drafts/receiving_handoff) — v137 סגר אותו; v140 לא נוגע במסמכי טיוטה בכלל
+  assert.deepEqual(keys(/\/drafts\//), [], 'לא נכתב שום מסמך טיוטה');
+  s = await state(a);
+  assert.equal(s.stored, draftId, 'הטיוטה שמורה בטלפון, באותו מזהה');
   await a.locator('#app [data-role="paper-count-now"]').click();
   await a.waitForFunction(() => window.t.state().view === 'receiving');
-  await a.locator('#sharedReceivingBanner', { hasText: 'הקליטה מגובה בענן' }).waitFor();
-  // B פותח — ההצעה
+  // היה: "הקליטה מגובה בענן". v140: הקליטה בטלפון הזה בלבד; התעודה תישמר בענן בסיום
+  await a.locator('#sharedReceivingBanner', { hasText: 'הקליטה נשמרת בטלפון הזה בלבד' }).waitFor();
+  assert.match(await a.locator('#sharedReceivingBanner').innerText(), /התעודה תישמר בענן בסיום/);
+  assert.doesNotMatch(await a.locator('#sharedReceivingBanner').innerText(), /מגובה בענן/);
+  const notesA = (await state(a)).notes.map(n => [n.units, n.lines]);
+  assert.ok(notesA.length > 0, 'עוגני הנייר');
+  // היה: B לוחץ "המשך אותה כאן" ומקבל אותה קליטה (מזהה, עוגנים), בלי קריאה בתשלום. v140: ההמשך הוא באותו טלפון —
+  // ריענון מחזיר את אותה קליטה מהטלפון, בלי קריאה נוספת ובלי כתיבה לענן
+  await reload(a);
+  s = await state(a);
+  assert.equal(s.draftId, draftId, 'אחרי ריענון — אותה קליטה');
+  assert.deepEqual(s.notes.map(n => [n.units, n.lines]), notesA);
+  assert.equal(s.paperState, 'ok'); assert.equal(s.small, true, 'הנייר שנקרא נשאר בטלפון');
+  assert.equal(s.requests, 0, 'בלי קריאה בתשלום');
+  assert.equal(s.canEdit, true);
+  await a.locator('#sharedReceivingBanner', { hasText: 'הקליטה נשמרת בטלפון הזה בלבד' }).waitFor();
+  assert.deepEqual(receivingWrites(), [], 'גם הריענון לא כתב לענן');
+  // B פותח — היה: "יש קליטה פתוחה … 290095141 … המשך אותה כאן". v140: אין הצעה; הקליטה של A לא קיימת בשבילו
   const B = await device('B'), b = B.page;
-  await b.locator('#sharedReceivingBanner [data-shared-receiving="handoff-take"]').waitFor({ state: 'visible' });
-  assert.match(await b.locator('#sharedReceivingBanner').innerText(), /יש קליטה פתוחה[\s\S]*290095141[\s\S]*המשך אותה כאן/);
+  await b.locator('#sharedReceivingBanner', { hasText: 'הקליטה נשמרת בטלפון הזה בלבד' }).waitFor();
+  assert.doesNotMatch(await b.locator('#sharedReceivingBanner').innerText(), /יש קליטה פתוחה|המשך אותה כאן|290095141/);
+  assert.equal(await b.locator('[data-shared-receiving="handoff-take"], [data-shared-receiving="handoff-drop"]').count(), 0, 'בלי "המשך אותה כאן"/"נקה"');
+  await b.locator('#app', { hasText: 'אין קליטה פתוחה' }).waitFor();
+  s = await state(b);
+  assert.notEqual(s.draftId, draftId, 'לא הקליטה של A'); assert.deepEqual(s.notes, []); assert.deepEqual(s.items, []);
+  assert.equal(s.small, false, 'הנייר של A לא הגיע ל-B');
+  assert.equal(s.requests, 0, 'בלי קריאה בתשלום');
+  // היה: A — "לקריאה בלבד". v140: אף טלפון לא ננעל
+  assert.equal(s.canEdit, true, 'הטלפון השני — עורך'); assert.equal(s.disabled, 0);
   assert.ok(await b.evaluate(() => window.t.scrollOk()), 'בלי גלילה לצדדים');
-  await b.screenshot({ path: '/tmp/berman-v137-handoff-offer.png' });
+  await b.screenshot({ path: '/tmp/berman-v140-second-phone.png' });
+  // גם הפעולה הישנה עצמה (data-shared-receiving="handoff-take" עם המזהה של A, כמו בכפתור של v137) לא מעבירה כלום
+  // (v140 עונה "הקליטה נשמרת רק בטלפון שבו התחילה"; העיקר — שום דבר לא עובר ולא נכתב)
+  await b.evaluate(id => document.querySelector('#sharedReceivingBanner').insertAdjacentHTML('beforeend',
+    '<button data-shared-receiving="handoff-take" data-session="' + id + '">המשך אותה כאן</button>'), draftId);
   await b.locator('#sharedReceivingBanner [data-shared-receiving="handoff-take"]').click();
-  await b.waitForFunction(id => window.t.state().draftId === id && window.t.state().paperState === 'ok', draftId);
-  assert.deepEqual((await state(b)).notes.map(n => [n.units, n.lines]), (await state(a)).notes.map(n => [n.units, n.lines]));
-  assert.equal((await state(b)).requests, 0, 'בלי קריאה בתשלום');
-  // A יודע שהקליטה עברה
-  await a.locator('#sharedReceivingBanner', { hasText: 'ממשיכה בטלפון אחר' }).waitFor({ timeout: 10000 });
-  await a.screenshot({ path: '/tmp/berman-v137-handoff-moved.png' });
-  assert.equal((await state(a)).away, 'moved');
-  assert.equal((await state(a)).canEdit, false, 'הטלפון הראשון — לקריאה בלבד');
-  assert.equal(handoffDoc(draftId).gen, 2);
-  // B: "לא הגיע כלום — שמור"
-  await b.locator('#app [data-role="rc-quantity-none"]').click();
-  await confirmNone(b);
+  await sleep(500);
+  s = await state(b);
+  assert.notEqual(s.draftId, draftId); assert.deepEqual(s.notes, []); assert.deepEqual(s.items, []);
+  assert.doesNotMatch(s.toast, /עברה לטלפון הזה/);
+  assert.equal(s.requests, 0, 'בלי קריאה בתשלום');
+  assert.deepEqual(receivingWrites(), [], 'בלי כתיבה לענן');
+  // היה: A — "ממשיכה בטלפון אחר", away 'moved', לקריאה בלבד, gen 2. v140: A לא יודע על B, ממשיך לערוך את הקליטה שלו
+  s = await state(a);
+  assert.equal(s.canEdit, true, 'הטלפון הראשון לא עובר ל"לקריאה בלבד"'); assert.equal(s.away, ''); assert.equal(s.disabled, 0);
+  assert.equal(s.draftId, draftId); assert.deepEqual(s.notes.map(n => [n.units, n.lines]), notesA);
+  assert.doesNotMatch(await a.locator('#sharedReceivingBanner').innerText(), /ממשיכה בטלפון|לקריאה בלבד|כבר נשמרה/);
+  await a.screenshot({ path: '/tmp/berman-v140-first-phone.png' });
+  // B סופר משלו — גם זה רק בטלפון שלו, ו-A לא רואה את זה
+  await b.evaluate(() => window.t.receive('code_119', 4));
+  const draftB = (await state(b)).draftId;
+  assert.ok(draftB && draftB !== draftId, 'לכל טלפון קליטה משלו');
+  const storedB = await b.evaluate(() => localStorage.getItem('bm_receipt_draft'));
+  assert.equal(JSON.parse(storedB).draftId, draftB);
+  assert.deepEqual(receivingWrites(), [], 'הספירה של B — רק בטלפון');
+  assert.deepEqual((await state(a)).items, [], 'A לא רואה את הספירה של B');
+  // A: "לא הגיע כלום — שמור" (היה: B, אחרי שקיבל את הקליטה). התשובה מהענן אובדת → "בדוק ונסה לשמור שוב"
+  await a.locator('#app [data-role="rc-quantity-none"]').click();
+  await confirmNone(a, { replyLost: true });
   const saved = [...documents.entries()].filter(([k]) => /\/receipts\//.test(k));
   assert.equal(saved.length, 1); assert.ok(saved[0][0].endsWith('/' + draftId), 'במזהה של הקליטה');
-  assert.equal(saved[0][1].savedBy.sessionId, draftId, 'בטרנזקציה של המודול');
-  assert.equal(handoffDoc(draftId).state, 'saved', 'המסמך נסגר');
-  // A: "כבר נשמרה" → "נקה"
-  await a.locator('#sharedReceivingBanner [data-shared-receiving="handoff-drop"]').waitFor({ state: 'visible', timeout: 10000 });
-  await a.locator('#sharedReceivingBanner [data-shared-receiving="handoff-drop"]').click();
-  await a.locator('#confirmModal').waitFor({ state: 'visible' });
-  await a.locator('#confirmOk').click();
-  await a.waitForFunction(() => !window.t.state().draftId);
+  // היה: savedBy.sessionId — הטרנזקציה של draft-handoff.js. v140: localFinal — הטרנזקציה של local-receiving.js
+  assert.equal(saved[0][1].localFinal.sessionId, draftId, 'בטרנזקציה של המודול');
+  assert.equal(saved[0][1].operationId, draftId);
+  // הכל בבת אחת: התעודה, נייר המשלוח והפענוח שלו ושורת היומן — טרנזקציה אחת; הניסיון החוזר לא כתב שוב
+  const finals = receivingWrites();
+  assert.equal(finals.length, 1, 'כתיבת קליטה אחת לענן: ' + JSON.stringify(finals));
+  assert.equal(finals[0].operation, 'commit', 'בטרנזקציה');
+  const paperDocs = keys(/\/papers\//), scanDocs = keys(/\/paperScans\//);
+  assert.equal(paperDocs.length, 1, 'הנייר נשמר פעם אחת'); assert.equal(scanDocs.length, 1, 'הפענוח נשמר פעם אחת');
+  assert.equal(documents.get(paperDocs[0]).number, '290095141');
+  for (const path of [saved[0][0], paperDocs[0], scanDocs[0]]) assert.ok(finals[0].paths.includes(path), 'באותה טרנזקציה: ' + path);
+  assert.equal(finals[0].paths.filter(p => /\/actionLog\/receiving_final_/.test(p)).length, 1, 'שורת יומן אחת');
+  // היה: המסמך נסגר (state 'saved'). v140: אין מסמך טיוטה בענן בכלל; ההתחייבות המקומית נמחקה והטיוטה ריקה
+  assert.deepEqual(keys(/\/drafts\//), [], 'בלי מסמך טיוטה');
+  s = await state(a);
+  assert.equal(s.pending, false, 'השמירה אושרה'); assert.equal(s.draftId, null); assert.equal(s.stored, null);
+  // היה: A — "כבר נשמרה" → "נקה" (העותק הישן). v140: אין עותק ישן באף טלפון. B — הקליטה שלו לא נפגעה, ובלי "נקה"
+  await sleep(300);
+  s = await state(b);
+  assert.equal(s.draftId, draftB); assert.deepEqual(s.items.map(l => [l.productId, l.qty]), [['code_119', 4]]);
+  assert.equal(s.canEdit, true); assert.equal(s.disabled, 0);
+  assert.equal(await b.evaluate(() => localStorage.getItem('bm_receipt_draft')), storedB, 'הטיוטה של B לא השתנתה');
+  assert.equal(await b.locator('[data-shared-receiving="handoff-drop"]').count(), 0);
+  assert.doesNotMatch(await b.locator('#sharedReceivingBanner').innerText(), /כבר נשמרה|ממשיכה בטלפון|נקה/);
+  await reload(b);
+  s = await state(b);
+  assert.equal(s.draftId, draftB, 'B אחרי ריענון — אותה קליטה'); assert.deepEqual(s.items.map(l => [l.productId, l.qty]), [['code_119', 4]]);
+  // B מסיים — תעודה משלו, במזהה שלו; התעודה של A לא נדרסת
+  const recordA = JSON.stringify(documents.get(saved[0][0]));
+  await b.evaluate(() => window.t.finish());
+  await b.waitForFunction(() => window.t.state().view === 'receiptsHistory');
+  const all = [...documents.entries()].filter(([k]) => /\/receipts\//.test(k));
+  assert.equal(all.length, 2, 'שתי תעודות — אחת לכל טלפון');
+  const recordB = all.find(([k]) => k.endsWith('/' + draftB));
+  assert.ok(recordB, 'במזהה של הקליטה של B');
+  assert.deepEqual(recordB[1].items.map(l => [l.productId, l.qty]), [['code_119', 4]]);
+  assert.equal(recordB[1].localFinal.sessionId, draftB);
+  assert.equal(JSON.stringify(documents.get(saved[0][0])), recordA, 'התעודה של A לא השתנתה');
+  assert.equal(receivingWrites().length, 2, 'כתיבת קליטה אחת לכל סיום');
+  assert.equal((await state(b)).requests, 0, 'בלי קריאה בתשלום');
   assert.equal([...documents.keys()].filter(k => /\/trash\//.test(k)).length, 0, 'בלי למחוק ניירות');
+  assert.ok(served.includes('/local-receiving.js'), 'local-receiving.js נטען');
+  assert.deepEqual(served.filter(f => /draft-handoff|shared-receiving/.test(f)), [], 'המודולים של המעבר והקליטה המשותפת לא נטענים');
+  assert.deepEqual(missing, [], 'בלי סקריפט חסר');
   assert.deepEqual(errors, []); assert.deepEqual(external, []);
-  console.log('✓ מעבר בין טלפונים בדפדפן (v137): גיבוי → "המשך אותה כאן" → "ממשיכה בטלפון אחר" (לקריאה בלבד) → שמירה בטרנזקציה בטלפון השני → "נקה" — /tmp/berman-v137-handoff-*.png');
+  console.log('✓ קליטה בטלפון שלה בדפדפן (v140): בלי כתיבה לענן באמצע → ריענון שומר → B בלי "המשך אותה כאן" ובלי לקריאה בלבד → שמירה בטרנזקציה אחת (תעודה+נייר+פענוח), תשובה שאבדה → "בדוק ונסה שוב" בלי כפילות → הקליטה של B נשמרת לחוד — /tmp/berman-v140-*.png');
 } finally { await browser.close(); server.close(); }
