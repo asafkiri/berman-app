@@ -831,7 +831,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '140'; // קליטה מקומית; שמירת תעודה בענן רק בסיום
+const APP_VERSION = '141'; // זיכוי במוצר אחד במקום אחר — החלפה (באותו מחיר נסגרת לבד); חוסר בזיכוי ברור כמו עודף
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -3028,9 +3028,14 @@ function buildReturnRow(it) {
 function pendingReturnsBannerHtml() {
   // v125: החזרה שתעודת הזיכוי שלה צולמה והמאזן סגור עליה — כבר לא "פתוחה לאימות"
   // v127: גם כשניירות משלימים סגרו אותה (returnStateNow)
-  const pendingRet = returns.filter(r => !r.credited && returnStateNow(r) !== 'done').length;
+  const states = returns.filter(r => !r.credited).map(returnStateNow).filter(s => s !== 'done');
+  const pendingRet = states.length;
   if (!pendingRet) return '';
-  return '<div class="flex gap-2 mb-3"><button data-role="ret-history" class="btn-tap flex-1 min-w-0 bg-rose-600 text-white rounded-xl py-3.5 px-3 font-black text-base flex items-center justify-between gap-2 shadow-md"><span class="min-w-0 truncate"><i class="fa-solid fa-triangle-exclamation"></i> ' + (pendingRet === 1 ? 'יש תעודת חזרות פתוחה לאימות' : 'יש ' + pendingRet + ' תעודות חזרות פתוחות לאימות') + '</span><span class="text-xs font-black bg-white/20 px-2 py-1 rounded-lg shrink-0">לאימות ←</span></button>' +
+  // v141: אדום רק כשבאחת מהן פער בזיכוי (חסר או עודף לטיפול); החזרה שרק ממתינה לתעודת זיכוי — בכתום
+  const gaps = states.filter(s => s === 'open').length;
+  const cls = gaps ? 'bg-rose-600 text-white' : 'bg-amber-400 text-amber-900';
+  const text = gaps ? (gaps === 1 ? 'יש פער בזיכוי בתעודת חזרות' : 'יש פער בזיכוי ב-' + gaps + ' תעודות חזרות') : (pendingRet === 1 ? 'יש תעודת חזרות פתוחה לאימות' : 'יש ' + pendingRet + ' תעודות חזרות פתוחות לאימות');
+  return '<div class="flex gap-2 mb-3"><button data-role="ret-history" class="btn-tap flex-1 min-w-0 ' + cls + ' rounded-xl py-3.5 px-3 font-black text-base flex items-center justify-between gap-2 shadow-md"><span class="min-w-0 truncate"><i class="fa-solid ' + (gaps ? 'fa-triangle-exclamation' : 'fa-hourglass-half') + '"></i> ' + text + '</span><span class="text-xs font-black bg-white/20 px-2 py-1 rounded-lg shrink-0">' + (gaps ? 'לפרטים ←' : 'לאימות ←') + '</span></button>' +
     '</div>'; // v126: צילום — רק בכפתור "צלם נייר מהנהג" שבפס העליון
 }
 
@@ -3317,13 +3322,17 @@ function creditAllocationList(r) {
 function returnsBalance() {
   let shortUnits = 0, overUnits = 0, openDocs = 0, n = 0;
   returns.forEach(r => {
-    if (!r || !r.credited) return;
+    if (!r) return;
+    // v127: נייר זיכוי מהנהג נוגע בתעודה — מה שעוד פתוח בה לפי המאזן (מה שהניירות זיכו כבר לא חסר).
+    // v141: גם תעודה שזוכתה רק בנייר (בלי אימות) — אחרת "כל מה שהחזרת זוכה ✓" כשבנייר חסרה שורה.
+    // רק מה שלטיפול: החזרה שעוד ממתינה לתעודת זיכוי אינה חוסר
+    const ls = ledgerDocStatus(r.id);
+    const byPapers = !!(ls && ls.byPapers);
+    if (!r.credited && !byPapers) return;
     n++;
+    if (byPapers) { const u = ledgerDocOpenUnits(ls, r.id, true); if (!u.short && !u.over) return; openDocs++; shortUnits += u.short; overUnits += u.over; return; }
     const di = returnsDiscrepancyInfo(r);
     if (!di.open) return;
-    // v127: נייר זיכוי מהנהג נוגע בתעודה — מה שעוד פתוח בה לפי המאזן (מה שהניירות זיכו כבר לא חסר)
-    const ls = ledgerDocStatus(r.id);
-    if (ls && ls.byPapers) { const u = ledgerDocOpenUnits(ls, r.id); if (!u.short && !u.over) return; openDocs++; shortUnits += u.short; overUnits += u.over; return; }
     openDocs++; shortUnits += di.shortUnits; overUnits += di.overUnits;
   });
   return { shortUnits, overUnits, openDocs, n };
@@ -3332,7 +3341,9 @@ function returnsBalanceBannerHtml() {
   const b = returnsBalance();
   if (!(b.n > 0)) return '';
   const docs = b.openDocs === 1 ? 'בתעודה אחת' : 'ב-' + b.openDocs + ' תעודות';
-  if (b.shortUnits > 0) return '<div class="bg-rose-600 text-white rounded-2xl p-4 mb-3 shadow-md"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-scale-unbalanced"></i> חסר זיכוי על ' + b.shortUnits + ' יח׳ ' + docs + '</div><div class="text-xs text-white/90 mt-1">יחידות שהחזרת והספק טרם זיכה' + (b.overUnits > 0 ? ' · ועוד ' + b.overUnits + ' יח׳ שזוכו בעודף' : '') + ' — פתח את התעודה כדי להעביר אותן להחזרה הבאה</div></div>';
+  // v141: חוסר שרק הניירות מראים (המאזן מחזיק את התעודה) — אין "העבר להחזרה הבאה": מבקשים מהנהג
+  const carry = returns.some(r => r && r.credited && !((ledgerDocStatus(r.id) || {}).byPapers) && returnsDiscrepancyInfo(r).open && returnsDiscrepancyInfo(r).shortUnits > 0);
+  if (b.shortUnits > 0) return '<div class="bg-rose-600 text-white rounded-2xl p-4 mb-3 shadow-md"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-scale-unbalanced"></i> חסר זיכוי על ' + b.shortUnits + ' יח׳ ' + docs + '</div><div class="text-xs text-white/90 mt-1">יחידות שהחזרת והספק טרם זיכה' + (b.overUnits > 0 ? ' · ועוד ' + b.overUnits + ' יח׳ שזוכו בעודף' : '') + (carry ? ' — פתח את התעודה כדי להעביר אותן להחזרה הבאה' : ' — לבקש זיכוי מהנהג; הפירוט בכרטיס ההחזרה') + '</div></div>';
   if (b.overUnits > 0) return '<div class="bg-blue-600 text-white rounded-2xl p-4 mb-3 shadow-md"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-scale-unbalanced-flip"></i> זוכו ' + b.overUnits + ' יח׳ יותר ממה שהחזרת</div><div class="text-xs text-white/90 mt-1">הספק זיכה על יחידות שלא הוחזרו ' + docs + ' — בדוק את התעודה</div></div>';
   return '<div class="bg-emerald-500 text-white rounded-2xl p-4 mb-3 shadow-md"><div class="font-black text-lg flex items-center gap-2"><i class="fa-solid fa-scale-balanced"></i> כל מה שהחזרת זוכה ✓</div><div class="text-xs text-white/90 mt-1">אין יחידות פתוחות בזיכוי</div></div>';
 }
@@ -12644,18 +12655,29 @@ function returnCardInReceipts(r) {
   const isDep = l => !!(l && (l.isDeposit || String(l.productId || '').indexOf('deposit-') === 0));
   const live = (r.items || []).filter(l => !isDep(l) && (Number(l.qty) || 0) > 0);
   const units = live.reduce((a, l) => a + (Number(l.qty) || 0), 0);
+  // v141: נייר נגע בתעודה — לכל מוצר מה זוכה, וכמה חסר או עודף (מהמאזן); בלי נייר — "זוכה N" מהאימות, כמו קודם
+  const cv = returnCreditView(r, ls);
+  const sentOf = {}, shown = new Set();
+  if (cv) live.forEach(l => { const k = ledgerLineKey(l).key; sentOf[k] = (sentOf[k] || 0) + (Number(l.qty) || 0); });
   const rows = (r.items || []).map(it => {
     const dep = isDep(it);
-    const credTxt = (credited && !dep && it.noteQty != null && Number(it.noteQty) !== Number(it.qty))
+    const credTxt = (!cv && credited && !dep && it.noteQty != null && Number(it.noteQty) !== Number(it.qty))
       ? '<div class="text-[11px] font-black ' + (Number(it.noteQty) < Number(it.qty) ? 'text-rose-600' : 'text-amber-600') + ' mt-0.5">זוכה ' + (Number(it.noteQty) || 0) + '</div>' : '';
+    const k = cv && !dep ? ledgerLineKey(it).key : null;
+    const ledgerTxt = k && !shown.has(k) ? (shown.add(k), returnCreditLineHtml(cv.lines[k], sentOf[k] || 0)) : '';
     return '<div class="flex items-center justify-between gap-2 py-1 border-b border-slate-100 last:border-0">' +
       '<div class="min-w-0"><div class="text-sm font-bold text-slate-700 truncate">' + htmlEscape(it.name) +
         (dep ? ' <span class="text-[10px] font-black bg-indigo-100 text-indigo-700 rounded-full px-1.5">פיקדון</span>' : '') +
         (it.carried ? ' <span class="text-[10px] font-black text-blue-600"><i class="fa-solid fa-forward"></i> מפער קודם</span>' : '') + '</div>' +
-        '<div class="text-[11px] text-slate-400">' + (it.code ? 'קוד ' + htmlEscape(it.code) + ' · ' : '') + '<i class="fa-solid fa-barcode"></i> ' + htmlEscape(it.barcode || '—') + '</div></div>' +
+        '<div class="text-[11px] text-slate-400">' + (it.code ? 'קוד ' + htmlEscape(it.code) + ' · ' : '') + '<i class="fa-solid fa-barcode"></i> ' + htmlEscape(it.barcode || '—') + '</div>' + ledgerTxt + '</div>' +
       '<div class="text-left shrink-0"><div class="text-sm font-black text-slate-600">' + (it.qty != null ? it.qty + ' יח׳' : '') + '</div>' + credTxt + '</div>' +
     '</div>';
-  }).join('');
+  }).join('') + (cv && Object.keys(cv.extras).length ? '<div class="text-[11px] font-black text-slate-500 pt-2">זוכה גם על מוצרים שלא הוחזרו:</div>' + Object.values(cv.extras).map(v =>
+    '<div class="flex items-center justify-between gap-2 py-1 border-b border-slate-100 last:border-0"><div class="min-w-0"><div class="text-sm font-bold text-slate-700 truncate">' + htmlEscape(v.name) + '</div>' +
+      returnCreditLineHtml({ ...v, credit: null }, 0) + '</div><div class="text-left shrink-0"><div class="text-sm font-black ' + (v.state === 'problem' ? 'text-rose-600' : 'text-slate-600') + '">זוכה ' + mtxQty(v.credit || 0) + '</div></div></div>').join('') : '');
+  // v141: בשורת הסיכום — חסר ועודף לטיפול (לא נטו: 2 חסר ו-2 עודף אינם "הכל זוכה")
+  const cvSum = cv && (cv.short || cv.over) ? '<div class="text-[11px] font-black ' + (cv.problem ? 'text-rose-600' : 'text-amber-700') + '">' +
+    [cv.short ? 'חסר זיכוי ' + mtxQty(cv.short) : '', cv.over ? 'עודף זיכוי ' + mtxQty(cv.over) : ''].filter(Boolean).join(' · ') + '</div>' : '';
   // v127: כשהמאזן מחזיק את התעודה — בלי פירוט הפער הישן ובלי "העבר להחזרה הבאה": הם לא יודעים מה הניירות
   // כבר זיכו (ההעברה הייתה תובעת מהנהג שוב זיכוי שכבר ניתן). מה שפתוח — במשפט של המאזן ובשורת "במאזן"
   const gapShown = openGap && !byLedger;
@@ -12687,7 +12709,7 @@ function returnCardInReceipts(r) {
       '<div class="p-4 flex items-center justify-between gap-2">' +
         '<div class="min-w-0"><div class="font-black text-slate-800 text-sm">' + dateStr + '</div><div class="text-xs text-slate-400 mt-0.5">נשלח אל ' + htmlEscape(r.sentTo || '') + '</div>' + paperId +
           (ls ? ledgerSentencesHtml(byLedger ? ls.open.concat(ls.pending) : ls.open, ls.lg, ls.all) : '') + '</div>' +
-        '<div class="flex items-center gap-2 shrink-0"><div class="text-left"><div class="text-[11px] text-slate-400">הוחזרו</div><div class="font-black text-emerald-700">' + units + ' יח׳ · ' + live.length + ' שורות</div></div><i class="fa-solid fa-chevron-down hist-chevron text-slate-400 transition-transform"></i></div>' +
+        '<div class="flex items-center gap-2 shrink-0"><div class="text-left"><div class="text-[11px] text-slate-400">הוחזרו</div><div class="font-black text-emerald-700">' + units + ' יח׳ · ' + live.length + ' שורות</div>' + cvSum + '</div><i class="fa-solid fa-chevron-down hist-chevron text-slate-400 transition-transform"></i></div>' +
       '</div>' +
     '</summary>' +
     '<div class="px-4 pb-4"><div class="bg-slate-50 rounded-xl p-3 border border-slate-100">' + rows + '</div>' + retMergedNoteHtml(r) + ledgerDocLineHtml(r.id) + actionArea + '</div>' +
@@ -13048,6 +13070,7 @@ function rangeProductMatrixData(d) {
 const LEDGER_FROM_DEFAULT = '2026-09-01';
 const LEDGER_RETURN_WINDOW_DAYS = 14;
 const LEDGER_PENDING_DELIVERIES = 3;
+const LEDGER_RETURN_CREDIT_DELIVERIES = 4; // v141: החזרה בלי תעודת זיכוי — אחרי 4 ביקורים של הנהג זה חוסר
 function ledgerAddDays(day, n) { const t = new Date(String(day).slice(0, 10) + 'T12:00:00'); t.setDate(t.getDate() + n); return t.toLocaleDateString('en-CA'); }
 function ledgerReturnDay(rt) { return String((rt && (rt.docDate || rt.date)) || '').slice(0, 10); }
 // אותו מפתח מוצר כמו rowFor במרכזת: מוצר קטלוג לפי מזהה, אחר כך לפי קוד הפריט של
@@ -13536,16 +13559,72 @@ function paperLedger(opts) {
       if (a && sumGap(b) < 0 && !swaps.some(s => s.b === b)) swaps.push({ a, b, q, returnId: p.attach.id, paperId: p.id });
     });
   });
+  // v141: החלפה גם כשהמוצר שזוכה במקום כן נשלח בהחזרה — הנייר זיכה עליו יותר ממה שנשלח (נשלחה 1, זוכו 3),
+  // ובאותה החזרה מוצר אחר חסר בדיוק בכמות העודף. הכמות — העודף בלבד (לא כל השורה). רק בהחזרה שהזיכוי שלה
+  // מהניירות (יש נייר ראשי); לא כשלמוצר חוסר בקליטה סמוכה (זיכוי לחוסר שהגיע להחזרה), לא על שורה שהועברה
+  // מהחזרה קודמת, ולא כשמוצר חסר אחד מתאים לשני עודפים (לא מנחשים). אחרי ההחלפות הרגילות — הן קודמות.
+  const r3 = n => Math.round((Number(n) || 0) * 1000) / 1000;
+  const overProps = [], overSeen = new Set();
+  placed.filter(p => p.kind === 'credit' && p.attach.type === 'return').forEach(p => {
+    const rid = p.attach.id, R = byId.get('return:' + rid);
+    const retGap = k => r3((gaps[k] || []).filter(x => x.type === 'return' && x.id === rid).reduce((a, x) => a + x.gap, 0));
+    (p.attach.rowTargets || []).forEach(t => {
+      if (!t || t.type !== 'return' || t.id !== rid || t.outside) return;
+      const r = (p.rows || [])[t.line]; if (!r) return;
+      const b = paperRowKey(r).key;
+      if (overSeen.has(rid + '|' + b)) return;
+      overSeen.add(rid + '|' + b);
+      const x = (gaps[b] || []).find(z => z.type === 'return' && z.id === rid);
+      if (!x || !x.paperMode || !(x.sent > 0) || !(r3(x.gap) < 0)) return;
+      if (R && (Array.isArray(R.doc.items) ? R.doc.items : []).some(l => l && (l.carried || String(l.productId || '').indexOf('carry_') === 0) && ledgerLineKey(l).key === b)) return;
+      const day = String(p.docDay || x.day), lo = ledgerAddDays(day, -7), hi = ledgerAddDays(day, 1);
+      if ((gaps[b] || []).some(z => z.type === 'receipt' && z.gap > 0 && z.day >= lo && z.day <= hi)) return;
+      const q = r3(-x.gap);
+      // הנייר שזיכה את העודף: שורה על המוצר בדיוק בכמות העודף (המאוחרת), אחרת הגדולה שמכסה אותו
+      const onB = [];
+      placed.forEach(o => {
+        if (o.kind !== 'credit' || o.attach.type !== 'return' || o.attach.id !== rid) return;
+        (o.attach.rowTargets || []).forEach(u => {
+          const rr = u && u.type === 'return' && u.id === rid && (o.rows || [])[u.line];
+          if (rr && paperRowKey(rr).key === b) onB.push({ id: o.id, qty: r3(rr.qty) });
+        });
+      });
+      const src = onB.filter(z => z.qty === q).pop() || onB.filter(z => z.qty >= q).sort((u, v) => v.qty - u.qty)[0];
+      if (!src) return;
+      const cands = Object.keys(gaps).filter(k => k !== b && retGap(k) >= q && r3(sumGap(k)) >= q && !swaps.some(s => s.a === k));
+      const exact = cands.filter(k => retGap(k) === q);
+      const a = exact.length === 1 ? exact[0] : (!exact.length && cands.length === 1 ? cands[0] : null);
+      if (a && r3(sumGap(b)) < 0 && !swaps.some(s => s.b === b)) overProps.push({ a, b, q, returnId: rid, paperId: src.id, over: true });
+    });
+  });
+  overProps.forEach(s => { if (overProps.filter(o => o.a === s.a).length === 1 && overProps.filter(o => o.b === s.b).length === 1) swaps.push(s); });
+  // החלק של B בהחלפה: שורת הנייר שלא שייכת להחזרה — או (v141) העודף על שורת ההחזרה עצמה
+  const swapOwnB = s => (gaps[s.b] || []).find(x => x.gap < 0 && (s.over ? x.type === 'return' && x.id === s.returnId : x.type === 'paper' && x.id === s.paperId));
   declared.forEach(p => {
     if (p.declare !== 'accept-swap' || !p.pair) return;
-    const s = swaps.find(x => x.a === p.pair.a && x.b === p.pair.b && x.q === Number(p.pair.q));
+    // v141: ההסכמה שייכת להחזרה שעליה נאמרה (כשנשמרה עם ההחזרה)
+    const s = swaps.find(x => x.a === p.pair.a && x.b === p.pair.b && r3(x.q) === r3(p.pair.q) && !(p.standsFor && p.standsFor.returnId && p.standsFor.returnId !== x.returnId));
     if (!s) { states[p.id] = 'superseded'; return; }
     s.accepted = p.id;
     // ההסכמה מתקזזת מול החלקים של ההחלפה עצמה (ההחזרה, ושורת הנייר) — פער אחר של אותם מוצרים נשאר בשמו
     const ra = (gaps[s.a] || []).find(x => x.type === 'return' && x.id === s.returnId && x.gap > 0);
-    const pb = (gaps[s.b] || []).find(x => x.type === 'paper' && x.id === s.paperId && x.gap < 0);
+    const pb = swapOwnB(s);
     if (ra) { ra.gap -= s.q; ra.papers = (ra.papers || []).concat([p.id]); } else push(s.a, { type: 'declared', id: p.id, day: String(p.docDay || ''), gap: -s.q, papers: [p.id] });
     if (pb) { pb.gap += s.q; pb.papers = (pb.papers || []).concat([p.id]); } else push(s.b, { type: 'declared', id: p.id, day: String(p.docDay || ''), gap: s.q, papers: [p.id] });
+  });
+  // v141: החלפה באותו מחיר — אין הפרש כסף ואין מה לבקש: מתקזזת לבד ומוצגת "לידיעה" (כמו תיקון שזוהה לבד).
+  // המחיר כמו במרכזת: מחיר החשבונית (כולל מבצע) ביום ההחזרה וביום הנייר; מחיר חסר או שלא אומת — לא "אותו מחיר",
+  // וההחלפה נשארת לטיפול. לא כשיש ספק באותו יום (נייר שממתין לבחירה או שלא נקרא עד הסוף). רק ה-gap משתנה —
+  // המרכזת נשארת לפי הנייר (בחשבונית זוכה המוצר שבנייר)
+  swaps.forEach(s => {
+    const P0 = placed.find(x => x.id === s.paperId), R = byId.get('return:' + s.returnId);
+    s.price = ledgerSwapPrice(s.a, s.b, [R && R.day, P0 && String(P0.docDay || '')]);
+    if (s.accepted || s.price !== 'same' || pendingRets.has(s.returnId) || (P0 && unsureDays.has(String(P0.docDay || '')))) return;
+    const ra = (gaps[s.a] || []).find(x => x.type === 'return' && x.id === s.returnId && x.gap > 0), pb = swapOwnB(s);
+    if (!ra || !pb || r3(ra.gap) < r3(s.q) || r3(-pb.gap) < r3(s.q)) return;
+    ra.gap = r3(ra.gap - s.q); pb.gap = r3(pb.gap + s.q);
+    [ra, pb].forEach(x => { if ((x.papers || []).indexOf(s.paperId) === -1) x.papers = (x.papers || []).concat([s.paperId]); });
+    s.settled = true;
   });
   const items = [], productsOut = {};
   const docOf = (type, id) => byId.get(type + ':' + id);
@@ -13566,10 +13645,10 @@ function paperLedger(opts) {
     let left = Math.abs(net);
     const used = new Map();
     // החלפה: פריט אחד על הכמות שלה; שאר הפער של שני המוצרים נבדק כרגיל (חוסר אחר לא נבלע בה)
-    const swap = swaps.find(s => (s.a === k || s.b === k) && !s.accepted);
+    const swap = swaps.find(s => (s.a === k || s.b === k) && !s.accepted && !s.settled);
     if (swap) {
       if (swap.a === k) items.push({ id: 'swap|' + swap.returnId + '|' + swap.a + '|' + swap.b, key: k, kind: 'swap', state: 'problem', units: swap.q, swap });
-      const own = swap.a === k ? parts.find(x => x.type === 'return' && x.id === swap.returnId && x.gap > 0) : parts.find(x => x.type === 'paper' && x.id === swap.paperId && x.gap < 0);
+      const own = swap.a === k ? parts.find(x => x.type === 'return' && x.id === swap.returnId && x.gap > 0) : swapOwnB(swap);
       const u = Math.min(swap.q, left, own && own.gap * sign > 0 ? Math.abs(own.gap) : swap.q);
       if (own) used.set(own, u);
       left -= u;
@@ -13584,7 +13663,7 @@ function paperLedger(opts) {
   // אותה החזרה — פריט אחד: "חסרים בתעודת הזיכוי …" או "ממתינה לתעודת זיכוי", עם רשימת המוצרים
   const grouped = [], groupAt = {};
   items.forEach(it => {
-    const g = (it.kind === 'returnedNotCredited' || it.kind === 'returnNotCreditedYet') && it.part && it.part.type === 'return' ? it.kind + '|' + it.state + '|' + (it.askMore ? 'more' : '') + '|' + it.part.id : null;
+    const g = (it.kind === 'returnedNotCredited' || it.kind === 'returnNotCreditedYet') && it.part && it.part.type === 'return' ? it.kind + '|' + it.state + '||' + it.part.id : null;
     if (!g) { grouped.push(it); return; }
     if (groupAt[g] == null) { groupAt[g] = grouped.length; grouped.push({ ...it, id: g, keys: [{ key: it.key, units: it.units }] }); }
     else grouped[groupAt[g]].keys.push({ key: it.key, units: it.units });
@@ -13600,6 +13679,7 @@ function paperLedger(opts) {
   });
   orphans.forEach(p => out.push({ id: 'orphan|' + p.id, kind: 'orphan', state: 'info', paper: p }));
   autoDeclared.filter(d => states[d.id] === 'counted').forEach(d => out.push({ id: 'autocorr|' + d.id, kind: 'autoCorrection', state: 'info', key: d.rows[0].productId, units: d.rows[0].qty, decl: d }));
+  swaps.filter(s => s.settled).forEach(s => out.push({ id: 'autoswap|' + s.returnId + '|' + s.a + '|' + s.b, kind: 'autoSwap', state: 'info', key: s.a, units: s.q, swap: s }));
   const rank = { problem: 0, question: 1, pending: 2, info: 3 };
   out.sort((a, b) => rank[a.state] - rank[b.state]);
   // v127: gap — כמה יחידות התעודה רחוקה מאיזון (אחרי הניירות שלה); 0 — הניירות סגרו אותה בדיוק,
@@ -13618,7 +13698,10 @@ function paperLedger(opts) {
   out.forEach(it => {
     const open = it.state === 'problem' || it.state === 'question';
     if (!open && it.state !== 'pending') return;
-    const docIds = open ? [it.part && it.part.id, it.short && it.short.id, it.swap && it.swap.returnId, it.pair && it.pair.returnId] : [it.part && it.part.id];
+    // v141: זיכוי על מוצר שלא הוחזר, בנייר של החזרה — פתוח גם בהחזרה (אחרת הכרטיס שלה "זוכתה" והעודף רק בבאנר)
+    const loosePaper = open && it.kind === 'creditedNotReturned' && it.part && it.part.type === 'paper' ? placed.find(p => p.id === it.part.id) : null;
+    const looseRet = loosePaper && loosePaper.attach && loosePaper.attach.type === 'return' ? loosePaper.attach.id : null;
+    const docIds = open ? [it.part && it.part.id, it.short && it.short.id, it.swap && it.swap.returnId, it.pair && it.pair.returnId, looseRet] : [it.part && it.part.id];
     docIds.forEach(id => {
       const list = id && docViews[id] && (open ? docViews[id].open : docViews[id].pending);
       if (list && list.indexOf(it.id) === -1) list.push(it.id);
@@ -13630,7 +13713,8 @@ function paperLedger(opts) {
   });
   const count = out.filter(it => it.state === 'problem' || it.state === 'question').length;
   const docDays = {}; baseWide.forEach(d => { docDays[d.id] = d.day; });
-  return { start, asOf, items: out, products: productsOut, states, placed, docViews, paperViews, docDays, count, autoDeclared };
+  // v141: swaps — כל ההחלפות (פתוחה / accepted / settled), לכרטיס ההחזרה: שורה שזוכתה במוצר אחר אינה "חסר"
+  return { start, asOf, items: out, products: productsOut, states, placed, docViews, paperViews, docDays, count, autoDeclared, swaps };
 }
 // ===== v128: הניירות במרכזת החודשית =====
 // מה שהניירות מוסיפים למרכזת, לכל מוצר ויום: חיוב (נייר חיוב) וזיכוי (נייר זיכוי, "כן, זה תיקון").
@@ -13673,6 +13757,22 @@ function ledgerMatrixAdjust(lg, from, to, allPapers) {
   });
   return out;
 }
+// v141: האם להחלפה בזיכוי (ברמן זיכתה b במקום a) יש הפרש כסף — לפי מחיר החשבונית שברמן מזכה בו (כולל מבצע, כמו
+// במרכזת), בכל אחד מהימים (ההחזרה, והנייר). 'same' — זהה בכולם; 'diff' — שונה; 'unknown' — מוצר שאינו בקטלוג,
+// מחיר 0, מחיר שעוד לא אומת מול חשבונית, או שגיאה. רק 'same' נסגר לבד.
+function ledgerSwapPrice(a, b, days) {
+  try {
+    const pa = products.find(x => x.id === a), pb = products.find(x => x.id === b);
+    const ds = (days || []).filter(Boolean);
+    if (!pa || !pb || pa === pb || !ds.length) return 'unknown';
+    if (productInvoicePriceUnverified(pa) || productInvoicePriceUnverified(pb)) return 'unknown';
+    if ((Number(pa.deposit) || 0) !== (Number(pb.deposit) || 0)) return 'diff';
+    const unit = (p, d) => Math.round((Number(invoiceUnitAt(p, d).unit) || 0) * 1000);
+    let out = 'same';
+    ds.forEach(d => { const x = unit(pa, d), y = unit(pb, d); if (!(x > 0) || !(y > 0)) { if (out === 'same') out = 'unknown'; } else if (x !== y) out = 'diff'; });
+    return out;
+  } catch (e) { return 'unknown'; }
+}
 function ledgerClassify(k, x, units, sign, c) {
   const base = { id: k + '|' + x.type + '|' + x.id, key: k, units, part: x };
   if (sign > 0) {
@@ -13684,14 +13784,13 @@ function ledgerClassify(k, x, units, sign, c) {
     if (x.type === 'return') {
       if (x.paperMode) {
         const main = (c.mainOf[x.id] || [])[0];
-        const complete = (c.papers || []).some(p => p.kind === 'declared' && p.declare === 'complete' && p.returnId === x.id);
-        // v130: בלי שאלה — שורה שחסרה בניירות ממתינה (אולי בנייר שעוד לא צולם), ואחרי 3 משלוחים — לבקש מהנהג,
-        // גם כשהאישור הרשום כלל אותה (אחרת זיכוי חסר נשאר "ממתין" לעולם; נייר שמגיע אחר כך — סוגר)
-        const late = main && ledgerDeliveriesSince(c.recs, String(main.docDay), c.asOf) >= LEDGER_PENDING_DELIVERIES;
-        return { ...base, kind: 'returnedNotCredited', state: complete || late ? 'problem' : 'pending', askMore: !complete && !late, mainPaperId: main && main.id };
+        // v141: חוסר חלקי בתעודת הזיכוי — תמיד חוסר, מיד (לא "ממתין"): תעודת הזיכוי כבר ביד, וחסרה בה שורה.
+        // אם הנהג הביא עוד תעודת זיכוי — צילום שלה סוגר לבד (גם כשהאישור הרשום כלל את השורה)
+        return { ...base, kind: 'returnedNotCredited', state: 'problem', mainPaperId: main && main.id };
       }
       if (x.verifiedShort) return { ...base, kind: 'returnedNotCredited', state: 'problem' };
-      const late = ledgerDeliveriesSince(c.recs, x.day, c.asOf) >= LEDGER_PENDING_DELIVERIES;
+      // v141: החזרה שלא הגיעה עליה תעודת זיכוי — ממתינה עד 4 ביקורים של הנהג (לא ימים: בשבת ובחג הוא לא מגיע)
+      const late = ledgerDeliveriesSince(c.recs, x.day, c.asOf) >= LEDGER_RETURN_CREDIT_DELIVERIES;
       return { ...base, kind: 'returnNotCreditedYet', state: late ? 'problem' : 'pending' };
     }
     if (x.type === 'paper') {
@@ -13786,18 +13885,22 @@ function ledgerItemText(it, lg, papers) {
         detail: 'העודף מהקליטה של ' + ledgerDayShort(prev && prev.day) + ' כבר חויב ב' + paperLabel(prevPaper) + ', ובתעודה של ' + d + ' חויבו שוב: חויבו ' + mtxQty(x.billed) + ', נספרו ' + mtxQty(x.received) + '.' + LEDGER_PHOTO_HINT,
         actions: [] };
     }
-    case 'returnedNotCredited':
-      // v130: בלי שאלה — ממתין לנייר נוסף (אחרי 3 משלוחים בלי אישור רשום — "לבקש זיכוי")
-      if (it.askMore) return { text: 'בתעודות הזיכוי של ההחזרה מ-' + d + ' ' + (it.keys && it.keys.length > 1 ? 'חסרים: ' : 'חסר ') + list + ' — ממתין לתעודת זיכוי נוספת',
-        detail: 'אם יש עוד תעודת זיכוי — צלם אותה בכפתור "צלם נייר מהנהג" למעלה. אם אין — זה חסר באמת.', actions: [{ role: 'ledger-return-complete', label: 'אין עוד — חסר באמת', returnId: x.id }] };
-      return { text: 'החזרת ' + list + ' ב-' + d + ' ולא זוכית — לבקש זיכוי מהנהג', detail: LEDGER_PHOTO_HINT.trim(), actions: [] };
+    case 'returnedNotCredited': {
+      // v141: חוסר — מתחיל ב"חסר זיכוי", עם כמה הוחזר וכמה זוכה בכל מוצר (חוסר חלקי בתעודת הזיכוי — מיד, לא "ממתין")
+      const nums = (it.keys || [{ key: it.key }]).map(z => {
+        const r = ((lg.products[z.key] && lg.products[z.key].parts) || []).find(o => o.type === 'return' && o.id === x.id);
+        return r ? nm(z.key) + ': הוחזרו ' + mtxQty(r.sent) + ', זוכו ' + mtxQty(r.credit) : '';
+      }).filter(Boolean).join(' · ');
+      return { text: 'חסר זיכוי על ' + list + ' מההחזרה של ' + d + ' — לבקש זיכוי מהנהג',
+        detail: (nums ? nums + '.' : '') + (x.paperMode ? ' אם הנהג הביא עוד תעודת זיכוי — צלם אותה בכפתור "צלם נייר מהנהג" למעלה, וזה ייסגר לבד.' : LEDGER_PHOTO_HINT), actions: [] };
+    }
     case 'returnNotCreditedYet': {
       const many = it.keys && it.keys.length > 1;
       const units = (it.keys || [{ units: it.units }]).reduce((a, z) => a + (Number(z.units) || 0), 0);
       const what = many ? (it.keys.length + ' מוצרים, ' + mtxQty(units) + ' יח׳') : list;
       return it.state === 'pending'
         ? { text: 'ההחזרה מ-' + d + ' (' + what + ') — ממתינה לתעודת זיכוי', detail: (many ? list + '.' : '') + LEDGER_PHOTO_HINT, actions: [] }
-        : { text: 'ההחזרה מ-' + d + ' (' + what + ') עדיין לא זוכתה — צלם את תעודת הזיכוי או בקש מהנהג', detail: (many ? list + '.' : '') + LEDGER_PHOTO_HINT, actions: [] };
+        : { text: 'חסר זיכוי על ההחזרה מ-' + d + ' (' + what + ') — לא הגיעה תעודת זיכוי. לבקש זיכוי מהנהג', detail: (many ? list + '.' : '') + LEDGER_PHOTO_HINT, actions: [] };
     }
     case 'paperChargeNotReceived': return it.state !== 'problem'
       ? { text: paperLabel(P(x.id)) + ' מחייב ' + q(it.key, it.units) + ' שלא קיבלת — ממתין עד המשלוח הבא (אולי יש מאותו יום נייר זיכוי)', detail: LEDGER_PHOTO_HINT.trim(), actions: [open(x.id)] }
@@ -13810,13 +13913,24 @@ function ledgerItemText(it, lg, papers) {
     }
     case 'swap': {
       const R = (lg.products[it.swap.a].parts || []).find(o => o.type === 'return' && o.id === it.swap.returnId);
+      // v141: למה זה לא נסגר לבד — מחיר שונה, או מחיר שלא ידוע
+      const why = it.swap.price === 'diff' ? ' המחיר של שני המוצרים שונה, ולכן זה לא נסגר לבד.' : it.swap.price === 'unknown' ? ' אין מחיר מאומת לאחד המוצרים, ולכן זה לא נסגר לבד.' : '';
       return { text: 'ברמן זיכתה ' + q(it.swap.b, it.units) + ' במקום ' + nm(it.swap.a) + ' שהחזרת ב-' + ledgerDayShort(R && R.day),
-        detail: 'כשיגיע נייר תיקון זה ייסגר לבד.', actions: [{ role: 'ledger-accept-swap', label: 'מקבל את ההחלפה' }, open(it.swap.paperId)] };
+        detail: 'כשיגיע נייר תיקון זה ייסגר לבד.' + why + (it.swap.over ? ' אם הכמות בנייר נקראה לא נכון — פתח ותקן.' : ''),
+        actions: [{ role: 'ledger-accept-swap', label: 'מקבל את ההחלפה' }, open(it.swap.paperId)] };
+    }
+    // v141: החלפה באותו מחיר — התקזזה לבד
+    case 'autoSwap': {
+      const R = ((lg.products[it.swap.a] && lg.products[it.swap.a].parts) || []).find(o => o.type === 'return' && o.id === it.swap.returnId);
+      return { text: 'ברמן זיכתה ' + q(it.swap.b, it.units) + ' במקום ' + nm(it.swap.a) + ' שהחזרת ב-' + ledgerDayShort(R && R.day) + ' — אותו מחיר, התקזז. אין מה לבקש',
+        detail: 'בחשבונית של ברמן הזיכוי יופיע על ' + nm(it.swap.b) + ', כמו בנייר. אם הכמות בנייר נקראה לא נכון — פתח ותקן.', actions: [open(it.swap.paperId)] };
     }
     case 'creditedNotReturned': {
       // הנייר שזיכה — לפתוח ולבדוק את הכמות מול הנייר (אולי נקראה לא נכון)
       const src = x.type === 'paper' ? x.id : (x.papers || []).find(id => P(id));
-      return { text: 'ברמן זיכתה ' + q(it.key, it.units) + ' שלא החזרת — לבדוק',
+      // v141: עודף — מתחיל ב"עודף זיכוי"; על מוצר שהוחזר — גם כמה הוחזר וכמה זוכה
+      return { text: x.type === 'return' ? 'עודף זיכוי על ' + q(it.key, it.units) + ' בהחזרה מ-' + d + ' (החזרת ' + mtxQty(x.sent) + ', זוכו ' + mtxQty(x.credit) + ') — לבדוק שהנייר נקרא נכון'
+          : 'עודף זיכוי: ברמן זיכתה ' + q(it.key, it.units) + ' שלא החזרת — לבדוק שהנייר נקרא נכון',
         detail: x.type === 'paper' ? 'ב' + paperLabel(P(x.id)) + '.' : (x.type === 'return' ? 'בהחזרה מ-' + d + (src ? ', ב' + paperLabel(P(src)) : '') + '. אם הכמות בנייר נקראה לא נכון — פתח ותקן.' : ''),
         actions: src ? [open(src)] : [] };
     }
@@ -15592,7 +15706,7 @@ async function ledgerAnswer(role, itemId, returnId, paperId, receiptId) {
     const prod = products.find(p => p.id === it.key);
     await saveLedgerDeclaration('decl_corr_' + ledgerShortHash(it.part.id + '|' + it.key), { declare: 'correction', docDay: charge ? charge.docDay : todayStr(),
       rows: [{ line: 1, itemCode: prod ? productCode(prod) : '', productId: it.key, qty: it.units }], standsFor: { returnId: it.pair.returnId, chargePaperId: it.part.id } });
-  } else if (role === 'ledger-accept-swap' && it && it.swap) {
+  } else if (role === 'ledger-accept-swap' && it && it.kind === 'swap' && it.swap) {
     await saveLedgerDeclaration('decl_swap_' + ledgerShortHash(it.swap.returnId + '|' + it.swap.a + '|' + it.swap.b), { declare: 'accept-swap', pair: { a: it.swap.a, b: it.swap.b, q: it.swap.q }, standsFor: { returnId: it.swap.returnId } });
   } else if (role === 'ledger-return-complete' && returnId) {
     await saveLedgerDeclaration('decl_done_' + ledgerShortHash(returnId), { declare: 'complete', returnId });
@@ -15640,6 +15754,67 @@ function ledgerDocStatus(id) {
     papers: v.papers.map(pid => all.find(p => p.id === pid)).filter(p => p && p.kind !== 'declared'),
     closed: !open0.length && !pending0.length && !(v.gap > 0) };
 }
+// v141: מה זוכה בכל מוצר של תעודת חזרות שהמאזן מחזיק (נייר נגע בה) — מאותו מאזן מלא של הכרטיס. לכל מוצר:
+// כמה זוכה, כמה חסר או עודף לטיפול (מהפריטים הפתוחים — אחרי קיזוז, החלפה שהתקבלה וחודש שנסגר), ומה הוחלף
+// (ברמן זיכתה מוצר אחר במקומו: פתוח, נסגר לבד באותו מחיר, או שקיבלת). extras — מוצרים שזוכו בניירות של
+// ההחזרה ולא הוחזרו בה. null — לא נייר נגע בתעודה: הכרטיס כמו קודם. תצוגה בלבד.
+function returnCreditView(r, ls) {
+  if (!r || !ls || !ls.byPapers || !ls.lg) return null;
+  const lg = ls.lg, lines = {}, extras = {};
+  const nameOf = k => (lg.products[k] && lg.products[k].name) || String(k || '').replace(/^code_/, '');
+  const inRet = {};
+  (Array.isArray(r.items) ? r.items : []).forEach(l => { if (l && !(l.isDeposit || String(l.productId || '').indexOf('deposit-') === 0)) inRet[ledgerLineKey(l).key] = true; });
+  const at = k => (inRet[k] ? lines : extras)[k] || ((inRet[k] ? lines : extras)[k] = { key: k, name: nameOf(k), credit: null, short: 0, over: 0, state: '', swaps: [] });
+  Object.keys(inRet).forEach(k => {
+    const p = ((lg.products[k] && lg.products[k].parts) || []).find(x => x.type === 'return' && x.id === r.id);
+    at(k).credit = p ? Number(p.credit) || 0 : 0;
+  });
+  const worst = (a, b) => (a === 'problem' || b === 'problem') ? 'problem' : (a || b);
+  ls.open.concat(ls.pending).forEach(it => {
+    if (it.kind === 'swap' && it.swap && it.swap.returnId === r.id) return;
+    if (!it.part) return;
+    const mine = it.part.id === r.id || (it.part.type === 'paper' && (lg.placed || []).some(p => p.id === it.part.id && p.attach && p.attach.type === 'return' && p.attach.id === r.id));
+    if (!mine) return;
+    (it.keys || [{ key: it.key, units: it.units }]).forEach(z => {
+      const v = at(z.key), u = Number(z.units) || 0;
+      if (it.kind === 'returnedNotCredited' || it.kind === 'returnNotCreditedYet') { v.short += u; v.state = worst(v.state, it.state); }
+      else if (it.kind === 'creditedNotReturned') { v.over += u; v.state = worst(v.state, it.state); if (it.part.type === 'paper' && v.credit == null) v.credit = u; }
+    });
+  });
+  // החלפות של ההחזרה: הפתוחה — חסר/עודף לטיפול; שנסגרה לבד או שקיבלת — "במקומו זוכה …" (לא חסר)
+  const open = new Set(ls.open.filter(it => it.kind === 'swap' && it.swap).map(it => it.swap.returnId + '|' + it.swap.a + '|' + it.swap.b));
+  const closedMonth = !!ls.closedMonth;
+  (lg.swaps || []).filter(s => s.returnId === r.id).forEach(s => {
+    const isOpen = open.has(s.returnId + '|' + s.a + '|' + s.b);
+    const how = isOpen ? 'open' : s.settled ? 'same' : s.accepted ? 'accepted' : closedMonth ? 'month' : '';
+    if (!how) return;
+    const a = at(s.a), b = at(s.b), q = Number(s.q) || 0;
+    a.swaps.push({ role: 'a', other: nameOf(s.b), q, how }); b.swaps.push({ role: 'b', other: nameOf(s.a), q, how });
+    if (b.credit == null) b.credit = q;
+    if (isOpen) { a.short += q; b.over += q; a.state = worst(a.state, 'problem'); b.state = worst(b.state, 'problem'); }
+  });
+  const all = Object.values(lines).concat(Object.values(extras));
+  const sum = f => all.reduce((x, v) => x + (Number(v[f]) || 0), 0);
+  return { lines, extras, short: sum('short'), over: sum('over'), problem: all.some(v => v.state === 'problem') };
+}
+// שורת "זוכה …" מתחת לכמות בכרטיס ההחזרה (v141). sent — כמה הוחזר בשורה
+function returnCreditLineHtml(v, sent) {
+  if (!v) return '';
+  const tone = v.state === 'problem' ? 'text-rose-600' : v.state ? 'text-amber-700' : 'text-slate-500';
+  const parts = [];
+  const cr = v.credit == null ? null : mtxQty(v.credit);
+  if (v.short && v.state === 'pending' && !v.credit) parts.push('טרם זוכה');
+  else if (cr != null && (v.short || v.over || v.swaps.length || Number(v.credit) !== Number(sent))) parts.push('זוכה ' + cr);
+  if (v.short && !(v.state === 'pending' && !v.credit)) parts.push('חסר ' + mtxQty(v.short));
+  if (v.over) parts.push('עודף ' + mtxQty(v.over));
+  v.swaps.forEach(s => {
+    const why = s.how === 'same' ? ' (אותו מחיר — התקזז)' : s.how === 'accepted' ? ' (קיבלת את ההחלפה)' : '';
+    parts.push(s.role === 'a' ? 'במקומו זוכה ' + s.other + ' ×' + mtxQty(s.q) + why
+      : (v.credit != null && Number(v.credit) === Number(s.q) ? '' : mtxQty(s.q) + ' מהן ') + 'במקום ' + s.other + why);
+  });
+  if (!parts.length) return '';
+  return '<div class="text-[11px] font-black ' + tone + ' mt-0.5 leading-snug">' + htmlEscape(parts.join(' · ')) + '</div>';
+}
 // קליטה שממתינה לנייר, או שהשורות שלה לא נסגרות מול הסכום שבתחתית — את זה המאזן לא רואה: כמו קודם
 function receiptLedgerStatus(rc, di) {
   di = di || receiptDiscrepancyInfo(rc);
@@ -15662,9 +15837,11 @@ function returnStateNow(r) {
   return returnsDiscrepancyInfo(r).open ? 'open' : 'done';
 }
 // היחידות הפתוחות של תעודה לפי המאזן — לבאנרים: חסר (חויב או הוחזר, ולא התקבל או זוכה) ועודף
-function ledgerDocOpenUnits(ls, id) {
+// v141: openOnly — רק מה שלטיפול (בלי מה שממתין); החלפה פתוחה בהחזרה — חסר במוצר שהוחזר, ועודף במוצר שזוכה במקומו
+function ledgerDocOpenUnits(ls, id, openOnly) {
   let short = 0, over = 0;
-  ls.open.concat(ls.pending).forEach(it => {
+  (openOnly ? ls.open : ls.open.concat(ls.pending)).forEach(it => {
+    if (it.kind === 'swap' && it.swap && it.swap.returnId === id) { short += Number(it.units) || 0; over += Number(it.units) || 0; return; }
     if (!it.part || it.part.id !== id) return;
     const u = it.keys ? it.keys.reduce((a, z) => a + (Number(z.units) || 0), 0) : (Number(it.units) || 0);
     if (['chargedNotReceived', 'chargedTwice', 'returnedNotCredited', 'returnNotCreditedYet'].indexOf(it.kind) !== -1) short += u;
@@ -15933,12 +16110,25 @@ function paperUiInput(t) {
   return false;
 }
 
+// v141: הפער של השורה אחרי החלפות שנסגרו — מה שזוכה על מוצר אחר במקום המוצר הזה (או להפך) אינו "חסר"/"מעבר"
+function mtxOpenAfterSwaps(row) {
+  let open = Number(row && row.openUnits) || 0;
+  ((row && row.swaps) || []).forEach(s => { open = s.role === 'a' ? open - Math.min(s.q, Math.max(0, open)) : open + Math.min(s.q, Math.max(0, -open)); });
+  return Math.round(open * 1000) / 1000;
+}
+function mtxSwapFlags(row) {
+  const nm = id => { const p = products.find(x => x.id === id); return p ? p.name : String(id || '').replace(/^code_/, ''); };
+  return ((row && row.swaps) || []).map(s => ' <span class="text-[10px] font-black text-slate-500">' + htmlEscape(s.role === 'a'
+    ? 'הוחלף: במקום ' + mtxQty(s.q) + ' יח׳ זוכה ' + nm(s.other) + (s.same ? ' (אותו מחיר)' : '')
+    : mtxQty(s.q) + ' יח׳ זוכו במקום ' + nm(s.other) + (s.same ? ' (אותו מחיר)' : '')) + '</span>').join('');
+}
 // סימוני השורה שמסבירים מראש פער צפוי מול הנייר
 function mtxRowFlags(row) {
   return (row.promo ? ' <i class="fa-solid fa-tag text-rose-500" title="מוצר במבצע מרכזת — המחיר בשורה הוא מחיר המבצע, כמו בחשבונית"></i>' : '') +
     (row.prices.length > 1 ? ' <i class="fa-solid fa-arrow-right-arrow-left text-amber-600" title="המחיר השתנה בתוך התקופה (מחיר חדש או מבצע שהתחיל באמצע) — בחשבונית מופיע מחיר אחד לשורה"></i>' : '') +
-    (row.openUnits > 0 ? ' <span class="text-[10px] font-black text-rose-600">חסר ' + mtxQty(row.openUnits) + ' יח׳ שטרם זוכה</span>' : '') +
-    (row.openUnits < 0 ? ' <span class="text-[10px] font-black text-amber-600">+' + mtxQty(-row.openUnits) + ' יח׳ מעבר לחיוב</span>' : '') +
+    mtxSwapFlags(row) +
+    (mtxOpenAfterSwaps(row) > 0 ? ' <span class="text-[10px] font-black text-rose-600">חסר ' + mtxQty(mtxOpenAfterSwaps(row)) + ' יח׳ שטרם זוכה</span>' : '') +
+    (mtxOpenAfterSwaps(row) < 0 ? ' <span class="text-[10px] font-black text-amber-600">+' + mtxQty(-mtxOpenAfterSwaps(row)) + ' יח׳ מעבר לחיוב</span>' : '') +
     // v124: מוצר בלי מחיר (ידני שאינו במאגר, או מוצר בקטלוג בלי מחיר) — הכמות נספרת, אבל לא הכסף
     (row.unpriced ? ' <span class="text-[10px] font-black text-amber-600" title="אין מחיר למוצר (מוצר ידני שאינו במאגר, או מוצר בלי מחיר בכרטיס) — הכמות נספרת אבל לא הכסף; קבע מחיר בכרטיס המוצר או השווה מול החשבונית ידנית">ללא מחיר</span>' : '');
 }
@@ -17671,7 +17861,10 @@ function rangePaperAdjust(from, to, recs, rets) {
       seen.add(id);
     }));
     Object.keys(days).forEach(k => days[k].sort((a, b) => Number(a) - Number(b) || String(a).localeCompare(String(b))));
-    return { adjust, days, count: seen.size, failed: false };
+    // v141: החלפות שנסגרו (אותו מחיר, או שקיבלת) בהחזרות שבטווח — לסימון בשורות המוצר (תצוגה בלבד; המרכזת לפי הנייר)
+    const swaps = (lg.swaps || []).filter(s => (s.settled || s.accepted) && (lg.docDays || {})[s.returnId] >= from && (lg.docDays || {})[s.returnId] <= to)
+      .map(s => ({ a: s.a, b: s.b, q: Number(s.q) || 0, same: !!s.settled }));
+    return { adjust, days, count: seen.size, failed: false, swaps };
   } catch (e) { console.error('range papers failed', e); return { ...empty, failed: true }; }
 }
 function receiptRangeData(from, to) {
@@ -17685,6 +17878,13 @@ function receiptRangeData(from, to) {
   // v128: הניירות מהנהג — מאזן על כל מה שבזיכרון ובטווח, בלי "חודש סגור" (חודש שנסגר נשאר כפי שהושווה לחשבונית)
   const pp = rangePaperAdjust(from, to, recs, rets);
   const matrix = rangeProductMatrixData({ recs, rets, adjust: pp.adjust });
+  // v141: מוצר שזוכה במקום מוצר אחר (החלפה שנסגרה) — בשורה שלו "הוחלף", לא "חסר שטרם זוכה" / "מעבר לחיוב"
+  let swapShort = 0, swapOver = 0;
+  (pp.swaps || []).forEach(s => {
+    const ra = matrix.list.find(x => x.key === s.a), rb = matrix.list.find(x => x.key === s.b);
+    if (ra) { (ra.swaps = ra.swaps || []).push({ role: 'a', other: s.b, q: s.q, same: s.same }); swapShort += Math.min(s.q, Math.max(0, ra.openUnits)); }
+    if (rb) { (rb.swaps = rb.swaps || []).push({ role: 'b', other: s.a, q: s.q, same: s.same }); swapOver += Math.min(s.q, Math.max(0, -rb.openUnits)); }
+  });
   const netEx = matrix.total, netInc = matrix.totalInc;
   const fairEx = matrix.fairTotal;
   const openClaimsEx = r2(netEx - fairEx);
@@ -17693,7 +17893,7 @@ function receiptRangeData(from, to) {
   const vatRates = [...new Set(recs.concat(rets).map(r => r2(vatRateForDoc(r) * 100)))].sort((a, b) => a - b);
   return { from, to, fromT, toT, recs, rets, matrix, paperDays: pp.days, paperCount: pp.count, paperFailed: pp.failed,
     netEx, netInc, vatAmount: r2(netInc - netEx), fairEx, openClaimsEx,
-    openClaimUnits: matrix.openUnits, overUnits: matrix.overUnits,
+    openClaimUnits: matrix.openUnits, overUnits: matrix.overUnits, swapShort, swapOver,
     billedEx: matrix.billedEx, creditedEx: matrix.creditedEx, promoEx: matrix.promoEx, openCnt, vatRates };
 }
 
@@ -17711,7 +17911,8 @@ function supplierPaymentModeCardsHtml(d) {
       '<div class="font-black text-3xl mt-2">₪' + fmtMoney(d.netEx) + '</div>' +
       '<div class="text-xs font-bold">לפני מע״מ · כולל מע״מ: ₪' + fmtMoney(d.netInc) + '</div>' +
       (claims ? '<div class="mt-3 bg-white/80 border border-rose-200 rounded-xl p-2 text-xs font-black text-rose-800"><i class="fa-solid fa-triangle-exclamation"></i> מתוך זה ₪' + fmtMoney(d.openClaimsEx) + ' על ' + mtxQty(d.openClaimUnits) + ' יח׳ שחסרו ועדיין לא זוכו. אם הן בחשבונית — זו דרישת זיכוי. מה שבאמת מגיע: ₪' + fmtMoney(d.fairEx) + '</div>' : '') +
-      (d.overUnits > 0 ? '<div class="mt-2 text-[11px] font-bold text-amber-800">' + mtxQty(d.overUnits) + ' יח׳ התקבלו מעבר למה שחויב — לא נדרש לשלם עליהן עד שתגיע חשבונית</div>' : '') +
+      // v141: בלי היחידות שזוכו במקום מוצר אחר (החלפה שנסגרה) — הן לא "התקבלו מעבר למה שחויב"
+      (d.overUnits - (d.swapOver || 0) > 0 ? '<div class="mt-2 text-[11px] font-bold text-amber-800">' + mtxQty(d.overUnits - (d.swapOver || 0)) + ' יח׳ התקבלו מעבר למה שחויב — לא נדרש לשלם עליהן עד שתגיע חשבונית</div>' : '') +
     '</div>';
 }
 

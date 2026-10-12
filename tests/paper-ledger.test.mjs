@@ -17,8 +17,8 @@ const FNS = ['r2', 'todayStr', 'storedReceiptDate', 'productCode', 'productListP
   'monthEndUnitRebate', 'mtxQty', 'mtxPromoUnit', 'vatRateForDoc', 'priceAt', 'invoiceUnitAt', 'receiptCreditedShortUnits', 'lineOwnCode', 'rangeProductMatrixData',
   'receiptPaperNumber', 'storedReceiptPaperNumbers', 'priceAuditDate', 'ledgerAddDays', 'ledgerReturnDay', 'ledgerLineKey', 'ledgerDocBase', 'paperRowKey',
   'paperUnits', 'paperFingerprint', 'receiptScanFingerprints', 'paperNumbers', 'paperNumerator', 'paperSameSheet', 'ledgerOffsetIdMatches', 'ledgerPaperStates', 'ledgerDeliveriesSince', 'paperAttach',
-  'paperLedger', 'ledgerClassify', 'ledgerCorrectionCandidates', 'ledgerDayShort', 'ledgerRowsText', 'paperLabel', 'ledgerItemText', 'ledgerMatrixAdjust'];
-const CONSTS = ["const LEDGER_PHOTO_HINT = ' כשיש נייר — צלם אותו בכפתור \"צלם נייר מהנהג\" למעלה.';", "const LEDGER_FROM_DEFAULT = '2026-09-01';", 'const LEDGER_RETURN_WINDOW_DAYS = 14;', 'const LEDGER_PENDING_DELIVERIES = 3;', "const LEDGER_PAPER_KINDS = ['delivery', 'charge', 'credit', 'declared'];"];
+  'productInvoicePriceUnverified', 'ledgerSwapPrice', 'paperLedger', 'ledgerClassify', 'ledgerCorrectionCandidates', 'ledgerDayShort', 'ledgerRowsText', 'paperLabel', 'ledgerItemText', 'ledgerMatrixAdjust'];
+const CONSTS = ["const LEDGER_PHOTO_HINT = ' כשיש נייר — צלם אותו בכפתור \"צלם נייר מהנהג\" למעלה.';", "const LEDGER_FROM_DEFAULT = '2026-09-01';", 'const LEDGER_RETURN_WINDOW_DAYS = 14;', 'const LEDGER_PENDING_DELIVERIES = 3;', 'const LEDGER_RETURN_CREDIT_DELIVERIES = 4;', "const LEDGER_PAPER_KINDS = ['delivery', 'charge', 'credit', 'declared'];"];
 // eslint-disable-next-line no-eval
 const api = eval('let VAT = 0.18; let products = F.products; let promos = [];\n' + extractSource(FNS, CONSTS) + '\n({ ' + FNS.join(', ') + ' })');
 const { paperLedger, ledgerItemText, rangeProductMatrixData, storedReceiptDate, ledgerReturnDay } = api;
@@ -50,7 +50,9 @@ test('היום (בלי הניירות החדשים): 233, 238, 344 לטיפול;
   assert.deepEqual(lg.items[1].keys, [{ key: 'code_344', units: 2 }, { key: 'code_238', units: 1 }], 'החזרה אחת — פריט אחד עם שני המוצרים');
   assert.equal(lg.count, 2);
   assert.equal(text(lg, [], 0), "חוסר בקליטה של 4.10: זוג לחמניות אצבע בש' ×1 — חויבת ולא קיבלת. לבקש זיכוי מהנהג");
-  assert.match(text(lg, [], 1), /^החזרת .*×2, .*×1 ב-4\.10 ולא זוכית — לבקש זיכוי מהנהג$/);
+  // v141: חוסר מתחיל ב"חסר זיכוי", והפירוט אומר כמה הוחזר וכמה זוכה בכל מוצר
+  assert.match(text(lg, [], 1), /^חסר זיכוי על .*×2, .*×1 מההחזרה של 4\.10 — לבקש זיכוי מהנהג$/);
+  assert.match(ledgerItemText(lg.items[1], lg, []).detail, /: הוחזרו \d+, זוכו \d+ · .*: הוחזרו \d+, זוכו \d+\./);
   const net = lg.items.find(i => i.key === 'code_1231');
   assert.equal(net.kind, 'netted'); assert.equal(net.state, 'info'); assert.ok(net.offsetId, 'הקיזוז שבוטל — רק לידיעה');
   assert.equal(ledgerItemText(net, lg, []).text, 'לחמניות 10 בשקית: עודף ב-4.10 וחוסר ב-5.10 התקזזו');
@@ -90,20 +92,23 @@ test('כל הניירות (כולל הזיכוי הראשון ונייר הצד)
   assert.equal(lg.placed.find(p => p.id === P.pSide.id).attach.id, R1004, 'נייר הצד הולך להחזרה שבה 119 ו-339 עוד פתוחים');
 });
 
-test('בלי נייר הצד: 119 ו-339 "ממתין לתעודת זיכוי נוספת" — בלי שאלה; "זה הכל" הופך אותם ללטיפול', () => {
+// v141: חוסר חלקי בתעודת הזיכוי — תמיד חוסר, מיד (לא "ממתין לתעודת זיכוי נוספת"); נייר הצד שמגיע אחר כך סוגר
+test('בלי נייר הצד: 119 ו-339 חסרים בתעודת הזיכוי — חוסר מיד, בלי שאלה ובלי "אין עוד"; נייר הצד סוגר', () => {
   const papers = [P.p141, P.p142, P.p123], lg = ledger(papers);
-  assert.deepEqual(brief(lg), [['chargedTwice', 'code_1231', 2, 'problem']]);
+  assert.deepEqual(brief(lg), [['returnedNotCredited', 'code_339', 3, 'problem'], ['chargedTwice', 'code_1231', 2, 'problem']]);
   const more = lg.items.find(i => i.kind === 'returnedNotCredited');
-  assert.equal(more.state, 'pending'); assert.ok(more.askMore);
+  assert.ok(!more.askMore);
   assert.deepEqual(more.keys, [{ key: 'code_339', units: 3 }, { key: 'code_119', units: 1 }], 'פריט אחד להחזרה, עם שני המוצרים');
-  assert.equal(ledgerItemText(more, lg, papers).text, 'בתעודות הזיכוי של ההחזרה מ-4.10 חסרים: ברמן אקטיב ×3, לחם מלא בטוב ×1 — ממתין לתעודת זיכוי נוספת');
+  const t = ledgerItemText(more, lg, papers);
+  assert.equal(t.text, 'חסר זיכוי על ברמן אקטיב ×3, לחם מלא בטוב ×1 מההחזרה של 4.10 — לבקש זיכוי מהנהג');
+  assert.match(t.detail, /^ברמן אקטיב: הוחזרו \d+, זוכו \d+ · לחם מלא בטוב: הוחזרו 1, זוכו 0\. אם הנהג הביא עוד תעודת זיכוי — צלם אותה/);
+  assert.deepEqual(t.actions, [], 'בלי "אין עוד — חסר באמת": זה כבר חוסר');
   const done = declared({ id: 'decl_done', declare: 'complete', returnId: R1004 });
-  const lgDone = ledger([...papers, done]);
-  assert.deepEqual(brief(lgDone).map(x => x[3]), ['problem', 'problem'], '"זה הכל" — חסר אמיתי');
-  assert.deepEqual(lgDone.items.find(i => i.kind === 'returnedNotCredited').keys.map(z => z.key), ['code_339', 'code_119'], 'פריט אחד להחזרה, גם אחרי "זה הכל"');
+  assert.deepEqual(brief(ledger([...papers, done])), brief(lg), 'תשובת "זה הכל" מגרסה קודמת — לא משנה דבר');
   const late = ledger(papers, { asOf: '2026-10-31' });
   assert.equal(late.items.filter(i => i.state === 'question').length, 0);
-  assert.equal(late.items.find(i => i.kind === 'returnedNotCredited').state, 'pending', 'שורות שאושרו ברישום וחסרות בניירות — ממתין (במסך המאזן), לא נעלמות');
+  assert.equal(late.items.find(i => i.kind === 'returnedNotCredited').state, 'problem', 'שורות שאושרו ברישום וחסרות בניירות — חוסר, לא נעלמות');
+  assert.deepEqual(brief(ledger([...papers, P.pSide])), [['chargedTwice', 'code_1231', 2, 'problem']], 'נייר הצד צולם — החוסר נסגר לבד');
 });
 
 test('רק הזיכוי הראשון צולם: "ברמן זיכתה לחם אחיד במקום אחיד פרוס" עם "מקבל"; התיקון שמגיע אחר כך סוגר', () => {
@@ -128,7 +133,7 @@ test('B1: נייר הזיכוי של ההחזרה מ-1.10, שצולם כשכבר
   assert.deepEqual(brief(lg), brief(ledger([])));
   const short = paper({ ...p, id: 'paper_t2', rows: p.rows.filter(r => r.itemCode !== '401') });
   const lg2 = ledger([short]);
-  assert.ok(lg2.items.some(i => i.kind === 'returnedNotCredited' && i.key === 'code_401' && i.state === 'pending' && i.askMore), 'נייר ראשי בלי 401 — ממתין לנייר נוסף (בלי שאלה)');
+  assert.ok(lg2.items.some(i => i.kind === 'returnedNotCredited' && i.key === 'code_401' && i.state === 'problem'), 'v141: נייר ראשי בלי 401 — חוסר מיד (בלי שאלה)');
 });
 
 test('נייר משלים על שורה שכבר אושרה אינו מזכה פעמיים ואינו יוצר "לבקש זיכוי"', () => {
@@ -206,8 +211,8 @@ test('M1: חלק מזיכוי של ההחזרה מ-1.10 שהודפס ב-4.10 —
   const lg = ledger([a]);
   assert.equal(lg.placed[0].attach.id, R1001);
   assert.ok(!lg.items.some(i => i.kind === 'creditedNotReturned'));
-  // רק חלק א' צולם: השאלה היחידה החדשה היא על החלק השני של אותה החזרה (333, 401)
-  const extra = lg.items.filter(i => i.kind === 'returnedNotCredited' && i.askMore);
+  // רק חלק א' צולם: הדבר היחיד החדש הוא החלק השני של אותה החזרה (333, 401) — v141: חוסר, עד שהחלק השני מצולם
+  const extra = lg.items.filter(i => i.kind === 'returnedNotCredited' && i.state === 'problem' && i.part.id === R1001);
   assert.equal(extra.length, 1); assert.equal(extra[0].part.id, R1001);
   assert.deepEqual(extra[0].keys.map(k => k.key).sort(), ['code_333', 'code_401']);
   const b = paper({ id: 'paper_t_m1b', kind: 'credit', number: '290095131', docDay: '2026-10-04', rows: [row(1, '333', 2), row(2, '401', 1)] });
@@ -261,7 +266,7 @@ test('M6: "מקבל את ההחלפה" לא מתבטל בגלל החזרה חד�
 });
 
 // v130 (סקירה): בלי שאלות לא מניחים תיקון כשהנייר שצולם נראה כמו הנייר הראשי של ההחזרה — חוסר אמיתי לא נבלע.
-// הצד הבטוח: לחם אחיד ×13 "לבקש זיכוי", ו-450 שחסר בנייר — ממתין; צילום תעודת הזיכוי הראשונה סוגר.
+// הצד הבטוח: לחם אחיד ×13 "לבקש זיכוי", ו-450 שחסר בנייר — חוסר (v141: מיד); צילום תעודת הזיכוי הראשונה סוגר.
 test('M7: בהחזרה קטנה (4 שורות) נייר הזיכוי שליד נייר החיוב הוא הראשי — אין תיקון אוטומטי, החיוב "לבקש זיכוי"', () => {
   const small = { id: R1004, date: '2026-10-04', docDate: '2026-10-04', timestamp: 7, credited: true, creditStatus: 'open',
     items: [{ productId: 'code_101', code: '101', name: 'אחיד פרוס ברמן', qty: 13 }, { productId: 'code_344', code: '344', name: 'לחם מקמח כוסמין E-FREE', qty: 2, noteQty: 0 },
@@ -269,9 +274,9 @@ test('M7: בהחזרה קטנה (4 שורות) נייר הזיכוי שליד נ
   const rets = F.returns.filter(r => r.id !== R1004).concat([small]);
   const lg = paperLedger({ recs: F.receipts, rets, papers: [P.p142, P.p141], from: '2026-09-01', asOf: '2026-10-05' });
   assert.equal(lg.placed.find(p => p.id === P.p142.id).attach.role, 'main', '3 מתוך 4 שורות — ראשי, גם ליד נייר חיוב');
-  assert.deepEqual(brief(lg), [['chargedTwice', 'code_1231', 2, 'problem'], ['paperChargeNotReceived', 'code_100', 13, 'problem']]);
+  assert.deepEqual(brief(lg), [['chargedTwice', 'code_1231', 2, 'problem'], ['returnedNotCredited', 'code_450', 7, 'problem'], ['paperChargeNotReceived', 'code_100', 13, 'problem']]);
   assert.deepEqual(lg.autoDeclared, []);
-  assert.ok(lg.items.some(i => i.kind === 'returnedNotCredited' && i.state === 'pending' && (i.keys || []).some(k => k.key === 'code_450')), '450 חסר בנייר הראשי — ממתין');
+  assert.ok(lg.items.some(i => i.kind === 'returnedNotCredited' && i.state === 'problem' && (i.keys || []).some(k => k.key === 'code_450')), 'v141: 450 חסר בנייר הראשי — חוסר מיד');
 });
 
 test('M8: נייר של החזרה מחודש שנסגר — יוצא מהמאזן, לא נספר כזיכוי בלי שיוך', () => {
@@ -557,7 +562,7 @@ test('סקירה 3: נייר קטן מיום שיש בו קליטה בלי ני�
   assert.equal(lg.states[big.id], 'in-receipt', 'תעודה גדולה — כמו קודם: הקליטה בלי נייר מאותו יום היא כנראה היא');
 });
 
-test('סקירה 4+5: נייר ראשי שחסרה בו שורה (שאושרה ברישום) — ממתין, ואחרי 3 משלוחים "לבקש זיכוי"; נייר קטן סמוך לא מסתיר', () => {
+test('סקירה 4+5: נייר ראשי שחסרה בו שורה (שאושרה ברישום) — v141: חוסר מיד; נייר קטן סמוך לא מסתיר', () => {
   const cred = paper({ id: 'paper_290094990', kind: 'credit', number: '290094990', terminalNumber: '290094990', docDay: '2026-10-02', rows: R1001_LINES.filter(r => r.itemCode !== '401') });
   const sm = paper({ id: 'paper_290094991', kind: 'delivery', small: true, number: '290094991', terminalNumber: '290094991', docDay: '2026-10-02', rows: [row(1, '101', 7)] });
   const rc = smallRc('rc_small_r4', '2026-10-02', '290094991', [{ productId: 'code_101', code: '101', name: 'x', qty: 0, noteQty: 7 }]);
@@ -565,12 +570,9 @@ test('סקירה 4+5: נייר ראשי שחסרה בו שורה (שאושרה �
   const lg = run(F.receipts.concat([rc]), '2026-10-05');
   assert.equal(lg.placed.find(p => p.id === cred.id).attach.role, 'main');
   const it = lg.items.find(i => i.kind === 'returnedNotCredited' && (i.keys || []).some(k => k.key === 'code_401'));
-  assert.equal(it.state, 'pending');
-  const later = ['2026-10-06', '2026-10-07', '2026-10-08'].map((d, i) => ({ id: 'rc_later_' + i, date: d, docDate: d, timestamp: 30 + i, items: [{ productId: 'code_101', code: '101', name: 'x', qty: 1, noteQty: 1 }] }));
-  const lg2 = run(F.receipts.concat([rc], later), '2026-10-08');
-  const it2 = lg2.items.find(i => i.kind === 'returnedNotCredited' && (i.keys || []).some(k => k.key === 'code_401'));
-  assert.equal(it2.state, 'problem', 'אחרי 3 משלוחים — לבקש זיכוי, גם כשהאישור הרשום כלל את 401');
-  assert.match(ledgerItemText(it2, lg2, [sm, cred]).text, /ולא זוכית — לבקש זיכוי מהנהג$/);
+  // v141: חוסר חלקי בתעודת הזיכוי — חוסר מיד, גם כשהאישור הרשום כלל את 401 (לא מחכים 3 משלוחים)
+  assert.equal(it.state, 'problem');
+  assert.match(ledgerItemText(it, lg, [sm, cred]).text, /^חסר זיכוי על .* — לבקש זיכוי מהנהג$/);
 });
 
 // סבב 2: התפקיד לפי הכיסוי גם בבחירה לבד — בחירה לא נכונה נותנת לכל היותר התראת שווא (220), ולא מעלימה כלום

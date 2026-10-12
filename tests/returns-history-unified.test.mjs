@@ -264,10 +264,11 @@ test('every "returns history" entry point lands on the unified screen', async ()
   assert.match(html(rt), /היסטוריית תעודות/);
   assert.ok(html(rt).includes(roleFor('rv-open', 'ret_ok')));
 
-  // הבאנר האדום "לאימות ←" כשיש תעודה ממתינה — אותו תפקיד, אותו יעד
+  // הבאנר "לאימות ←" כשיש תעודה ממתינה — אותו תפקיד, אותו יעד. v141: ממתינה (בלי פער) — בכתום, לא באדום
   const red = open([pendingReturn()]);
   red.run("setView('returns')");
-  assert.match(html(red), /<button data-role="ret-history"[^>]*bg-rose-600[^>]*>.*יש תעודת חזרות פתוחה לאימות.*לאימות ←/);
+  assert.match(html(red), /<button data-role="ret-history"[^>]*bg-amber-400[^>]*>.*יש תעודת חזרות פתוחה לאימות.*לאימות ←/);
+  assert.doesNotMatch(html(red), /<button data-role="ret-history"[^>]*bg-rose-600/);
   await red.click('ret-history');
   assert.equal(red.run('currentView'), 'receiptsHistory');
   assert.ok(html(red).includes(roleFor('rv-verify-inline', 'ret_pending')));
