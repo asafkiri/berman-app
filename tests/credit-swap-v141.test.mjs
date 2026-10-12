@@ -334,3 +334,52 @@ test('מעבר גרסה: הסכמה של החלפה על מוצר שהוחזר �
   assert.ok(!v.items().some(i => i.kind === 'autoSwap'), 'ההסכמה חלה — בלי סגירה לבד כפולה');
   assert.deepEqual(v.j(`['code_450', 'code_451'].map(k => currentLedger().products[k].net)`), [0, 0]);
 });
+
+// ===== מהסקירה של v141 (סבב 2) =====
+// סכום הפריטים שמוצגים לכל מוצר שווה למאזן שלו: החלפה פתוחה מסבירה בדיוק את החלק שלה, וכל השאר מוצג
+const accounting = r => r.j(`(function(){ const lg = currentLedger(), out = {};
+  lg.items.forEach(i => {
+    const add = (k, u) => { out[k] = Math.round(((out[k] || 0) + u) * 1000) / 1000; };
+    if (i.kind === 'swap') { add(i.swap.a, i.units); add(i.swap.b, -i.units); return; }
+    if (!i.part || ['netted', 'autoSwap', 'autoCorrection'].indexOf(i.kind) !== -1) return;
+    const sign = ['chargedNotReceived', 'chargedTwice', 'returnedNotCredited', 'returnNotCreditedYet', 'paperChargeNotReceived'].indexOf(i.kind) !== -1 ? 1 : -1;
+    (i.keys || [{ key: i.key, units: i.units }]).forEach(z => add(z.key, sign * z.units));
+  });
+  return Object.keys(lg.products).filter(k => lg.products[k].net || out[k]).map(k => [k, lg.products[k].net, out[k] || 0]); })()`);
+
+test('סבב 2: שתי החלפות שבהן אותו מוצר זוכה במקום (בהחזרות שונות) לא מסתירות חוסר אמיתי שלו בהחזרה שלישית', () => {
+  const R1 = ret('ret_m1', [['450', 1], ['101', 2], ['238', 5], ['344', 4]], '2026-10-01');
+  const R2 = ret('ret_m2', [['450', 1], ['451', 2], ['1231', 5], ['220', 4]], '2026-10-02');
+  const R3 = ret('ret_m3', [['450', 5], ['2381', 3], ['458', 2]], '2026-10-04');
+  const r = app([credit('290099311', [['450', 3], ['238', 5], ['344', 4]], '2026-10-02'), credit('290099312', [['450', 3], ['1231', 5], ['220', 4]], '2026-10-03'),
+    credit('290099313', [['450', 2], ['2381', 3], ['458', 2]], '2026-10-05')], { returns: [R1, R2, R3], today: '2026-10-06' });
+  accounting(r).forEach(([k, net, shown]) => assert.equal(shown, net, 'מוצג מול המאזן: ' + k));
+  assert.ok(r.open().some(i => i.kind === 'returnedNotCredited' && i.key === 'code_450' && i.units === 3), 'החוסר של 3 חלה מרובעת בהחזרה השלישית גלוי');
+  assert.equal(r.run(`returnStateNow(returns[2])`), 'open');
+});
+
+test('סבב 2: החלפה שנייה על אותו מוצר — יש לה פריט משלה, והעודף שלה לא נבלע (גם כשהמאזן של המוצר שהוחזר מתאפס)', () => {
+  const R1 = ret('ret_n1', [['100', 1], ['101', 2], ['238', 5], ['344', 4]], '2026-10-01');
+  const R2 = ret('ret_n2', [['100', 1], ['101', 2], ['1231', 5], ['220', 4]], '2026-10-03');
+  const R3 = ret('ret_n3', [['101', 1], ['458', 2]], '2026-10-04');
+  const r = app([credit('290099301', [['100', 3], ['238', 5], ['344', 4]], '2026-10-02'), credit('290099302', [['100', 3], ['1231', 5], ['220', 4]], '2026-10-04'),
+    credit('290099303', [['101', 3], ['458', 2]], '2026-10-05')], { returns: [R1, R2, R3], today: '2026-10-06' });
+  accounting(r).forEach(([k, net, shown]) => assert.equal(shown, net, 'מוצג מול המאזן: ' + k));
+  assert.deepEqual(r.open().filter(i => i.kind === 'swap').map(i => i.ret).sort(), [R1.id, R2.id]);
+  assert.equal(r.run(`returnStateNow(returns[1])`), 'open', 'ההחזרה השנייה לא "צולם ומתאים"');
+});
+
+test('סבב 2: החזרה שזוכתה ויש לה זיכוי על מוצר שלא הוחזר — בלי "אין מה לעשות" ובלי "מוסבר במאזן"; נייר ששויך ידנית וכל שורותיו לא בה — העודף בכרטיס ובמאזן הזיכויים', () => {
+  const R = ret('ret_ex', [['450', 1], ['238', 5], ['344', 4]]);
+  const r = app([credit('290099401', [['450', 1], ['238', 5], ['344', 4], ['100', 2]])], { returns: [R] });
+  const card = strip(r.card());
+  assert.match(card, /זיכה את כל מה שהוחזר — וגם מוצר שלא הוחזר\. בדוק את הנייר במאזן/);
+  assert.match(card, /במאזן: 1 לטיפול/);
+  assert.doesNotMatch(card, /אין מה לעשות|מוסבר במאזן/);
+  const V = { ...ret('ret_ver_ex', [['450', 2], ['238', 5]]), credited: true, creditStatus: 'closed' };
+  const P = credit('290099601', [['100', 2]]);
+  const u = app([{ ...P, attach: { by: 'user', type: 'return', id: V.id, role: 'side', rowTargets: [{ line: 0, type: null, id: null }] } }], { returns: [V] });
+  assert.ok(u.j(`ledgerDocStatus('${V.id}') !== null`));
+  assert.match(strip(u.card()), /עודף זיכוי: ברמן זיכתה לחם אחיד ברמן ×2 שלא החזרת/);
+  assert.match(strip(u.run('returnsBalanceBannerHtml()')), /זוכו 2 יח׳ יותר ממה שהחזרת/);
+});
