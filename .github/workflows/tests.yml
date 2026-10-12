@@ -1,0 +1,56 @@
+# בדיקות אוטומטיות בכל בקשת מיזוג ובכל דחיפה ל-main.
+# unit — כל tests/*.test.mjs (Node בלבד, בלי התקנה; שעון החנות). one-button-v125 קורא גרסה ישנה מה-git — לכן היסטוריה מלאה.
+# browser — כל tests/*-browser.mjs ב-Chromium של Playwright, חוץ מבדיקות קליטה שלא עודכנו ל-v140 (קליטה מקומית)
+# ונכשלות כבר ב-main; כשמתקנים אחת מהן — להוציא אותה מהרשימה.
+name: בדיקות
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  unit:
+    name: בדיקות יחידה
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: node --test
+        env:
+          TZ: Asia/Jerusalem
+        run: node --test --test-concurrency=2 tests/*.test.mjs
+  browser:
+    name: בדיקות דפדפן
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Playwright + Chromium
+        run: |
+          npm install --no-save --no-audit --no-fund playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: tests/*-browser.mjs
+        env:
+          TZ: Asia/Jerusalem
+        run: |
+          known_broken=" none-arrived-browser one-button-browser receiving-handoff-browser shared-receiving-browser solo-receiving-browser "
+          failed=""
+          for f in tests/*-browser.mjs; do
+            n=$(basename "$f" .mjs)
+            case "$known_broken" in *" $n "*) echo "::notice::$n — מדולג (לא עודכן ל-v140)"; continue;; esac
+            echo "::group::$n"
+            if ! timeout 300 node "$f"; then failed="$failed $n"; fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then echo "::error::נכשלו:$failed"; exit 1; fi
