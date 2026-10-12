@@ -3328,7 +3328,7 @@ function returnsBalance() {
     // רק מה שלטיפול: החזרה שעוד ממתינה לתעודת זיכוי אינה חוסר
     const ls = ledgerDocStatus(r.id);
     const byPapers = !!(ls && ls.byPapers);
-    if (!r.credited && !(ls && ls.open.length)) return; // עדיין ממתינה לזיכוי — לא "זוכה", ולא חוסר
+    if (!r.credited && !(ls && (ls.open.length || (ls.extra || []).length))) return; // עדיין ממתינה לזיכוי — לא "זוכה", ולא חוסר
     n++;
     if (byPapers || !r.credited) { const u = ledgerDocOpenUnits(ls, r.id, true); if (!u.short && !u.over) return; openDocs++; shortUnits += u.short; overUnits += u.over; return; }
     const di = returnsDiscrepancyInfo(r);
@@ -12710,7 +12710,7 @@ function returnCardInReceipts(r) {
       '</div>' +
       '<div class="p-4 flex items-center justify-between gap-2">' +
         '<div class="min-w-0"><div class="font-black text-slate-800 text-sm">' + dateStr + '</div><div class="text-xs text-slate-400 mt-0.5">נשלח אל ' + htmlEscape(r.sentTo || '') + '</div>' + paperId +
-          (ls ? ledgerSentencesHtml(byLedger ? ls.open.concat(ls.pending) : ls.open, ls.lg, ls.all) : '') + '</div>' +
+          (ls ? ledgerSentencesHtml(byLedger ? ls.open.concat(ls.pending, ls.extra || []) : ls.open, ls.lg, ls.all) : '') + '</div>' +
         '<div class="flex items-center gap-2 shrink-0"><div class="text-left"><div class="text-[11px] text-slate-400">הוחזרו</div><div class="font-black text-emerald-700">' + units + ' יח׳ · ' + live.length + ' שורות</div>' + cvSum + '</div><i class="fa-solid fa-chevron-down hist-chevron text-slate-400 transition-transform"></i></div>' +
       '</div>' +
     '</summary>' +
@@ -13598,22 +13598,24 @@ function paperLedger(opts) {
       });
       const src = onB.filter(z => z.qty === q).pop() || onB.filter(z => z.qty >= q).sort((u, v) => v.qty - u.qty)[0];
       if (!src) return;
-      const cands = Object.keys(gaps).filter(k => k !== b && retGap(k) >= q && r3(sumGap(k)) >= q && !swaps.some(s => s.a === k));
+      const cands = Object.keys(gaps).filter(k => k !== b && retGap(k) >= q && r3(sumGap(k)) >= q && !swaps.some(s => s.a === k && s.returnId === rid));
       // רק מוצר אחד שחסר בדיוק בכמות העודף (לא "מועמד יחיד" שחסר בו יותר — אז גם העודף וגם החוסר גלויים)
       const exact = cands.filter(k => retGap(k) === q);
       const a = exact.length === 1 ? exact[0] : null;
-      if (a && r3(sumGap(b)) < 0 && !swaps.some(s => s.b === b)) overProps.push({ a, b, q, returnId: rid, paperId: src.id, over: true });
+      if (a && r3(sumGap(b)) < 0 && !swaps.some(s => s.b === b && s.returnId === rid)) overProps.push({ a, b, q, returnId: rid, paperId: src.id, over: true });
     });
   });
-  overProps.forEach(s => { if (overProps.filter(o => o.a === s.a).length === 1 && overProps.filter(o => o.b === s.b).length === 1) swaps.push(s); });
+  // באותה החזרה — מוצר חסר אחד לעודף אחד (לא מנחשים); אותה החלפה שחוזרת בהחזרה אחרת — החלפה משלה
+  overProps.forEach(s => { if (overProps.filter(o => o.a === s.a && o.returnId === s.returnId).length === 1 && overProps.filter(o => o.b === s.b && o.returnId === s.returnId).length === 1) swaps.push(s); });
   // v141: "אין עוד — חסר באמת" (תשובה מגרסה קודמת) — חוסר בתעודת הזיכוי הוא כבר חוסר; התשובה לא משנה דבר
   declared.forEach(p => { if (p.declare === 'complete') states[p.id] = 'superseded'; });
   // החלק של B בהחלפה: שורת הנייר שלא שייכת להחזרה — או (v141) העודף על שורת ההחזרה עצמה
   const swapOwnB = s => (gaps[s.b] || []).find(x => x.gap < 0 && (s.over ? x.type === 'return' && x.id === s.returnId : x.type === 'paper' && x.id === s.paperId));
   declared.forEach(p => {
-    if (p.declare !== 'accept-swap' || !p.pair) return;
-    // v141: ההסכמה שייכת להחזרה שעליה נאמרה (כשנשמרה עם ההחזרה)
-    const s = swaps.find(x => x.a === p.pair.a && x.b === p.pair.b && r3(x.q) === r3(p.pair.q) && !(p.standsFor && p.standsFor.returnId && p.standsFor.returnId !== x.returnId));
+    const pr = p.declare === 'accept-swap' && (p.pair || p.swapPair);
+    if (!pr) return;
+    // v141: ההסכמה שייכת להחזרה שעליה נאמרה (כשנשמרה עם ההחזרה); swapPair — רק להחלפה של מוצר שהוחזר
+    const s = swaps.find(x => !x.accepted && x.a === pr.a && x.b === pr.b && r3(x.q) === r3(pr.q) && (!p.swapPair || x.over) && !(p.standsFor && p.standsFor.returnId && p.standsFor.returnId !== x.returnId));
     if (!s) { states[p.id] = 'superseded'; return; }
     s.accepted = p.id;
     // ההסכמה מתקזזת מול החלקים של ההחלפה עצמה (ההחזרה, ושורת הנייר) — פער אחר של אותם מוצרים נשאר בשמו
@@ -13655,14 +13657,14 @@ function paperLedger(opts) {
     let left = Math.abs(net);
     const used = new Map();
     // החלפה: פריט אחד על הכמות שלה; שאר הפער של שני המוצרים נבדק כרגיל (חוסר אחר לא נבלע בה)
-    const swap = swaps.find(s => (s.a === k || s.b === k) && !s.accepted && !s.settled);
-    if (swap) {
+    swaps.filter(s => (s.a === k || s.b === k) && !s.accepted && !s.settled).forEach(swap => {
+      if (left <= 0) return;
       if (swap.a === k) items.push({ id: 'swap|' + swap.returnId + '|' + swap.a + '|' + swap.b, key: k, kind: 'swap', state: 'problem', units: swap.q, swap });
       const own = swap.a === k ? parts.find(x => x.type === 'return' && x.id === swap.returnId && x.gap > 0) : swapOwnB(swap);
-      const u = Math.min(swap.q, left, own && own.gap * sign > 0 ? Math.abs(own.gap) : swap.q);
-      if (own) used.set(own, u);
+      const u = Math.min(swap.q, left, own && own.gap * sign > 0 ? Math.abs(own.gap) - (used.get(own) || 0) : swap.q);
+      if (own) used.set(own, (used.get(own) || 0) + u);
       left -= u;
-    }
+    });
     parts.filter(x => x.gap * sign > 0).sort((a, b) => String(b.day).localeCompare(String(a.day))).forEach(x => {
       if (left <= 0) return;
       const avail = Math.abs(x.gap) - (used.get(x) || 0); if (avail <= 0) return;
@@ -13708,10 +13710,12 @@ function paperLedger(opts) {
   out.forEach(it => {
     const open = it.state === 'problem' || it.state === 'question';
     if (!open && it.state !== 'pending') return;
-    // v141: זיכוי על מוצר שלא הוחזר, בנייר של החזרה — פתוח גם בהחזרה (אחרת הכרטיס שלה "זוכתה" והעודף רק בבאנר)
+    // v141: זיכוי על מוצר שלא הוחזר, בנייר של החזרה — ברשימה נפרדת של ההחזרה (extra): הכרטיס ומאזן הזיכויים מראים
+    // אותו, אבל הוא לא פותח מחדש החזרה שכל שורותיה זוכו (אחרת "החזר לרשימה" / "מזג" היו תובעים שוב זיכוי שניתן)
     const loosePaper = open && it.kind === 'creditedNotReturned' && it.part && it.part.type === 'paper' ? placed.find(p => p.id === it.part.id) : null;
     const looseRet = loosePaper && loosePaper.attach && loosePaper.attach.type === 'return' ? loosePaper.attach.id : null;
-    const docIds = open ? [it.part && it.part.id, it.short && it.short.id, it.swap && it.swap.returnId, it.pair && it.pair.returnId, looseRet] : [it.part && it.part.id];
+    if (looseRet && docViews[looseRet]) { const ex = docViews[looseRet].extra || (docViews[looseRet].extra = []); if (ex.indexOf(it.id) === -1) ex.push(it.id); }
+    const docIds = open ? [it.part && it.part.id, it.short && it.short.id, it.swap && it.swap.returnId, it.pair && it.pair.returnId] : [it.part && it.part.id];
     docIds.forEach(id => {
       const list = id && docViews[id] && (open ? docViews[id].open : docViews[id].pending);
       if (list && list.indexOf(it.id) === -1) list.push(it.id);
@@ -15716,7 +15720,8 @@ function ledgerDeclarationText(p, lg) {
   const nm = k => (lg.products[k] && lg.products[k].name) || String(k || '').replace(/^code_/, '');
   if (p.declare === 'correction') return 'אישרת: ' + (p.rows || []).map(r => nm(r.productId) + ' ×' + mtxQty(r.qty)).join(', ') + ' זוכו בתעודת זיכוי שלא צולמה';
   const day = id => (lg.docDays || {})[id] ? ' מ-' + ledgerDayShort(lg.docDays[id]) : '';
-  if (p.declare === 'accept-swap' && p.pair) return 'הסכמת לזיכוי על ' + nm(p.pair.b) + ' במקום ' + nm(p.pair.a) + ' ×' + mtxQty(p.pair.q) + (p.standsFor && p.standsFor.returnId ? ' (ההחזרה' + day(p.standsFor.returnId) + ')' : '');
+  const sp = p.declare === 'accept-swap' && (p.pair || p.swapPair);
+  if (sp) return 'הסכמת לזיכוי על ' + nm(sp.b) + ' במקום ' + nm(sp.a) + ' ×' + mtxQty(sp.q) + (p.standsFor && p.standsFor.returnId ? ' (ההחזרה' + day(p.standsFor.returnId) + ')' : '');
   if (p.declare === 'complete') return 'אישרת שאין עוד תעודת זיכוי להחזרה' + day(p.returnId);
   if (p.declare === 'ack-offset') {
     // xo2|קליטה|קליטה|מוצר — המוצר והימים של שתי הקליטות
@@ -15737,7 +15742,9 @@ async function ledgerAnswer(role, itemId, returnId, paperId, receiptId) {
     await saveLedgerDeclaration('decl_corr_' + ledgerShortHash(it.part.id + '|' + it.key), { declare: 'correction', docDay: charge ? charge.docDay : todayStr(),
       rows: [{ line: 1, itemCode: prod ? productCode(prod) : '', productId: it.key, qty: it.units }], standsFor: { returnId: it.pair.returnId, chargePaperId: it.part.id } });
   } else if (role === 'ledger-accept-swap' && it && it.kind === 'swap' && it.swap) {
-    await saveLedgerDeclaration('decl_swap_' + ledgerShortHash(it.swap.returnId + '|' + it.swap.a + '|' + it.swap.b), { declare: 'accept-swap', pair: { a: it.swap.a, b: it.swap.b, q: it.swap.q }, standsFor: { returnId: it.swap.returnId } });
+    // v141: החלפה של מוצר שהוחזר (over) — בשדה swapPair: גרסה 140 מדלגת על הסכמה בלי pair, ולא תחיל אותה על החלפה אחרת
+    const pr = { a: it.swap.a, b: it.swap.b, q: it.swap.q };
+    await saveLedgerDeclaration('decl_swap_' + ledgerShortHash(it.swap.returnId + '|' + it.swap.a + '|' + it.swap.b), { declare: 'accept-swap', ...(it.swap.over ? { swapPair: pr } : { pair: pr }), standsFor: { returnId: it.swap.returnId } });
   } else if (role === 'ledger-ack-offset' && it && it.offsetId) {
     await saveLedgerDeclaration('decl_ack_' + ledgerShortHash(it.offsetId), { declare: 'ack-offset', offsetId: it.offsetId });
   } else if (role === 'ledger-attach' && paperId) {
@@ -15777,8 +15784,10 @@ function ledgerDocStatus(id) {
   const day = String((lg.docDays || {})[id] || '');
   const closedMonth = !!(ledgerClosedThrough && day && day <= ledgerClosedThrough);
   const open = closedMonth ? [] : open0, pending = closedMonth ? [] : pending0;
+  // v141: extra — זיכוי על מוצר שלא הוחזר, בנייר של ההחזרה (לא פותח אותה מחדש; מוצג בכרטיס ונספר כעודף)
+  const extra = closedMonth ? [] : pick(v.extra);
   // byPapers: המאזן "מחזיק" את התעודה — נייר נגע בה, או שהוא אומר עליה "חויבת פעמיים" (נייר חיוב על קליטה אחרת)
-  return { lg, all, open, pending, closedMonth, byPapers: v.papers.length > 0 || open0.some(i => i.kind === 'chargedTwice'),
+  return { lg, all, open, pending, extra, closedMonth, byPapers: v.papers.length > 0 || open0.some(i => i.kind === 'chargedTwice'),
     papers: v.papers.map(pid => all.find(p => p.id === pid)).filter(p => p && p.kind !== 'declared'),
     closed: !open0.length && !pending0.length && !(v.gap > 0) };
 }
@@ -15798,7 +15807,7 @@ function returnCreditView(r, ls) {
     at(k).credit = p ? Number(p.credit) || 0 : 0;
   });
   const worst = (a, b) => (a === 'problem' || b === 'problem') ? 'problem' : (a || b);
-  ls.open.concat(ls.pending).forEach(it => {
+  ls.open.concat(ls.pending, ls.extra || []).forEach(it => {
     if (it.kind === 'swap' && it.swap && it.swap.returnId === r.id) return;
     if (!it.part) return;
     const mine = it.part.id === r.id || (it.part.type === 'paper' && (lg.placed || []).some(p => p.id === it.part.id && p.attach && p.attach.type === 'return' && p.attach.id === r.id));
@@ -15880,7 +15889,7 @@ function returnStateNow(r) {
 // v141: openOnly — רק מה שלטיפול (בלי מה שממתין); החלפה פתוחה בהחזרה — חסר במוצר שהוחזר, ועודף במוצר שזוכה במקומו
 function ledgerDocOpenUnits(ls, id, openOnly) {
   let short = 0, over = 0;
-  (openOnly ? ls.open : ls.open.concat(ls.pending)).forEach(it => {
+  (openOnly ? ls.open : ls.open.concat(ls.pending)).concat(ls.extra || []).forEach(it => {
     if (it.kind === 'swap' && it.swap && it.swap.returnId === id) { short += Number(it.units) || 0; over += Number(it.units) || 0; return; }
     // זיכוי על מוצר שלא הוחזר, בנייר של ההחזרה הזו — עודף שלה
     if (it.kind === 'creditedNotReturned' && it.part && it.part.type === 'paper' && ls.lg && (ls.lg.placed || []).some(p => p.id === it.part.id && p.attach && p.attach.type === 'return' && p.attach.id === id)) { over += Number(it.units) || 0; return; }

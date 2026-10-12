@@ -25,7 +25,7 @@ function app(papersList, { receipts = [], returns = [], today = '2026-10-05' } =
   r.run(`receipts = testL.receipts; returns = testL.returns; papers = testL.papers; todayStr = () => '${today}';
     runCloudTask = async (label, task) => { testWrites.push(task); return true; }; runCloudTaskSilent = runCloudTask; ledgerInvalidate();`);
   r.j = expr => JSON.parse(r.run('JSON.stringify(' + expr + ')'));
-  r.items = () => r.j(`currentLedger().items.map(i => ({ id: i.id, kind: i.kind, state: i.state, key: i.key || null, units: i.units, swap: i.swap ? { a: i.swap.a, b: i.swap.b, q: i.swap.q, over: !!i.swap.over, price: i.swap.price } : null,
+  r.items = () => r.j(`currentLedger().items.map(i => ({ id: i.id, kind: i.kind, state: i.state, key: i.key || null, units: i.units, swap: i.swap ? { a: i.swap.a, b: i.swap.b, q: i.swap.q, over: !!i.swap.over, price: i.swap.price } : null, ret: i.swap ? i.swap.returnId : null,
     text: ledgerItemText(i, currentLedger(), ledgerAllPapers(currentLedger())).text, detail: ledgerItemText(i, currentLedger(), ledgerAllPapers(currentLedger())).detail || '' }))`);
   r.open = () => r.items().filter(i => i.state === 'problem' || i.state === 'question');
   r.card = () => { r.run(`currentView = 'receiptsHistory'; receiptHistoryFilter = 'all'; renderReceiptsHistory();`);
@@ -44,8 +44,8 @@ const declared = o => ({ schema: 1, kind: 'declared', state: 'accepted', docDay:
 const delivery = (id, date) => ({ id, date, docDate: date, timestamp: Date.parse(date + 'T06:00:00'), items: [{ productId: 'code_2381', code: '2381', name: name('2381'), qty: 1, noteQty: 1 }] });
 
 test('אותו מחיר: ברמן זיכתה חלה מרובעת ×3 במקום ×1 + חלה קלועה ×2 — החלפה שנסגרת לבד, בלי "לטיפול"', () => {
-  const R = ret('ret_swap_same', [['450', 1], ['451', 2], ['238', 6], ['344', 3]]);
-  const r = app([credit('290099101', [['450', 3], ['238', 6], ['344', 3]])], { returns: [R] });
+  const R = ret('ret_swap_same', [['450', 1], ['451', 2], ['238', 5], ['344', 4]]);
+  const r = app([credit('290099101', [['450', 3], ['238', 5], ['344', 4]])], { returns: [R] });
   assert.deepEqual(r.open(), [], 'אין עודף ואין חוסר לטיפול');
   const sw = r.items().find(i => i.kind === 'autoSwap');
   assert.deepEqual([sw.state, sw.key, sw.units, sw.swap], ['info', 'code_451', 2, { a: 'code_451', b: 'code_450', q: 2, over: true, price: 'same' }]);
@@ -70,8 +70,8 @@ test('אותו מחיר: ברמן זיכתה חלה מרובעת ×3 במקום 
 });
 
 test('מחיר שונה: אותה החלפה — לטיפול, אומרת למה לא נסגרה; "מקבל את ההחלפה" סוגר רק את ההחזרה שעליה נאמר', () => {
-  const R = ret('ret_swap_diff', [['100', 1], ['101', 2], ['238', 6], ['344', 3]]);
-  const P = credit('290099102', [['100', 3], ['238', 6], ['344', 3]]);
+  const R = ret('ret_swap_diff', [['100', 1], ['101', 2], ['238', 5], ['344', 4]]);
+  const P = credit('290099102', [['100', 3], ['238', 5], ['344', 4]]);
   const r = app([P], { returns: [R] });
   const open = r.open();
   assert.deepEqual(open.map(i => [i.kind, i.key, i.units]), [['swap', 'code_101', 2]], 'פריט אחד — לא "עודף" ו"חסר" נפרדים');
@@ -99,8 +99,8 @@ test('מחיר שונה: אותה החלפה — לטיפול, אומרת למה
 });
 
 test('חוסר חלקי בתעודת הזיכוי — חוסר מיד: בהתראה העליונה, בכרטיס ובבאנר; תעודה נוספת סוגרת', () => {
-  const R = ret('ret_short', [['450', 1], ['451', 2], ['238', 6]]);
-  const r = app([credit('290099103', [['450', 1], ['238', 6]])], { returns: [R] });
+  const R = ret('ret_short', [['450', 1], ['451', 2], ['238', 5]]);
+  const r = app([credit('290099103', [['450', 1], ['238', 5]])], { returns: [R] });
   const open = r.open();
   assert.deepEqual(open.map(i => [i.kind, i.key, i.units, i.state]), [['returnedNotCredited', 'code_451', 2, 'problem']]);
   assert.equal(open[0].text, 'חסר זיכוי על חלה קלועה ברמן ×2 מההחזרה של 3.10 — לבקש זיכוי מהנהג');
@@ -113,33 +113,33 @@ test('חוסר חלקי בתעודת הזיכוי — חוסר מיד: בהתר�
   assert.match(card, /לטיפול במאזן/);
   assert.match(card, /חסר זיכוי 2/);
   assert.match(card, /חלה קלועה ברמן .*זוכה 0 · חסר 2/);
-  const done = app([credit('290099103', [['450', 1], ['238', 6]]), credit('290099104', [['451', 2]], '2026-10-05')], { returns: [R] });
+  const done = app([credit('290099103', [['450', 1], ['238', 5]]), credit('290099104', [['451', 2]], '2026-10-05')], { returns: [R] });
   assert.deepEqual(done.open(), []);
   assert.equal(done.state(), 'done');
 });
 
 test('עודף אמיתי — "עודף זיכוי … (החזרת 1, זוכו 3)"; כמויות שלא מתאימות בדיוק — לא מנחשים החלפה, ושני הצדדים גלויים', () => {
-  const R = ret('ret_over', [['450', 1], ['238', 6], ['344', 3]]);
-  const r = app([credit('290099105', [['450', 3], ['238', 6], ['344', 3]])], { returns: [R] });
+  const R = ret('ret_over', [['450', 1], ['238', 5], ['344', 4]]);
+  const r = app([credit('290099105', [['450', 3], ['238', 5], ['344', 4]])], { returns: [R] });
   const open = r.open();
   assert.deepEqual(open.map(i => [i.kind, i.key, i.units]), [['creditedNotReturned', 'code_450', 2]]);
   assert.equal(open[0].text, 'עודף זיכוי על חלה מרובעת ברמן ×2 בהחזרה מ-3.10 (החזרת 1, זוכו 3) — לבדוק שהנייר נקרא נכון');
   assert.match(strip(r.card()), /חלה מרובעת ברמן .*זוכה 3 · עודף 2/);
   // עודף 3 מול חוסר 2 — לא החלפה: החוסר והעודף, כל אחד בשמו, שניהם לטיפול ובהתראה
-  const R2 = ret('ret_mismatch', [['450', 1], ['451', 2], ['238', 6]]);
-  const m = app([credit('290099106', [['450', 4], ['238', 6]])], { returns: [R2] });
+  const R2 = ret('ret_mismatch', [['450', 1], ['451', 2], ['238', 5]]);
+  const m = app([credit('290099106', [['450', 4], ['238', 5]])], { returns: [R2] });
   assert.deepEqual(m.open().map(i => [i.kind, i.key, i.units]).sort(), [['creditedNotReturned', 'code_450', 3], ['returnedNotCredited', 'code_451', 2]]);
   assert.equal(m.j('openIssuesList().length'), 2, 'החוסר גלוי לצד העודף');
   // שני מוצרים חסרים באותה כמות — לא בוחרים אחד באקראי
-  const R3 = ret('ret_two', [['450', 1], ['451', 2], ['458', 2], ['238', 6]]);
-  const t = app([credit('290099107', [['450', 3], ['238', 6]])], { returns: [R3] });
+  const R3 = ret('ret_two', [['450', 1], ['451', 2], ['458', 2], ['238', 5]]);
+  const t = app([credit('290099107', [['450', 3], ['238', 5]])], { returns: [R3] });
   assert.ok(!t.items().some(i => i.kind === 'swap' || i.kind === 'autoSwap'));
   assert.deepEqual(t.open().map(i => i.kind).sort(), ['creditedNotReturned', 'returnedNotCredited']);
 });
 
 test('מחיר שלא אומת מול חשבונית — לא "אותו מחיר": ההחלפה לטיפול ואומרת למה', () => {
-  const R = ret('ret_unknown', [['450', 1], ['451', 2], ['238', 6], ['344', 3]]);
-  const r = app([credit('290099108', [['450', 3], ['238', 6], ['344', 3]])], { returns: [R] });
+  const R = ret('ret_unknown', [['450', 1], ['451', 2], ['238', 5], ['344', 4]]);
+  const r = app([credit('290099108', [['450', 3], ['238', 5], ['344', 4]])], { returns: [R] });
   r.run(`products.find(p => p.id === 'code_451').discountSet = false; ledgerInvalidate();`);
   const open = r.open();
   assert.deepEqual(open.map(i => [i.kind, i.swap && i.swap.price]), [['swap', 'unknown']]);
@@ -147,8 +147,8 @@ test('מחיר שלא אומת מול חשבונית — לא "אותו מחיר
 });
 
 test('נייר תיקון של ברמן אחרי החלפה שנסגרה לבד — הכל מתקזז, וההחלפה יורדת', () => {
-  const R = ret('ret_fixed', [['450', 1], ['451', 2], ['238', 6], ['344', 3]]);
-  const fix = [credit('290099109', [['450', 3], ['238', 6], ['344', 3]]), paper('charge', '290099110', [['450', 2]], '2026-10-05'), credit('290099111', [['451', 2]], '2026-10-05')];
+  const R = ret('ret_fixed', [['450', 1], ['451', 2], ['238', 5], ['344', 4]]);
+  const fix = [credit('290099109', [['450', 3], ['238', 5], ['344', 4]]), paper('charge', '290099110', [['450', 2]], '2026-10-05'), credit('290099111', [['451', 2]], '2026-10-05')];
   const r = app(fix, { returns: [R] });
   assert.deepEqual(r.open(), []);
   assert.ok(!r.items().some(i => i.kind === 'autoSwap' || i.kind === 'swap'));
@@ -171,8 +171,8 @@ test('החזרה בלי תעודת זיכוי — "ממתינה" בכתום עד
 
 // ===== מהסקירה של v141 =====
 test('סקירה: נייר מחודש אחר — ההחלפה שנסגרה לבד לא מזיזה זיכוי בין חודשים; "הוחלף" רק בחודש שבו הפער נראה', () => {
-  const R = { ...ret('ret_month', [['450', 1], ['451', 2], ['238', 6], ['344', 3]], '2026-09-29'), credited: true, creditStatus: 'closed' };
-  const r = app([credit('290099120', [['450', 3], ['238', 6], ['344', 3]], '2026-10-01')], { returns: [R] });
+  const R = { ...ret('ret_month', [['450', 1], ['451', 2], ['238', 5], ['344', 4]], '2026-09-29'), credited: true, creditStatus: 'closed' };
+  const r = app([credit('290099120', [['450', 3], ['238', 5], ['344', 4]], '2026-10-01')], { returns: [R] });
   assert.ok(r.items().some(i => i.kind === 'autoSwap'));
   const adj = r.j(`ledgerMatrixAdjust(paperLedger({ recs: receipts, rets: returns, papers, from: ledgerFrom, asOf: todayStr() }), '2026-09-01', '2026-10-31', papers).filter(x => x.key === 'code_451').map(x => x.day)`);
   assert.ok(adj.every(d => d === '2026-09-29'), 'מה שחסר בחלה קלועה נשאר ביום ההחזרה: ' + adj.join(','));
@@ -182,14 +182,14 @@ test('סקירה: נייר מחודש אחר — ההחלפה שנסגרה לב�
 });
 
 test('סקירה: עודף 2 מול חוסר 5 — לא החלפה (רק כמות זהה בדיוק); שני הצדדים לטיפול, והפירוט מסכם לכותרת', () => {
-  const R = ret('ret_inexact', [['450', 1], ['451', 5], ['238', 6], ['344', 3]]);
-  const r = app([credit('290099121', [['450', 3], ['238', 6], ['344', 3]])], { returns: [R] });
+  const R = ret('ret_inexact', [['450', 1], ['451', 5], ['238', 5], ['344', 4]]);
+  const r = app([credit('290099121', [['450', 3], ['238', 5], ['344', 4]])], { returns: [R] });
   assert.ok(!r.items().some(i => i.kind === 'swap' || i.kind === 'autoSwap'));
   assert.deepEqual(r.open().map(i => [i.kind, i.key, i.units]).sort(), [['creditedNotReturned', 'code_450', 2], ['returnedNotCredited', 'code_451', 5]]);
   // חוסר שחלקו התקזז מול עודף בקליטה — הפירוט אומר את זה (ולא "הוחזרו 2, זוכו 0" מול ×1)
-  const R2 = ret('ret_net', [['450', 1], ['451', 2], ['238', 6]]);
+  const R2 = ret('ret_net', [['450', 1], ['451', 2], ['238', 5]]);
   const rc = { id: 'rc_sur', date: '2026-10-02', docDate: '2026-10-02', timestamp: Date.parse('2026-10-02T06:00:00'), items: [{ productId: 'code_451', code: '451', name: name('451'), qty: 4, noteQty: 3 }] };
-  const n = app([credit('290099122', [['450', 1], ['238', 6]])], { returns: [R2], receipts: [rc] });
+  const n = app([credit('290099122', [['450', 1], ['238', 5]])], { returns: [R2], receipts: [rc] });
   const it = n.open().find(i => i.kind === 'returnedNotCredited');
   assert.equal(it.units, 1);
   assert.match(it.detail, /^חלה קלועה ברמן: הוחזרו 2, זוכו 0, 1 התקזזו מול תעודה אחרת\./);
@@ -197,8 +197,8 @@ test('סקירה: עודף 2 מול חוסר 5 — לא החלפה (רק כמו�
 
 test('סקירה: חודש שנסגר — המאזן החי והמלא מסכימים: חוסר בקליטה שלפני הסגירה חוסם החלפה, החוסר האמיתי גלוי', () => {
   const rc = { id: 'rc_closed', date: '2026-09-29', docDate: '2026-09-29', timestamp: Date.parse('2026-09-29T06:00:00'), items: [{ productId: 'code_450', code: '450', name: name('450'), qty: 1, noteQty: 3 }] };
-  const R = ret('ret_after_close', [['450', 1], ['451', 2], ['238', 6], ['344', 3]], '2026-10-01');
-  const r = app([credit('290099123', [['450', 3], ['238', 6], ['344', 3]], '2026-10-02')], { returns: [R], receipts: [rc] });
+  const R = ret('ret_after_close', [['450', 1], ['451', 2], ['238', 5], ['344', 4]], '2026-10-01');
+  const r = app([credit('290099123', [['450', 3], ['238', 5], ['344', 4]], '2026-10-02')], { returns: [R], receipts: [rc] });
   r.run(`ledgerClosedThrough = '2026-09-30'; ledgerInvalidate();`);
   assert.deepEqual(r.j('currentLedger().swaps.length'), 0);
   assert.deepEqual(r.j('fullLedger().swaps.length'), 0);
@@ -212,14 +212,14 @@ test('סקירה: חלק שני של זיכוי מפוצל צולם ועוד ל�
   const w = r.items().find(i => i.kind === 'returnedNotCredited');
   assert.deepEqual([w.state, w.text], ['pending', 'חסר זיכוי על חלה מרובעת ברמן ×2 מההחזרה של 1.10 — ממתין לנייר זיכוי שצילמת ועוד לא נספר']);
   assert.ok(!r.j('openIssuesList()').some(x => /לבקש זיכוי מהנהג/.test(x.text)));
-  const R = ret('ret_s', [['450', 1], ['451', 2], ['238', 6]]);
-  const u = app([credit('290099133', [['450', 1], ['238', 6]]), { ...credit('290099134', [['451', 2]]), state: 'review' }], { returns: [R] });
+  const R = ret('ret_s', [['450', 1], ['451', 2], ['238', 5]]);
+  const u = app([credit('290099133', [['450', 1], ['238', 5]]), { ...credit('290099134', [['451', 2]]), state: 'review' }], { returns: [R] });
   assert.deepEqual(u.items().filter(i => i.kind === 'returnedNotCredited').map(i => i.state), ['pending'], 'נייר שלא נקרא עד הסוף — ממתין לו');
 });
 
 test('סקירה: כרטיס הנייר הראשי שחסרה בו שורה — לא "תואם לנייר"; בהיסטוריה "לטיפול במאזן"', () => {
-  const R = ret('ret_card', [['450', 1], ['451', 2], ['238', 6]]);
-  const P = credit('290099141', [['450', 1], ['238', 6]]);
+  const R = ret('ret_card', [['450', 1], ['451', 2], ['238', 5]]);
+  const P = credit('290099141', [['450', 1], ['238', 5]]);
   const r = app([P], { returns: [R] });
   r.run(`paperIntake = { items: [{ captureId: 'cap1', status: 'saved', paperId: '${P.id}' }], allIn: true, busy: false }; currentView = 'paperIntake'; renderPaperIntake();`);
   const intake = strip(r.node('app').innerHTML.split('paperIntakeList')[1] || '');
@@ -240,7 +240,7 @@ test('סקירה: החזרה בלי נייר אחרי 4 ביקורים — פת�
   assert.match(strip(r.run('returnsBalanceBannerHtml()')), /חסר זיכוי על 3 יח׳ בתעודה אחת/);
   assert.match(strip(r.card()), /לטיפול במאזן/);
   // חלק מההחזרה זוכה בנייר משלים והשאר ממתין — אין "כל מה שהחזרת זוכה ✓", ובכרטיס "טרם זוכה" (לא "חסר")
-  const S = ret('ret_side', [['450', 1], ['451', 2], ['238', 6], ['344', 3], ['100', 2]]);
+  const S = ret('ret_side', [['450', 1], ['451', 2], ['238', 5], ['344', 4], ['100', 2]]);
   const s = app([credit('290099151', [['450', 1], ['451', 2]])], { returns: [S], receipts: [delivery('rc_s', '2026-10-04')] });
   assert.equal(s.run('returnsBalanceBannerHtml()'), '');
   const card = strip(s.card());
@@ -248,15 +248,89 @@ test('סקירה: החזרה בלי נייר אחרי 4 ביקורים — פת�
   assert.doesNotMatch(card, /חסר זיכוי/);
 });
 
-test('סקירה: זיכוי על מוצר שלא הוחזר, בנייר של ההחזרה — עודף שלה גם במאזן הזיכויים; "אין עוד" מגרסה קודמת יורד מהתשובות', () => {
-  const R = ret('ret_loose', [['450', 1], ['238', 6], ['344', 3]]);
-  const r = app([credit('290099161', [['450', 1], ['238', 6], ['344', 3], ['100', 2]])], { returns: [R] });
-  assert.equal(r.run(`returnStateNow(returns[0])`), 'open');
+test('סקירה: זיכוי על מוצר שלא הוחזר, בנייר של ההחזרה — מוצג בכרטיס ונספר כעודף, אבל לא פותח מחדש החזרה שזוכתה (בלי "החזר לרשימה" / "מזג"); "אין עוד" ישן יורד מהתשובות', () => {
+  const R = ret('ret_loose', [['450', 1], ['238', 5], ['344', 4]]);
+  const r = app([credit('290099161', [['450', 1], ['238', 5], ['344', 4], ['100', 2]])], { returns: [R] });
+  assert.equal(r.run(`returnStateNow(returns[0])`), 'done', 'כל השורות שהוחזרו זוכו');
+  assert.equal(r.run(`returnStillOpen(returns[0])`), false, 'לא מציעים להחזיר לרשימה או למזג — זה היה תובע שוב זיכוי שניתן');
   assert.deepEqual(r.j('returnsBalance()'), { shortUnits: 0, overUnits: 2, openDocs: 1, n: 1 });
-  assert.match(strip(r.card()), /זוכה גם על מוצרים שלא הוחזרו: לחם אחיד ברמן עודף 2 זוכה 2/);
+  assert.ok(r.j('openIssuesList()').some(x => /^עודף זיכוי: ברמן זיכתה לחם אחיד ברמן ×2 שלא החזרת/.test(x.text)), 'העודף בהתראה העליונה');
+  const card = strip(r.card());
+  assert.match(card, /עודף זיכוי: ברמן זיכתה לחם אחיד ברמן ×2 שלא החזרת/);
+  assert.match(card, /זוכה גם על מוצרים שלא הוחזרו: לחם אחיד ברמן עודף 2 זוכה 2/);
+  assert.doesNotMatch(r.card(), /data-role="ret-unsend"|data-role="ret-resend"/);
   const D = { schema: 1, id: 'decl_done_old', kind: 'declared', declare: 'complete', returnId: 'ret_c', state: 'accepted', docDay: '2026-10-05', timestamp: 3 };
-  const c = app([credit('290099162', [['450', 1], ['238', 6]]), D], { returns: [ret('ret_c', [['450', 1], ['451', 2], ['238', 6]])] });
+  const c = app([credit('290099162', [['450', 1], ['238', 5]]), D], { returns: [ret('ret_c', [['450', 1], ['451', 2], ['238', 5]])] });
   assert.equal(c.j(`currentLedger().states['decl_done_old']`), 'superseded');
   c.run(`currentView = 'ledger'; renderLedger();`);
   assert.doesNotMatch(strip(c.node('app').innerHTML), /אישרת שאין עוד תעודת זיכוי/);
+});
+
+// ===== מהסקירה של v141 (2): כל שומר של סגירה לבד ושל זיהוי ההחלפה — נבדק =====
+const SAME = () => ret('ret_g', [['450', 1], ['451', 2], ['238', 5], ['344', 4]]);
+const SAME_PAPER = () => credit('290099170', [['450', 3], ['238', 5], ['344', 4]]);
+const kinds = r => r.items().filter(i => i.kind === 'swap' || i.kind === 'autoSwap').map(i => i.kind + ':' + (i.swap && i.swap.price));
+
+test('שומרים של "נסגר לבד": נייר זיכוי באותו יום שלא נקרא עד הסוף; פיקדון שונה; מבצע על אחד המוצרים — ההחלפה לטיפול', () => {
+  assert.deepEqual(kinds(app([SAME_PAPER()], { returns: [SAME()] })), ['autoSwap:same'], 'בלי ספק — נסגרת לבד');
+  const unsure = app([SAME_PAPER(), { ...credit('290099171', [['2381', 1]]), state: 'review' }], { returns: [SAME()] });
+  assert.deepEqual(kinds(unsure), ['swap:same'], 'נייר מאותו יום שעוד לא נקרא — לא סוגרים לבד');
+  const dep = app([SAME_PAPER()], { returns: [SAME()] });
+  dep.run(`products.find(p => p.id === 'code_451').deposit = 0.3; ledgerInvalidate();`);
+  assert.deepEqual(kinds(dep), ['swap:diff']);
+  const promo = app([SAME_PAPER()], { returns: [SAME()] });
+  promo.run(`promos = [{ id: 'pr_t', type: 'receipt', productIds: ['code_450'], pct: 0, fixedPrice: 4, start: '2026-10-04', end: '2026-10-31' }]; ledgerInvalidate();`);
+  assert.deepEqual(kinds(promo), ['swap:diff'], 'מבצע מחיר קבוע על חלה מרובעת ביום הנייר — המחיר בחשבונית שונה');
+});
+
+test('שומרים של זיהוי ההחלפה: שורה "מפער קודם" של המוצר, חוסר שלו בקליטה סמוכה, החזרה בלי נייר ראשי — אין החלפה, שני הצדדים גלויים', () => {
+  const carried = SAME(); carried.items.push({ productId: 'carry_450', code: '450', name: name('450'), barcode: '', qty: 2, carried: true });
+  const c = app([SAME_PAPER()], { returns: [carried] });
+  assert.deepEqual(kinds(c), []);
+  const rc = { id: 'rc_short450', date: '2026-10-04', docDate: '2026-10-04', timestamp: Date.parse('2026-10-04T06:00:00'), items: [{ productId: 'code_450', code: '450', name: name('450'), qty: 1, noteQty: 2 }] };
+  // חוסר 1 בקליטה סמוכה: בלי השומר, המאזן של המוצר עדיין בעודף (1−2) והיה מניח החלפה ומסתיר את החוסר בחלה קלועה
+  const s = app([SAME_PAPER()], { returns: [SAME()], receipts: [rc] });
+  assert.deepEqual(kinds(s), []);
+  assert.ok(s.open().some(i => i.kind === 'returnedNotCredited' && i.key === 'code_451'), 'חלה קלועה — עדיין חסרה');
+  const big = ret('ret_side_only', [['450', 1], ['451', 2], ['238', 5], ['344', 4], ['2381', 3]]);
+  const side = app([credit('290099172', [['450', 3], ['238', 5]])], { returns: [big] });
+  assert.equal(side.j(`currentLedger().placed[0].attach.role`), 'side');
+  assert.deepEqual(kinds(side), [], 'בלי נייר ראשי — לא מניחים החלפה');
+});
+
+test('אותה החלפה בשתי החזרות — כל אחת החלפה משלה (לא מבטלות זו את זו); הסכמה על אחת לא חלה על השנייה', () => {
+  const R1 = ret('ret_two_a', [['450', 1], ['451', 2], ['238', 5], ['344', 4]], '2026-10-01');
+  const R2 = ret('ret_two_b', [['450', 1], ['451', 2], ['1231', 5], ['220', 4]], '2026-10-03');
+  const P1 = credit('290099181', [['450', 3], ['238', 5], ['344', 4]], '2026-10-02'), P2 = credit('290099182', [['450', 3], ['1231', 5], ['220', 4]], '2026-10-04');
+  const same = app([P1, P2], { returns: [R1, R2] });
+  assert.deepEqual(same.open(), []);
+  assert.deepEqual(same.items().filter(i => i.kind === 'autoSwap').map(i => i.swap && i.units), [2, 2]);
+  const D1 = ret('ret_two_c', [['100', 1], ['101', 2], ['238', 5], ['344', 4]], '2026-10-01');
+  const D2 = ret('ret_two_d', [['100', 1], ['101', 2], ['1231', 5], ['220', 4]], '2026-10-03');
+  const Q1 = credit('290099183', [['100', 3], ['238', 5], ['344', 4]], '2026-10-02'), Q2 = credit('290099184', [['100', 3], ['1231', 5], ['220', 4]], '2026-10-04');
+  const two = app([Q1, Q2], { returns: [D1, D2] });
+  assert.deepEqual(two.open().map(i => [i.kind, i.units]), [['swap', 2], ['swap', 2]], 'שתי החלפות פתוחות, כל אחת בפריט משלה');
+  const acc = app([Q1, Q2, declared({ id: 'decl_swap_c', declare: 'accept-swap', swapPair: { a: 'code_101', b: 'code_100', q: 2 }, standsFor: { returnId: D1.id } })], { returns: [D1, D2] });
+  assert.equal(acc.j(`currentLedger().states['decl_swap_c']`), 'counted');
+  assert.deepEqual(acc.open().map(i => [i.kind, i.ret]), [['swap', D2.id]], 'רק ההחזרה שעליה הסכמת נסגרה');
+});
+
+test('מעבר גרסה: הסכמה של החלפה על מוצר שהוחזר נשמרת ב-swapPair (גרסה 140 לא תחיל אותה על החלפה אחרת); הסכמה מגרסה 140 (pair) — חלה פעם אחת', async () => {
+  const R = ret('ret_ver', [['100', 1], ['101', 2], ['238', 5], ['344', 4]]);
+  const r = app([credit('290099191', [['100', 3], ['238', 5], ['344', 4]])], { returns: [R] });
+  r.context.testDecl = [];
+  r.run(`saveLedgerDeclaration = async (id, body) => { testDecl.push([id, body]); };`);
+  const id = r.j(`currentLedger().items.find(i => i.kind === 'swap').id`);
+  await r.run(`ledgerAnswer('ledger-accept-swap', ${JSON.stringify(id)})`);
+  const [[, body]] = r.j('testDecl');
+  assert.deepEqual([body.declare, body.swapPair, body.pair, body.standsFor], ['accept-swap', { a: 'code_101', b: 'code_100', q: 2 }, undefined, { returnId: R.id }]);
+  // גרסה 140 שמרה pair גם על החלפה רגילה (מוצר שלא הוחזר) באותו מחיר — v141 מחיל אותה פעם אחת ולא סוגר לבד בנוסף
+  const L1 = ret('ret_v140', [['450', 2], ['238', 5], ['344', 4]]);
+  const lp = credit('290099192', [['451', 2], ['238', 5], ['344', 4]]);
+  const old = declared({ id: 'decl_swap_v140', declare: 'accept-swap', pair: { a: 'code_450', b: 'code_451', q: 2 }, standsFor: { returnId: L1.id }, writtenBy: '140' });
+  const v = app([lp, old], { returns: [L1] });
+  assert.equal(v.j(`currentLedger().states['decl_swap_v140']`), 'counted');
+  assert.deepEqual(v.open(), []);
+  assert.ok(!v.items().some(i => i.kind === 'autoSwap'), 'ההסכמה חלה — בלי סגירה לבד כפולה');
+  assert.deepEqual(v.j(`['code_450', 'code_451'].map(k => currentLedger().products[k].net)`), [0, 0]);
 });

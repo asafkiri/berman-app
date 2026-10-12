@@ -21,11 +21,11 @@ const credit = (number, rows, docDay) => ({ schema: 1, state: 'accepted', id: 'p
   rows: rows.map(([code, qty], i) => ({ line: i + 1, itemCode: code, barcode: '', description: code, qty, productId: 'code_' + code, matchedBy: 'code' })),
   anchors: { units: rows.reduce((a, x) => a + x[1], 0), lines: rows.length, source: 'printed' }, proof: { unitsOk: true, linesOk: true } });
 // שלוש החזרות מומצאות: החלפה באותו מחיר (נסגרת לבד), החלפה במחיר שונה (לטיפול), וחוסר חלקי אמיתי
-const RETS = [ret('ret_b_same', [['450', 1], ['451', 2], ['238', 6], ['344', 3]], '2026-10-01'),
-  ret('ret_b_diff', [['100', 1], ['101', 2], ['2381', 3], ['349', 6]], '2026-10-02'),
-  ret('ret_b_short', [['458', 7], ['3701', 1], ['339', 6]], '2026-10-03')];
-const PAPERS = [credit('290099201', [['450', 3], ['238', 6], ['344', 3]], '2026-10-02'), credit('290099202', [['100', 3], ['2381', 3], ['349', 6]], '2026-10-03'),
-  credit('290099203', [['3701', 1], ['339', 6]], '2026-10-04')];
+const RETS = [ret('ret_b_same', [['450', 1], ['451', 2], ['1231', 5], ['220', 4]], '2026-10-01'),
+  ret('ret_b_diff', [['100', 1], ['101', 2], ['233', 8], ['1220', 5]], '2026-10-02'),
+  ret('ret_b_short', [['2387', 4], ['401', 2], ['649', 5]], '2026-10-03')];
+const PAPERS = [credit('290099201', [['450', 3], ['1231', 5], ['220', 4]], '2026-10-02'), credit('290099202', [['100', 3], ['233', 8], ['1220', 5]], '2026-10-03'),
+  credit('290099203', [['401', 2], ['649', 5]], '2026-10-04')];
 const documents = new Map();
 const rpc = async (operation, args = {}) => {
   if (operation === 'read') return documents.get(args.path) ?? null;
@@ -84,11 +84,11 @@ try {
   };
   // המאזן: החלפה באותו מחיר — "לידיעה"; במחיר שונה — לטיפול; החוסר החלקי — לטיפול
   assert.deepEqual((await page.evaluate(() => window.t.kinds())).sort(),
-    ['info:autoSwap:code_451', 'problem:returnedNotCredited:code_458', 'problem:swap:code_101']);
+    ['info:autoSwap:code_451', 'problem:returnedNotCredited:code_2387', 'problem:swap:code_101']);
   // ניהול: ההתראה העליונה מראה גם את החוסר, והבאנר של ההחזרות אדום כי יש פער בזיכוי
   const manage = await page.locator('#app').innerText();
   assert.match(manage, /2 דברים לטיפול מול ברמן/);
-  assert.match(manage, /חסר זיכוי על חלומית ארוזה ברמן ×7 מההחזרה של 3\.10 — לבקש זיכוי מהנהג/);
+  assert.match(manage, /חסר זיכוי על פיתות עננים 8 ×4 מההחזרה של 3\.10 — לבקש זיכוי מהנהג/);
   assert.match(manage, /ברמן זיכתה לחם אחיד ברמן ×2 במקום אחיד פרוס ברמן שהחזרת ב-2\.10/);
   assert.match(manage, /יש פער בזיכוי ב-2 תעודות חזרות/);
   await noScroll('ניהול');
@@ -107,9 +107,9 @@ try {
   const hist = await page.locator('#app').innerText();
   assert.match(hist, /זוכה 0 · במקומו זוכה חלה מרובעת ברמן ×2 \(אותו מחיר — התקזז\)/);
   assert.match(hist, /זוכה 0 · חסר 2 · במקומו זוכה לחם אחיד ברמן ×2/);
-  assert.match(hist, /זוכה 0 · חסר 7/);
+  assert.match(hist, /זוכה 0 · חסר 4/);
   assert.match(hist, /חסר זיכוי 2 · עודף זיכוי 2/);
-  assert.match(hist, /חסר זיכוי 7/);
+  assert.match(hist, /חסר זיכוי 4/);
   await noScroll('היסטוריה, כרטיסים פתוחים');
   await page.screenshot({ path: shots + '/berman-v141-history.png', fullPage: true });
   // החזרות: הבאנר אדום — יש פער בזיכוי
