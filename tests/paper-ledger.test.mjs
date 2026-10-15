@@ -16,9 +16,9 @@ const F = JSON.parse(fs.readFileSync(path.join(HERE, 'ledger-2026-10.json'), 'ut
 const FNS = ['r2', 'todayStr', 'storedReceiptDate', 'productCode', 'productListPrice', 'promoFixedPrice', 'promoActive', 'monthEndPromoForProduct',
   'monthEndUnitRebate', 'mtxQty', 'mtxPromoUnit', 'vatRateForDoc', 'priceAt', 'invoiceUnitAt', 'receiptCreditedShortUnits', 'lineOwnCode', 'rangeProductMatrixData',
   'receiptPaperNumber', 'storedReceiptPaperNumbers', 'priceAuditDate', 'ledgerAddDays', 'ledgerReturnDay', 'ledgerLineKey', 'ledgerDocBase', 'paperRowKey',
-  'paperUnits', 'paperFingerprint', 'receiptScanFingerprints', 'paperNumbers', 'paperNumerator', 'paperSameSheet', 'ledgerOffsetIdMatches', 'ledgerPaperStates', 'ledgerDeliveriesSince', 'paperAttach',
-  'productInvoicePriceUnverified', 'ledgerSwapPrice', 'paperLedger', 'ledgerClassify', 'ledgerCorrectionCandidates', 'ledgerDayShort', 'ledgerRowsText', 'paperLabel', 'ledgerItemText', 'ledgerMatrixAdjust'];
-const CONSTS = ["const LEDGER_PHOTO_HINT = ' כשיש נייר — צלם אותו בכפתור \"צלם נייר מהנהג\" למעלה.';", "const LEDGER_FROM_DEFAULT = '2026-09-01';", 'const LEDGER_RETURN_WINDOW_DAYS = 14;', 'const LEDGER_PENDING_DELIVERIES = 3;', 'const LEDGER_RETURN_CREDIT_DELIVERIES = 4;', "const LEDGER_PAPER_KINDS = ['delivery', 'charge', 'credit', 'declared'];"];
+  'paperUnits', 'paperFingerprint', 'bermanScanDateDoubt', 'bermanScanReadDay', 'bermanScanDocDay', 'receiptScanFingerprints', 'paperNumbers', 'paperNumerator', 'paperSameSheet', 'ledgerOffsetIdMatches', 'ledgerPaperStates', 'ledgerDeliveriesSince', 'paperAttach',
+  'productInvoicePriceUnverified', 'ledgerSwapPrice', 'paperLedger', 'ledgerClassify', 'ledgerCorrectionCandidates', 'ledgerDayShort', 'ledgerRowsText', 'paperLabel', 'ledgerItemText', 'paperDayDefaulted', 'paperSameContent', 'receiptPaperIds', 'ledgerMatrixAdjust'];
+const CONSTS = ["const LEDGER_PHOTO_HINT = ' כשיש נייר — צלם אותו בכפתור \"צלם נייר מהנהג\" למעלה.';", "const LEDGER_FROM_DEFAULT = '2026-09-01';", 'const LEDGER_RETURN_WINDOW_DAYS = 14;', 'const LEDGER_PENDING_DELIVERIES = 3;', 'const LEDGER_RETURN_CREDIT_DELIVERIES = 4;', "const LEDGER_PAPER_KINDS = ['delivery', 'charge', 'credit', 'declared'];", 'const BERMAN_ISO_DAY = /^\\d{4}-\\d{2}-\\d{2}$/;'];
 // eslint-disable-next-line no-eval
 const api = eval('let VAT = 0.18; let products = F.products; let promos = [];\n' + extractSource(FNS, CONSTS) + '\n({ ' + FNS.join(', ') + ' })');
 const { paperLedger, ledgerItemText, rangeProductMatrixData, storedReceiptDate, ledgerReturnDay } = api;

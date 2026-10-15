@@ -137,6 +137,30 @@ try {
   const overCard = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(overCard <= 1, 'כרטיס הנייר: גלילה לצדדים ' + overCard);
   await page.screenshot({ path: '/tmp/berman-v131-attach-card.png', fullPage: false });
+  // v142: נייר שהתאריך שלו לא נקרא היטב — נספר על יום הצילום, וההערה גלויה בכרטיס ובבדיקת הנייר, בלי גלילה לצדדים
+  const dateNote = 'תאריך התעודה לא נקרא בוודאות — נקבע תאריך הקליטה; אפשר לשנות';
+  await page.evaluate(() => {
+    window.t.addPaper({ schema: 1, rev: 1, state: 'accepted', timestamp: 2, id: 'paper_day', kind: 'charge', number: '290094993', docDay: '2026-10-05',
+      docDayDefault: { reason: 'disputed', printed: '15/11/2026', day: '2026-10-05', from: 'capture' }, anchors: { units: 1, lines: 1, check: null, source: 'printed' },
+      rows: [{ line: 1, itemCode: '2381', barcode: null, description: '', qty: 1, productId: 'code_2381' }] });
+    window.t.intake([{ captureId: 'capD', status: 'saved', paperId: 'paper_day' }]);
+  });
+  assert.match(await page.locator('#app').innerText(), new RegExp(dateNote + ' \\(נקרא: 15/11/2026\\)'));
+  const overDay = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  assert.ok(overDay <= 1, 'הערת התאריך בכרטיס: גלילה לצדדים ' + overDay);
+  await page.evaluate(() => window.t.review('paper_day'));
+  assert.match(await page.locator('#app').innerText(), new RegExp(dateNote));
+  assert.equal(await page.locator('#reviewDay').inputValue(), '2026-10-05');
+  const overReview = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  assert.ok(overReview <= 1, 'הערת התאריך בבדיקת הנייר: גלילה לצדדים ' + overReview);
+  // v142 (סבב 3): "התאריך נכון" ליד ההערה — נראה, נלחץ, והאישור מחליף את ההערה; בלי גלילה לצדדים
+  const confirmDay = page.locator('[data-role="review-day-confirm"]');
+  assert.ok(await confirmDay.isVisible(), 'כפתור "התאריך נכון"');
+  await confirmDay.click();
+  assert.match(await page.locator('#app').innerText(), /אישרת את התאריך/);
+  assert.equal(await page.locator('[data-role="review-day-confirm"]').count(), 0);
+  const overConfirm = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  assert.ok(overConfirm <= 1, 'אחרי "התאריך נכון": גלילה לצדדים ' + overConfirm);
   assert.deepEqual(errors, []);
   console.log('✓ מאזן מול ברמן בדפדפן: דבר אחד לטיפול, התיקון זוהה לבד; מסך הצילום וכרטיסי התעודות');
 } finally {
