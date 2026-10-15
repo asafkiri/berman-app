@@ -6119,7 +6119,8 @@ function receivingNoDeliveryYet() {
 // התעודה כבר בקליטה שמורה (לפי המספר) — ולא רק "יש באותו יום קליטה שנשמרה בלי נייר"
 function paperInSavedReceipt(p) {
   const n = receiptPaperNumber(p && p.number);
-  return !!n && receipts.some(rc => storedReceiptPaperNumbers(rc).includes(n));
+  // v142: גם לפי הזהות — תעודה בלי מספר שנכנסה לקליטה מקליטת הניירות
+  return (!!n && receipts.some(rc => storedReceiptPaperNumbers(rc).includes(n))) || (!!(p && p.id) && receipts.some(rc => receiptPaperIds(rc).includes(p.id)));
 }
 // תעודות משלוח מאותו יום שנקראו ועוד לא נקלטו — "צרף" בלחיצה, בלי קריאה
 function receivingAwaitingDeliveryPapers() {
@@ -10557,6 +10558,12 @@ async function aiRequestSingleDocScan(token, pages, expected, verificationTarget
   bermanAdaptScanPayload(payload); // המרה לצורת הצנרת לפני כל שימוש
   (payload.scan && payload.scan.documents || []).forEach(doc => {
     if (payload.verification) doc.__bermanOcrVerification = cloneSafe(payload.verification);
+    // v142: שרת v8 — הקריאה הסופית לא קראה תאריך, אבל הקריאות האחרות באותה בקשה קראו יום אחד ואף
+    // קריאה לא חולקת עליו (verification.docDateRead). אותו כלל כמו בקריאת האימות של האפליקציה: היום
+    // הזה נשמר בנפרד (__bermanDocDateRead), ה-docDate של הקריאה לא נדרס.
+    const read = payload.verification && Array.isArray(payload.verification.docDateRead)
+      ? payload.verification.docDateRead.find(x => x && typeof x === 'object' && Number(x.noteIndex) === Number(doc.noteIndex)) : null;
+    if (read && !priceAuditDate(doc.docDate) && BERMAN_ISO_DAY.test(String(read.day || '')) && priceAuditDate(read.day)) doc.__bermanDocDateRead = String(read.day);
   });
   // v142: שרת v7 מוסיף "לא ניתן לאמת את הקריאה: תאריך… בדוק את המספר המודפס" — התאריך כבר לא
   // נבדק מול הנייר (יום הקליטה, עם הערה קצרה), ולכן גם האזהרה הזאת לא מוצגת.
@@ -10733,6 +10740,12 @@ async function aiScanSingleDocPipeline(token, docIndex, opts) {
         const payload = await aiRequestSingleDocScan(token, best.pages, inputDoc, targets);
         const doc = payload.scan && payload.scan.documents && payload.scan.documents[0];
         if (!isCurrent()) throw new Error('scan_session_changed');
+        // v142: שרת v7 עוד דורש תאריך — קריאת אימות שנשארה needs_review רק כי לא קראה תאריך היא קריאה
+        // מאומתת בלי תאריך (כמו v8: verified עם "unreadable"). הממצא על התאריך יורד; היום — לפי הכלל למטה.
+        const pv = payload.verification;
+        const dateOnly = !!(doc && pv && pv.status === 'needs_review' && !pv.error && Array.isArray(pv.issues) && pv.issues.length
+          && pv.issues.every(i => i && i.field === 'docDate'));
+        if (dateOnly) payload.verification = { ...pv, status: 'verified', issues: [], dateOnlyIssues: pv.issues.length };
         if (doc && payload.verification && payload.verification.status === 'verified') {
           payload.reads = earlierReads.concat(payload.reads || []);
           payload.usage = bermanOcrTotalUsage(payload.reads);
@@ -10742,7 +10755,8 @@ async function aiScanSingleDocPipeline(token, docIndex, opts) {
           // v142: הקריאה הנוספת קוראת גם את התאריך — לבד, בלי קריאה שנייה באותה בקשה. היא מחליפה את
           // התעודה, והקריאה הקודמת היא העדות היחידה מולה — אותו כלל כמו בשרת (קריאה בלי תאריך לא
           // מאשרת ולא חולקת): שנוי במחלוקת רק כששתיהן קראו תאריך, ויום אחר.
-          const dayBefore = priceAuditDate(best.doc && best.doc.docDate), dayAfter = priceAuditDate(doc.docDate);
+          // (היום שלפני: המודפס, או היום שהשרת מסר כשהקריאה הסופית שלו לא קראה תאריך — docDateRead)
+          const dayBefore = bermanScanReadDay(best.doc), dayAfter = priceAuditDate(doc.docDate);
           if (dayAfter && dayBefore && dayAfter !== dayBefore) doc.__bermanDocDateDoubt = 'disputed';
           // הקריאה הנוספת לא קראה תאריך, והתאריך של הקריאה הקודמת היה נאמן — היום הזה נשאר (בסימן
           // נפרד; docDate של הקריאה החדשה נשאר כפי שנקרא)
@@ -13248,6 +13262,13 @@ function paperFingerprint(p) {
   const rows = ((p && p.rows) || []).map(r => String((r && (r.itemCode || r.barcode)) || '') + ':' + (Number(r && r.qty) || 0)).sort();
   return [String((p && p.docDay) || ''), paperUnits(p), rows.length, rows.join(',')].join('|');
 }
+// v142: אותו תוכן מודפס. יום שנקבע לנייר כי התאריך שלו לא נקרא היטב (paperDayDefaulted) הוא יום המשלוח או
+// הצילום, לא היום המודפס — שני צילומים של אותו נייר יכולים לקבל ימים שונים. אז משווים בלי היום, והזהות
+// נקבעת לפי המספר/הנומרטור (paperSameSheet) או לפי המספר הזהה (executePaperCreateTask).
+function paperSameContent(a, b) {
+  if (paperFingerprint(a) === paperFingerprint(b)) return true;
+  return (paperDayDefaulted(a) || paperDayDefaulted(b)) && paperFingerprint({ ...a, docDay: '' }) === paperFingerprint({ ...b, docDay: '' });
+}
 // אותה טביעה לכל מסמך שנסרק בתוך קליטה שמורה
 function receiptScanFingerprints(rc) {
   const docs = (rc && rc.paperScan && rc.paperScan.response && rc.paperScan.response.scan && rc.paperScan.response.scan.documents) || [];
@@ -13266,6 +13287,12 @@ function receiptScanFingerprints(rc) {
   return out;
 }
 function paperNumbers(p) { return [p && p.number, p && p.terminalNumber].map(receiptPaperNumber).filter(Boolean); }
+// v142: הניירות שנכנסו לקליטה שמורה מקליטת הניירות — לפי הזהות (perDocument[].paperId), לא לפי המספר או
+// הטביעה: תעודה בלי מספר שהיום שלה נקבע (התאריך לא נקרא היטב) נמצאת בקליטה שלה גם כשהיום אחר.
+function receiptPaperIds(rc) {
+  const per = rc && rc.paperScan && rc.paperScan.response && Array.isArray(rc.paperScan.response.perDocument) ? rc.paperScan.response.perDocument : [];
+  return per.map(x => x && x.paperId).filter(id => typeof id === 'string' && id);
+}
 const LEDGER_PAPER_KINDS = ['delivery', 'charge', 'credit', 'declared'];
 // מספר המסופון (5 הספרות האחרונות) — לזיהוי ניירות סמוכים ולתוויות
 function paperNumerator(p) { const n = String((p && (p.numerator || p.terminalNumber || p.number)) || '').replace(/\D/g, ''); return n ? Number(n.slice(-5)) || 0 : 0; }
@@ -13287,20 +13314,23 @@ function paperSameSheet(a, b) {
 // עד הסוף אינו נספר עד שמאשרים אותו; נייר מגרסה מאוחרת יותר (סוג או schema לא מוכרים) — לא נוגעים בו.
 function ledgerPaperStates(papers, recs, start, asOf) {
   const states = {}, dupOf = {};
-  const nums = new Set(), prints = new Set(), bareDays = new Set();
+  const nums = new Set(), prints = new Set(), bareDays = new Set(), ids = new Set();
   (recs || []).forEach(rc => {
     const n = storedReceiptPaperNumbers(rc);
     n.forEach(x => nums.add(x)); receiptScanFingerprints(rc).forEach(f => prints.add(f));
+    receiptPaperIds(rc).forEach(id => ids.add(id)); // v142
     if (!n.length) bareDays.add(storedReceiptDate(rc));
   });
   const seen = new Map();
-  const ordered = (papers || []).filter(Boolean).slice().sort((a, b) => String(a.docDay || '').localeCompare(String(b.docDay || '')) || (Number(a.timestamp) || 0) - (Number(b.timestamp) || 0));
+  // v142: נייר שהיום שלו נקבע (התאריך לא נקרא היטב) — אחרי הניירות שהיום שלהם נקרא: בכפילות נשאר הנייר עם התאריך שנקרא
+  const ordered = (papers || []).filter(Boolean).slice().sort((a, b) => (paperDayDefaulted(a) ? 1 : 0) - (paperDayDefaulted(b) ? 1 : 0)
+    || String(a.docDay || '').localeCompare(String(b.docDay || '')) || (Number(a.timestamp) || 0) - (Number(b.timestamp) || 0));
   ordered.forEach(p => {
     const rows = Array.isArray(p.rows) ? p.rows : null;
     // v130: נייר "ת.משלוח" קטן (או נייר חיוב 2900) עם מספר — רק לפי המספר: שני ניירות שונים מאותו יום עם אותו
     // תוכן הם שני חיובים, והתוכן של אחד שכבר נקלט לא מעיד על השני
     const byNumber = paperNumbers(p).length > 0 && (p.small === true || (p.kind === 'charge' && /^2900/.test(String(p.number || ''))));
-    const inReceipt = () => paperNumbers(p).some(n => nums.has(n)) || (!byNumber && rows && prints.has(paperFingerprint(p)));
+    const inReceipt = () => ids.has(p.id) || paperNumbers(p).some(n => nums.has(n)) || (!byNumber && rows && prints.has(paperFingerprint(p)));
     let st = 'counted';
     if ((p.kind != null && LEDGER_PAPER_KINDS.indexOf(p.kind) === -1) || Number(p.schema) > 1) st = 'unsupported';
     else if (p.state === 'void') st = 'void';
@@ -13315,9 +13345,10 @@ function ledgerPaperStates(papers, recs, start, asOf) {
       const day = String(p.docDay);
       if (day < start || day > asOf) st = 'outside';
       else {
-        const f = paperFingerprint(p);
+        // v142: לפי התוכן בלי היום, ואז paperSameContent — אותו יום, או יום שנקבע (התאריך לא נקרא היטב) באחד מהם
+        const f = paperFingerprint({ ...p, docDay: '' });
         const distinct = q => (Array.isArray(q.distinctFrom) && q.distinctFrom.indexOf(p.id) !== -1) || (Array.isArray(p.distinctFrom) && p.distinctFrom.indexOf(q.id) !== -1);
-        const prev = (seen.get(f) || []).find(q => q.id !== p.id && paperSameSheet(q, p) && !distinct(q));
+        const prev = (seen.get(f) || []).find(q => q.id !== p.id && paperSameContent(q, p) && paperSameSheet(q, p) && !distinct(q));
         if (prev) { st = 'duplicate'; dupOf[p.id] = prev.id; } else seen.set(f, (seen.get(f) || []).concat([p]));
       }
     }
@@ -13391,8 +13422,10 @@ function paperAttach(p, base, others, all, start) {
   if (!p.forReturnId && rows.length && rows.length <= 2 && rows.every(r => nearRecs(r.k, -1).some(d => recRoom(d, r.k, -1, true) === r.q)))
     return { type: null, id: null, role: null, rowTargets: rows.map(r => targetRow(r, -1)), by: 'auto' };
   let R = null, ask = null, askFit = false, periodOnly = false;
-  if (p.forReturnId) {
-    const f = rets.find(d => d.id === p.forReturnId);
+  // v142: נייר שהיום שלו נקבע לפי החזרה — היא מועמדת תמיד, כמו נייר שצולם מהכרטיס שלה (גם אם היום שלה זז)
+  const linked = p.forReturnId || paperDefaultReturnId(p);
+  if (linked) {
+    const f = rets.find(d => d.id === linked);
     // צולם מכרטיס ההחזרה — רק אם רוב שורותיו באמת נשלחו בה; אחרת לפי הציון. המשתמש בחר אותה בשאלה — תמיד
     if (f && (p.userPick || score(f).score * 2 >= rows.length)) R = f;
   }
@@ -13452,7 +13485,10 @@ function paperLedger(opts) {
     retsAll.filter(rt => { const d = ledgerReturnDay(rt); return d >= wideFrom && d < start; })).concat(base);
   const byIdWide = new Map(baseWide.map(d => [d.type + ':' + d.id, d]));
   const seenIds = new Set();
-  const papers = (opts.papers || []).filter(p => p && p.id && !seenIds.has(p.id) && (seenIds.add(p.id), true));
+  // v142: נייר שהיום שלו נקבע לפי החזרה — ביום שלה עכשיו (paperDayFollowLinked)
+  const retDays = new Map(retsAll.map(rt => [rt.id, ledgerReturnDay(rt)]));
+  const papers = (opts.papers || []).filter(p => p && p.id && !seenIds.has(p.id) && (seenIds.add(p.id), true))
+    .map(p => paperDayFollowLinked(p, id => retDays.get(id)));
   const states = ledgerPaperStates(papers, recsAll, start, asOf);
   const dupOf = states.__dupOf || {}; delete states.__dupOf;
   // שיוך: מה שהמשתמש בחר נשמר; כל השאר מחושב מחדש בכל פעם, באותו סדר — לא תלוי בסדר הצילום
@@ -13940,7 +13976,11 @@ function ledgerCorrectionCandidates(k, chargeP, q, c, legacy) {
   if (!chargeP || (!nc && !legacy) || !(q > 0)) return out;
   if (!legacy && c.unsureDays && c.unsureDays.has(String(chargeP.docDay))) return out;
   for (const p of c.placed || []) {
-    if (p.kind !== 'credit' || String(p.docDay) !== String(chargeP.docDay)) continue;
+    // v142: יום שנקבע לאחד הניירות (התאריך לא נקרא היטב) אינו יום מודפס — "אותו יום" לא ידוע, והנומרטורים
+    // הסמוכים הם הראיה שהודפסו יחד. אז גם ספק ביום של נייר הזיכוי עוצר, וגם חוסר בקליטה של כל אחד משני הימים.
+    const sameDay = String(p.docDay) === String(chargeP.docDay);
+    if (p.kind !== 'credit' || !(sameDay || paperDayDefaulted(p) || paperDayDefaulted(chargeP))) continue;
+    if (!legacy && !sameDay && c.unsureDays && c.unsureDays.has(String(p.docDay))) continue;
     const np = paperNumerator(p);
     if (legacy ? (np && nc && Math.abs(np - nc) > 3) : (!np || Math.abs(np - nc) > 3)) continue;
     if (!legacy && p.attach && p.attach.tiePick) continue;
@@ -13970,7 +14010,7 @@ function ledgerCorrectionCandidates(k, chargeP, q, c, legacy) {
       const t = (p.attach.rowTargets || []).find(z => z && z.line === i);
       if (!t || t.type !== 'return') return;
       // שורת הזיכוי עצמה תואמת לחוסר באותו יום בקליטה — זה זיכוי לחוסר, לא זיכוי משלים של ההחזרה
-      if (!legacy && (c.recs || []).some(d => d.day === String(p.docDay) && d.rows[y] && d.rows[y].billed - d.rows[y].received >= q)) return;
+      if (!legacy && (c.recs || []).some(d => (d.day === String(p.docDay) || d.day === String(chargeP.docDay)) && d.rows[y] && d.rows[y].billed - d.rows[y].received >= q)) return;
       if (R.rows[y] && R.rows[y].cred >= q) out.push({ returnId: retId, creditPaperId: p.id, other: y, units: q, slot: p.id + '#' + i });
     });
   }
@@ -14222,7 +14262,14 @@ async function executePaperCreateTask(task) {
         if (mine) return 'deleted';
       } else {
         if (mine) { if ((Number(cur.rev) || 1) < (Number(task.paper.rev) || 1)) tx.set(ref, task.paper); return 'same'; }
-        if (paperFingerprint(cur) === paperFingerprint(task.paper)) {
+        // v142: אותו תוכן — גם כשהיום של אחד מהם נקבע (התאריך לא נקרא היטב) ולכן שונה. צילום שקרא את היום
+        // המודפס של נייר שנשמר עם יום שנקבע — אותו נייר, שנקרא טוב יותר: מחליף אותו (אם העובד לא שייך אותו בעצמו)
+        const same = paperSameContent(cur, task.paper);
+        const readBetter = same && paperFingerprint(cur) !== paperFingerprint(task.paper) && paperDayDefaulted(cur) && !paperDayDefaulted(task.paper);
+        if (readBetter && task.paper.state === 'accepted' && !(cur.attach && cur.attach.by === 'user')) {
+          tx.set(ref, task.paper); if (task.scan) tx.set(doc(db, ...dataPath('paperScans', task.id)), task.scan); return 'replaced';
+        }
+        if (same && !readBetter) {
           if (cur.state !== 'accepted' && task.paper.state === 'accepted') { tx.set(ref, task.paper); if (task.scan) tx.set(doc(db, ...dataPath('paperScans', task.id)), task.scan); return 'replaced'; }
           return 'duplicate';
         }
@@ -14630,7 +14677,7 @@ function bermanPaperRecord(result, ctx) {
     schema: 1, rev: 1, id: paperDocId(number, ctx.captureId), kind, kindKnown: !!kind, number: number || null, terminalNumber: terminal || null,
     numerator: doc.numerator || null, headerText: header || null, docDay, printedTime: null, rows, ...(small ? { small: true } : {}),
     // v142: היום נקבע לפי המשלוח ולא לפי הנייר — למה, מה נקרא (כפי שהודפס/נקרא), ומאיזה יום
-    ...(dateDoubt ? { docDayDefault: { reason: dateDoubt, printed: readText, day: docDay, from: delivery.from || 'receiving' } } : {}),
+    ...(dateDoubt ? { docDayDefault: { reason: dateDoubt, printed: readText, day: docDay, from: delivery.from || 'receiving', ...(delivery.returnId ? { returnId: delivery.returnId } : {}) } } : {}),
     anchors: { units: anchor.printedUnits, lines: anchor.printedLines, check, source: 'printed' },
     proof: { unitsOk: anchor.units === true, linesOk: anchor.lines === true, checkOk, scanStatus: ver ? ver.status : null },
     state: accepted ? 'accepted' : 'needs-review', otherPapersVisible: doc.otherPapersVisible === true,
@@ -14651,7 +14698,8 @@ function bermanPaperRecord(result, ctx) {
         const g = paperAttachFlowDay(again);
         if (g && g.type === f.type && g.id === f.id && g.day === f.day) {
           paper.docDay = f.day; paper.attach = again;
-          paper.docDayDefault = { ...paper.docDayDefault, day: f.day, from: f.from };
+          // returnId: היום הולך אחרי ההחזרה (paperDayFollowLinked) — גם כשהתאריך שלה נקבע אחר כך
+          paper.docDayDefault = { ...paper.docDayDefault, day: f.day, from: f.from, ...(f.type === 'return' ? { returnId: f.id } : {}) };
         }
       }
     } catch (e) { console.error('paper attach day failed', e); }
@@ -14673,7 +14721,7 @@ function paperDeliveryDay(item, receiving) {
   if (item && item.forReturnId) {
     const rt = (returns || []).find(r => r && r.id === item.forReturnId);
     const d = rt ? ledgerReturnDay(rt) : '';
-    if (BERMAN_ISO_DAY.test(d) && priceAuditDate(d) && d <= today) return { day: d, latest: today, from: 'return', flow: true };
+    if (BERMAN_ISO_DAY.test(d) && priceAuditDate(d) && d <= today) return { day: d, latest: today, from: 'return', flow: true, returnId: rt.id };
   }
   if (receiving && receiptAttachTarget && BERMAN_ISO_DAY.test(String(receiptDocDate || '')) && priceAuditDate(receiptDocDate) && receiptDocDate <= today) return { day: receiptDocDate, latest: today, from: 'receiving', flow: true };
   return { day: today, latest: today, from: 'receiving' };
@@ -14701,6 +14749,24 @@ function paperDayDefaulted(p) {
   const d = p && p.docDayDefault;
   return !!(d && typeof d === 'object' && p.docDay && String(d.day || '') === String(p.docDay));
 }
+// v142: ההחזרה שהיום של הנייר נלקח ממנה (נייר זיכוי/חיוב שמשתייך לבד להחזרה, או שצולם מכרטיס שלה), כל עוד
+// היום עדיין נקבע ולא העובד קבע אותו. שיוך להחזרה שהעובד בחר — היא. null — אין.
+function paperDefaultReturnId(p) {
+  if (!paperDayDefaulted(p)) return null;
+  if (p.attach && p.attach.by === 'user' && !p.attach.ask) return p.attach.type === 'return' && p.attach.id ? String(p.attach.id) : null;
+  const d = p.docDayDefault;
+  return (d.returnId && String(d.returnId)) || (d.from === 'return' && p.forReturnId ? String(p.forReturnId) : null);
+}
+// v142: היום שנקבע לנייר לפי ההחזרה הולך אחרי ההחזרה: תאריך התעודה שלה נקבע לרוב בדיעבד (openReturnDateEdit),
+// ויום שהוקפא היה מוציא את הנייר מחלון השיוך שלה (paperAttach מחפש החזרות עד יום הנייר) — ואז הוא נצמד להחזרה
+// ישנה יותר, אולי בחודש קודם. dayOfReturn(id) — היום של ההחזרה עכשיו. נייר אחר — כמו שהוא.
+function paperDayFollowLinked(p, dayOfReturn) {
+  const id = paperDefaultReturnId(p);
+  if (!id) return p;
+  const day = String(dayOfReturn(id) || '');
+  if (!BERMAN_ISO_DAY.test(day) || !priceAuditDate(day) || day === String(p.docDay)) return p;
+  return { ...p, docDay: day, docDayDefault: { ...p.docDayDefault, day } };
+}
 // ההערה על נייר כזה
 function paperDayDefaultNote(p) {
   if (!paperDayDefaulted(p)) return '';
@@ -14722,7 +14788,8 @@ function paperAttachNow(paper) {
   if (!paper || !(paper.kind === 'credit' || paper.kind === 'charge') || !paper.docDay) return null;
   const lg = currentLedger(), day = paper.docDay;
   const recs = receipts.filter(rc => { const d = storedReceiptDate(rc); return d >= lg.start && d >= ledgerAddDays(day, -LEDGER_RETURN_WINDOW_DAYS) && d <= ledgerAddDays(day, 7); });
-  const rets = returns.filter(rt => { const d = ledgerReturnDay(rt); return rt.id === paper.forReturnId || (d >= lg.start && d >= ledgerAddDays(day, -LEDGER_RETURN_WINDOW_DAYS) && d <= day); });
+  const linked = paperDefaultReturnId(paper); // v142
+  const rets = returns.filter(rt => { const d = ledgerReturnDay(rt); return rt.id === paper.forReturnId || rt.id === linked || (d >= lg.start && d >= ledgerAddDays(day, -LEDGER_RETURN_WINDOW_DAYS) && d <= day); });
   return paperAttach(paper, ledgerDocBase(recs, rets), (lg.placed || []).filter(p => p.id !== paper.id), null, lg.start);
 }
 // v126: מסך הניירות אחד לכל מקום — מה שקורה לנייר נקבע לפי הנייר, לא לפי המסך שממנו צולם
@@ -15055,9 +15122,9 @@ function receivingDeliveryRoute(scan, paper, item, opts) {
     if (receiptPaperScanState === 'ok' || sameCap || !selfOk || docs.length !== 1) return { action: 'already' };
     better = true;
   }
-  // 2. כבר נקלטה בתעודה שמורה
-  if (num) {
-    const rc = receipts.find(r => r && !(receiptAttachTarget && r.id === receiptAttachTarget.id) && storedReceiptPaperNumbers(r).includes(num));
+  // 2. כבר נקלטה בתעודה שמורה (v142: גם לפי הזהות — תעודה בלי מספר)
+  {
+    const rc = receipts.find(r => r && !(receiptAttachTarget && r.id === receiptAttachTarget.id) && ((num && storedReceiptPaperNumbers(r).includes(num)) || (paper.id && receiptPaperIds(r).includes(paper.id))));
     if (rc) return { action: 'refuse', reason: 'received', receipt: rc };
   }
   // 3–4. אי אפשר לכתוב עכשיו, או שקריאה אחרת רצה בקליטה — מחכים, בלי לגעת בכלום
@@ -22499,6 +22566,7 @@ async function localReceivingRetry() {
     const result = await localReceivingFinalizer.finish(attempt);
     if (result.ok) {
       localReceivingAckPapers(attempt.extras);
+      paperDeliveryDaysFollowReceipt(attempt.data); // v142: ברקע
       localReceivingSavedFence = { id: attempt.recordId, fingerprint: attempt.fingerprint };
       await receiptAfterSave(attempt.recordId, attempt.data, receiptAttachTarget, attempt.data.noDoc);
     } else {
@@ -22597,19 +22665,68 @@ function localReceivingRestore(index) {
 function localReceivingAckPapers(extras) {
   for (const extra of extras || []) {
     if (extra.collection !== 'papers') continue;
-    if (!papers.some(p => p.id === extra.id)) papers.push(cloneSafe(extra.data));
-    for (const rec of Object.values(paperLocalResults())) if (rec && rec.paper && rec.paper.id === extra.id && paperFingerprint(rec.paper) === paperFingerprint(extra.data)) paperPatchLocal(rec.captureId, cur => cur ? { ...cur, ackedAt: Date.now(), outcome: 'receipt-finalized' } : cur);
+    const i = papers.findIndex(p => p.id === extra.id);
+    if (i === -1) papers.push(cloneSafe(extra.data));
+    else if (extra.expected && !extra.guardOnly) papers[i] = cloneSafe(extra.data); // v142: עדכון של נייר שכבר בענן (היום של הקליטה)
+    for (const rec of Object.values(paperLocalResults())) {
+      if (!rec || !rec.paper || rec.paper.id !== extra.id) continue;
+      // v142: מה שנכתב עם הקליטה יכול לשאת את היום שלה (paperDeliveryDayForReceipt) — העותק במכשיר עובר אליו
+      const moved = paperDeliveryDayForReceipt(rec.paper, extra.data && extra.data.docDay);
+      if (paperFingerprint(moved || rec.paper) !== paperFingerprint(extra.data)) continue;
+      paperPatchLocal(rec.captureId, cur => cur ? { ...cur, ...(moved && cur.paper ? { paper: { ...cur.paper, docDay: moved.docDay, docDayDefault: moved.docDayDefault } } : {}), ackedAt: Date.now(), outcome: 'receipt-finalized' } : cur);
+    }
   }
   ledgerInvalidate();
 }
-function localReceivingPaperExtras() {
+// v142 (החלטת ברמן): תעודת משלוח שהיום שלה נקבע כי התאריך לא נקרא היטב — היום שלה הוא היום של הקליטה שהיא
+// נכנסה אליה: קליטה חדשה, או קליטה שנשמרה קודם בלי תעודה ("אותו יום שנקלט ללא תעודה"). המודפס לא משתנה,
+// וגם לא סיבת הספק. null — אין מה להזיז (תאריך שנקרא או שהעובד קבע — לא זז).
+function paperDeliveryDayForReceipt(p, day) {
+  if (!p || p.kind !== 'delivery' || !paperDayDefaulted(p) || !BERMAN_ISO_DAY.test(String(day || '')) || !priceAuditDate(day) || String(p.docDay) === String(day)) return null;
+  return { ...p, docDay: String(day), docDayDefault: { ...p.docDayDefault, day: String(day), from: 'receiving' } };
+}
+// v142: תעודות משלוח שכבר היו בענן (צולמו מחוץ לקליטה, ונכנסו אליה ב"לקליטה") — היום שנקבע להן עובר ליום של
+// הקליטה שנשמרה. אחרי השמירה וברקע: לא עוצר אותה ולא משנה אותה. גם בלי העדכון (בלי רשת, טלפון בגרסה ישנה)
+// הנייר נמצא בקליטה לפי הזהות (receiptPaperIds) — המאזן לא מבקש לקלוט אותו שוב.
+// טרנזקציה שבודקת את העותק בענן: רק כל עוד היום שלו עדיין נקבע (יום שהעובד קבע בינתיים — גובר), ובלי תור
+// לניסיון חוזר שהיה דורס אותו מאוחר יותר.
+async function paperDeliveryDaysFollowReceipt(data) {
+  if (!db || !navigator.onLine) return;
+  const day = storedReceiptDate(data);
+  for (const id of receiptPaperIds(data)) {
+    if (!paperDeliveryDayForReceipt(papers.find(p => p && p.id === id && !p.deleted), day)) continue;
+    try {
+      const next = await runTransaction(db, async tx => {
+        const ref = doc(db, ...dataPath('papers', id));
+        const snap = await tx.get(ref);
+        const cur = snap.exists() ? snap.data() : null;
+        const moved = cur && !cur.deleted ? paperDeliveryDayForReceipt(cur, day) : null;
+        if (!moved) return null;
+        const out = { ...cur, docDay: moved.docDay, docDayDefault: moved.docDayDefault, rev: (Number(cur.rev) || 1) + 1 };
+        tx.set(ref, out);
+        return out;
+      });
+      if (next) { papers = papers.map(p => p && p.id === id ? { ...p, ...next } : p); ledgerInvalidate(); }
+    } catch (e) { console.error('paper day follow receipt failed', e); }
+  }
+}
+// day — היום של הקליטה שנשמרת (storedReceiptDate)
+function localReceivingPaperExtras(day) {
   const per = aiScanResponse && aiScanResponse.perDocument || [], ids = new Set(per.map(p => p && p.paperId).filter(Boolean));
   const extras = [], records = [];
   for (const rec of Object.values(paperLocalResults())) {
     if (!rec || !rec.paper || rec.ackedAt || rec.discarded || rec.paper.kind !== 'delivery' || !ids.has(rec.paper.id)) continue;
     const current = papers.find(p => p.id === rec.paper.id);
-    if (current && !current.deleted && paperFingerprint(current) === paperFingerprint(rec.paper)) { extras.push({ collection: 'papers', id: current.id, data: cloneSafe(current), expected: cloneSafe(current), guardOnly: true }); records.push(rec); continue; }
-    extras.push({ collection: 'papers', id: rec.paper.id, data: cloneSafe(rec.paper), expected: null });
+    if (current && !current.deleted && paperFingerprint(current) === paperFingerprint(rec.paper)) {
+      // v142: אותו נייר כבר בענן — היום שנקבע לו עובר ליום הקליטה באותה טרנזקציה, מול אותו מצב צפוי
+      const moved = paperDeliveryDayForReceipt(current, day);
+      extras.push(moved ? { collection: 'papers', id: current.id, data: cloneSafe(moved), expected: cloneSafe(current) }
+        : { collection: 'papers', id: current.id, data: cloneSafe(current), expected: cloneSafe(current), guardOnly: true });
+      records.push(rec); continue;
+    }
+    // v142: הנייר נכתב עם הקליטה ביום שלה. העותק במכשיר לא משתנה לפני השמירה (הוא חלק מטביעת הקליטה) —
+    // הוא עובר ליום הזה כשהשמירה מאושרת (localReceivingAckPapers)
+    extras.push({ collection: 'papers', id: rec.paper.id, data: cloneSafe(paperDeliveryDayForReceipt(rec.paper, day) || rec.paper), expected: null });
     if (rec.scan) extras.push({ collection: 'paperScans', id: rec.paper.id, data: cloneSafe(rec.scan), expected: null });
     records.push(rec);
   }
@@ -22622,7 +22739,7 @@ async function finishSharedReceipt(id, data) {
   if (!saveReceiptDraft()) return false;
   getLocalReceivingFinalizer();
   const fingerprint = localReceivingFingerprint(), sessionId = receivingSessionOf({ receiptDraftId, receiptAttachTarget });
-  const staged = localReceivingPaperExtras();
+  const staged = localReceivingPaperExtras(storedReceiptDate(data));
   sharedReceiptFinalizing = true;
   try {
     const result = await localReceivingFinalizer.finish({ sessionId, recordId: id, data, expected: receiptAttachTarget && receiptAttachTarget.expectedReceipt || null, fingerprint, extras: staged.extras });
@@ -22633,6 +22750,7 @@ async function finishSharedReceipt(id, data) {
       if (!papers.some(p => p.id === rec.paper.id)) papers.push(cloneSafe(rec.paper));
     }
     ledgerInvalidate();
+    paperDeliveryDaysFollowReceipt(data); // v142: ברקע — לא עוצר ולא משנה את סיום השמירה
     if (fingerprint !== localReceivingFingerprint() || receiptDraftId !== id) { showToast('התעודה נשמרה; שינויים מאוחרים נשארו בטלפון לבדיקה.', null, null, 4500); return false; }
     localReceivingSavedFence = { id, fingerprint };
     return true;

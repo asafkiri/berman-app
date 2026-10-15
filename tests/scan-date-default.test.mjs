@@ -436,7 +436,7 @@ test('נייר זיכוי שהתאריך שלו לא נקרא היטב ומשת�
     assert.equal(p.state, 'accepted', reason);
     assert.equal(p.attach.type, 'return'); assert.equal(p.attach.id, R1004);
     assert.equal(p.docDay, '2026-10-04', 'היום של ההחזרה שהנייר משתייך אליה');
-    assert.deepEqual(p.docDayDefault, { reason, printed: reason === 'disputed' ? '06/10/2026' : null, day: '2026-10-04', from: 'return' });
+    assert.deepEqual(p.docDayDefault, { reason, printed: reason === 'disputed' ? '06/10/2026' : null, day: '2026-10-04', from: 'return', returnId: R1004 });
     assert.ok(r.run('paperIntakeItemHtml(paperIntake.items[0])').includes(NOTE_RETURN));
     assert.equal(r.requests.length, 1, 'בלי קריאה נוספת');
     assert.equal(r.run(`currentLedger().states['paper_290095142']`), 'counted');
@@ -565,4 +565,269 @@ test('קריאת האימות של האפליקציה: קריאה בלי תאר�
   // כל בקשת סריקה אומרת לשרת שהאפליקציה קובעת יום לתאריך שלא נקרא היטב (dateDefaults) — גם בקשת האימות
   assert.ok(b.requests.every(q => JSON.parse(q.body).dateDefaults === true));
   assert.equal(JSON.parse(b.requests[1].body).mode, 'verify');
+});
+
+// ===== אחרי סבב הסקירה השני =====
+// כל בדיקה כאן נכשלת כשהתיקון שלה מוחזר.
+const saveReceipt = async r => {
+  r.run('finishReceipt()');
+  assert.ok(r.run('!!pendingReceipt'), 'הסיכום נפתח');
+  await r.run('confirmReceipt()');
+  const saved = r.writes.filter(w => w.op === 'set' && w.path && w.path.at(-2) === 'receipts').at(-1);
+  assert.ok(saved, 'הקליטה נשמרה');
+  return saved;
+};
+const verifyRead = (docDate, flag, extra = {}) => {
+  const v = credit142({ docDate }, { status: 'verified', escalationAttempted: true, primaryReads: 0, readCount: 1, docDateUnreliable: flag ? [{ noteIndex: 0, reason: flag }] : [], ...extra });
+  v.reads = [{ model: 'sol', escalation: true }];
+  return v;
+};
+const withUnknownRow = resp => { Object.assign(resp.scan.documents[0].rows[3], { itemCode: '99999', barcode: '7290000099999' }); return resp; };
+
+test('שרת v8 docDateRead: הקריאה הסופית לא קראה תאריך, והקריאה האחרת קראה יום שאף קריאה לא חולקת עליו — היום הזה נאמן (לא נקבע יום הקליטה), והמודפס לא נדרס', async () => {
+  const r = paperApp([credit142({ docDate: null }, { docDateRead: [{ noteIndex: 0, day: '2026-10-04' }] })], { returns: [] });
+  await intake(r);
+  const p = paperOf(r);
+  assert.equal(p.state, 'accepted');
+  assert.equal(p.docDay, '2026-10-04', 'היום שנקרא');
+  assert.equal(p.docDayDefault, undefined);
+  const kept = json(r, 'paperIntake.items[0].scan.doc');
+  assert.equal(kept.docDate, null, 'docDate כפי שנקרא');
+  assert.equal(kept.__bermanDocDateRead, '2026-10-04');
+  // תעודת משלוח מאתמול שהקריאה הסופית שלה פספסה את התאריך — הקליטה החדשה מאמצת את היום (תעודה של אתמול), כמו תאריך נאמן
+  const resp = deliveryV8({ docDate: null }, null);
+  resp.verification.docDateRead = [{ noteIndex: 0, day: iso(days(-1)) }];
+  const y = oneButtonApp(resp);
+  await receive(y);
+  assert.equal(y.run('receiptDocDate'), iso(days(-1)), 'הקליטה על היום שנקרא — לא על יום הצילום');
+  assert.equal(y.run('receiptScanDateDoubts().length'), 0);
+  // קריאת האימות של האפליקציה (על זהות) לא קראה תאריך — היום שנמסר ב-docDateRead נשאר
+  const v = paperApp([withUnknownRow(credit142({ docDate: null }, { docDateRead: [{ noteIndex: 0, day: '2026-10-04' }] })), verifyRead(null, 'unreadable')], { returns: [] });
+  await intake(v);
+  assert.equal(v.requests.length, 2);
+  assert.equal(paperOf(v).docDay, '2026-10-04');
+  assert.equal(paperOf(v).docDayDefault, undefined);
+  assert.equal(json(v, 'paperIntake.items[0].scan.doc').__bermanDocDateRead, '2026-10-04');
+  // שומר: יום ב-docDateRead לא נכנס כשהקריאה הסופית קראה תאריך משלה, ולא כשהוא אינו יום אמיתי
+  const own = paperApp([credit142({ docDate: '05/10/2026' }, { docDateRead: [{ noteIndex: 0, day: '2026-10-04' }] })], { returns: [] });
+  await intake(own);
+  assert.equal(paperOf(own).docDay, '2026-10-05');
+  assert.equal(json(own, 'paperIntake.items[0].scan.doc').__bermanDocDateRead, undefined);
+  const junk = paperApp([credit142({ docDate: null }, { docDateUnreliable: [{ noteIndex: 0, reason: 'unreadable' }], docDateRead: [{ noteIndex: 0, day: '2026-02-31' }] })], { returns: [] });
+  await intake(junk);
+  assert.equal(paperOf(junk).docDay, TODAY);
+  assert.equal(paperOf(junk).docDayDefault.reason, 'unreadable');
+});
+
+test('שרת v7: קריאת האימות של האפליקציה שנשארה needs_review רק כי אין בה תאריך — מתקבלת (השורה שתוקנה נכנסת), התאריך כמו בקריאה בלי תאריך', async () => {
+  const v7 = (issues) => { const v = verifyRead(null, null, { status: 'needs_review', issues }); v.serviceVersion = 7; delete v.verification.docDateUnreliable; return v; };
+  const first7 = () => { const f = withUnknownRow(credit142({}, {})); f.serviceVersion = 7; delete f.verification.docDateUnreliable; return f; };
+  const r = paperApp([first7(), v7([{ noteIndex: 0, field: 'docDate', reason: 'unreadable' }])], { returns: [] });
+  await intake(r);
+  assert.equal(r.requests.length, 2);
+  const p = paperOf(r);
+  assert.equal(p.state, 'accepted', 'השורה תוקנה — שום דבר לא עוצר');
+  assert.ok(p.rows.every(x => x.productId), 'כל השורות זוהו');
+  assert.ok(!p.review);
+  assert.equal(p.docDay, '2026-10-04', 'היום שהקריאות הקודמות קראו');
+  assert.equal(p.docDayDefault, undefined);
+  const doc = json(r, 'paperIntake.items[0].scan.doc');
+  assert.equal(p.rows[3].itemCode, '238', 'הקריאה של האימות נשמרה');
+  assert.equal(doc.docDate, null, 'המודפס כפי שנקרא');
+  assert.equal(doc.__bermanOcrVerification.status, 'verified');
+  assert.ok(!doc.__bermanOcrVerification.issues.some(i => i.field === 'docDate'));
+  // שומר: ממצא תאריך לצד ממצא אחר — הקריאה לא אומתה, הקריאה הקודמת נשארת (והממצא על התאריך לא נדבק אליה)
+  const g = paperApp([first7(), v7([{ noteIndex: 0, field: 'docDate', reason: 'unreadable' }, { noteIndex: 0, field: 'quantity', reason: 'unreadable', rowIndex: 0, sourcePage: 1, lineNumber: 1 }])], { returns: [] });
+  await intake(g);
+  assert.equal(paperOf(g).state, 'needs-review');
+  const kept = json(g, 'paperIntake.items[0].scan.doc');
+  assert.equal(paperOf(g).rows[3].itemCode, '99999', 'הקריאה הקודמת');
+  assert.ok(!kept.__bermanOcrVerification.issues.some(i => i.field === 'docDate'));
+});
+
+test('נייר זיכוי שהיום שלו נקבע לפי ההחזרה — כשתאריך ההחזרה נקבע אחר כך (openReturnDateEdit), הנייר נשאר שלה והיום הולך איתה; הזיכוי לא עובר לחודש אחר', async () => {
+  const rets = L.returns.map(x => x.id === R1004 ? { ...x, docDate: '2026-10-03' } : x);
+  const r = paperApp([credit142({ docDate: null }, { docDateUnreliable: [{ noteIndex: 0, reason: 'unreadable' }] })], { ...pinned, returns: rets });
+  await intake(r);
+  const p = paperOf(r);
+  assert.equal(p.attach.id, R1004);
+  assert.equal(p.docDay, '2026-10-03');
+  assert.equal(p.docDayDefault.returnId, R1004, 'ההחזרה שהיום נלקח ממנה');
+  // העובד קובע לתעודת ההחזרה את התאריך המודפס (4.10)
+  r.run(`returns = returns.map(x => x.id === '${R1004}' ? { ...x, docDate: '2026-10-04' } : x); ledgerInvalidate();`);
+  const lg = json(r, `(() => { const lg = currentLedger(); const pl = lg.placed.find(x => x.id === 'paper_290095142');
+    return { st: lg.states['paper_290095142'], attach: pl && pl.attach, day: pl && pl.docDay,
+      adj: ledgerMatrixAdjust(lg, '2026-09-01', '2026-10-15', papers).filter(x => x.papers.includes('paper_290095142')).map(x => x.day) }; })()`);
+  assert.equal(lg.st, 'counted');
+  assert.equal(lg.attach.type, 'return');
+  assert.equal(lg.attach.id, R1004, 'לא נצמד להחזרה ישנה יותר');
+  assert.equal(lg.day, '2026-10-04', 'היום הולך אחרי ההחזרה');
+  assert.ok(lg.adj.every(d => d >= '2026-10-01'), 'שום זיכוי לא עבר לספטמבר: ' + lg.adj.join(','));
+  // אותו דבר לנייר שצולם מכרטיס ההחזרה (forReturnId)
+  const c = paperApp([credit142({ docDate: null }, { docDateUnreliable: [{ noteIndex: 0, reason: 'unreadable' }] })], { ...pinned, returns: rets });
+  await intake(c, R1004);
+  assert.equal(paperOf(c).docDay, '2026-10-03');
+  c.run(`returns = returns.map(x => x.id === '${R1004}' ? { ...x, docDate: '2026-10-04' } : x); ledgerInvalidate();`);
+  assert.equal(c.run(`currentLedger().placed.find(x => x.id === 'paper_290095142').docDay`), '2026-10-04');
+  // החזרה זהה שנרשמה אחר כך באותו יום — הנייר נשאר של ההחזרה שהיום שלו נלקח ממנה (לא הופך לשאלה, לא עובר)
+  r.run(`returns = returns.concat([{ ...returns.find(x => x.id === '${R1004}'), id: 'returns_same_day_copy', timestamp: 99 }]); ledgerInvalidate();`);
+  const again = json(r, `(() => { const lg = currentLedger(); const pl = lg.placed.find(x => x.id === 'paper_290095142'); return { st: lg.states['paper_290095142'], id: pl && pl.attach.id }; })()`);
+  assert.equal(again.st, 'counted');
+  assert.equal(again.id, R1004);
+  // שומר: יום שהעובד קבע (docDayBy) לא זז עם ההחזרה
+  const u = json(r, `paperDayFollowLinked({ ...paperFind('paper_290095142').paper, docDay: '2026-10-02', docDayBy: 'user' }, id => '2026-10-04').docDay`);
+  assert.equal(u, '2026-10-02');
+});
+
+test('כפילות: אותו נייר צולם שוב — המספר נקרא בספרה שגויה והתאריך לא נקרא (היום נקבע) — נספר פעם אחת; שני צילומים מטושטשים של אותו מספר בימים שונים — "אותו נייר", לא התנגשות', async () => {
+  const r = paperApp([credit142()], pinned);
+  const rows = [['101', 13], ['233', 1], ['344', 2], ['238', 1]].map(([code, qty], i) => ({ line: i + 1, itemCode: code, barcode: null, description: '', qty, productId: 'code_' + code }));
+  const A = { schema: 1, state: 'accepted', timestamp: 1, id: 'paper_290095142', kind: 'credit', number: '290095142', numerator: '95142', docDay: '2026-10-04', rows };
+  const B = { ...A, id: 'paper_290095147', number: '290095147', timestamp: 2, docDay: '2026-10-15', docDayDefault: { reason: 'unreadable', printed: null, day: '2026-10-15', from: 'receiving' } };
+  const states = ps => json(r, `paperLedger({ recs: receipts, rets: returns, papers: ${JSON.stringify(ps)}, from: '2026-09-01', asOf: '2026-10-15' }).states`);
+  let st = states([A, B]);
+  assert.equal(st[A.id], 'counted');
+  assert.equal(st[B.id], 'duplicate', 'אותו נייר — היום שנקבע אינו יום מודפס');
+  // גם כשהנייר שנקבע לו יום קודם בסדר (יום ההחזרה) — אחד בלבד נספר, והוא זה עם התאריך שנקרא
+  st = states([A, { ...B, docDay: '2026-10-03', docDayDefault: { ...B.docDayDefault, day: '2026-10-03' } }]);
+  assert.equal(st[A.id], 'counted');
+  assert.equal(st[B.id], 'duplicate');
+  // שומר: שני ניירות אמיתיים (כל מספר תואם לנומרטור שלו) — שניהם נספרים, גם כשהיום של אחד נקבע
+  st = states([A, { ...B, numerator: '95147' }]);
+  assert.equal(st[B.id], 'counted');
+  // שומר: בלי יום שנקבע — ימים שונים הם ניירות שונים (כמו קודם)
+  st = states([A, { ...B, docDayDefault: undefined }]);
+  assert.equal(st[B.id], 'counted');
+  // הכתיבה לענן: אותו מספר, צילום אחר, היום נקבע בשני ימים שונים — אותו נייר ("duplicate"), לא "נייר אחר כבר נשמר"
+  const store = new Map();
+  const cloud = runtime({ globals: {
+    doc: (_db, ...seg) => ({ path: seg.join('/'), id: seg.at(-1) }),
+    runTransaction: async (_db, fn) => fn({ get: async ref => ({ id: ref.id, exists: () => store.has(ref.path), data: () => structuredClone(store.get(ref.path)) }),
+      set: (ref, d) => store.set(ref.path, structuredClone(d)) }) } });
+  const blur = (day, cap) => ({ ...A, numerator: null, captureId: cap, docDay: day, docDayDefault: { reason: 'unreadable', printed: null, day, from: 'receiving' } });
+  assert.equal(await cloud.run(`executePaperCreateTask(${JSON.stringify({ id: A.id, paper: blur('2026-10-14', 'c1') })})`), 'created');
+  assert.equal(await cloud.run(`executePaperCreateTask(${JSON.stringify({ id: A.id, paper: blur('2026-10-15', 'c2') })})`), 'duplicate');
+  // שומר: שורות אחרות באותו מספר — עדיין התנגשות
+  await assert.rejects(cloud.run(`executePaperCreateTask(${JSON.stringify({ id: A.id, paper: { ...blur('2026-10-15', 'c3'), rows: rows.slice(1) } })})`), e => e.code === 'paper-conflict');
+  // צילום של אותו נייר שקרא את התאריך המודפס — מחליף את השמור עם היום שנקבע (לא נזרק כ"כפילות")
+  assert.equal(await cloud.run(`executePaperCreateTask(${JSON.stringify({ id: A.id, paper: { ...A, captureId: 'c4' } })})`), 'replaced');
+  assert.equal([...store.values()].find(x => x.captureId === 'c4').docDay, '2026-10-04');
+  // ושוב צילום מטושטש אחריו — כפילות, לא דורס את היום שנקרא
+  assert.equal(await cloud.run(`executePaperCreateTask(${JSON.stringify({ id: A.id, paper: blur('2026-10-16', 'c5') })})`), 'duplicate');
+  assert.ok([...store.values()].some(x => x.captureId === 'c4'));
+});
+
+test('זוג תיקון (חיוב שמבטל זיכוי): נייר שהיום שלו נקבע לא מפספס את הזוג רק בגלל היום', () => {
+  const r = paperApp([credit142()], pinned);
+  const c = json(r, `(() => {
+    const day = '2026-10-04', R = { rows: { code_101: { sent: 13, cred: 13 }, code_344: { sent: 2, cred: 2 }, code_349: { sent: 5, cred: 5 }, code_233: { sent: 0, cred: 1 } }, credited: true };
+    const credit = { id: 'paper_c', kind: 'credit', docDay: day, numerator: '95142', rows: [{ itemCode: '233', qty: 1, productId: 'code_233' }],
+      attach: { type: 'return', id: 'R', rowTargets: [{ line: 0, type: 'return', id: 'R' }] } };
+    const charge = { id: 'paper_h', kind: 'charge', docDay: '2026-10-15', numerator: '95143', rows: [{ itemCode: '238', qty: 1, productId: 'code_238' }],
+      docDayDefault: { reason: 'unreadable', printed: null, day: '2026-10-15', from: 'receiving' } };
+    const ctx = { placed: [credit], docOf: (t, id) => id === 'R' ? R : null, mainOf: {}, pendingRets: new Set(), unsureDays: new Set(), regNotes: new Set(), recs: [] };
+    const key = paperRowKey(charge.rows[0]).key;
+    return { defaulted: ledgerCorrectionCandidates(key, charge, 1, ctx).length,
+      printed: ledgerCorrectionCandidates(key, { ...charge, docDayDefault: undefined }, 1, ctx).length,
+      far: ledgerCorrectionCandidates(key, { ...charge, numerator: '95150' }, 1, ctx).length,
+      unsure: ledgerCorrectionCandidates(key, charge, 1, { ...ctx, unsureDays: new Set([day]) }).length };
+  })()`);
+  assert.equal(c.defaulted, 1, 'נומרטורים סמוכים, היום של החיוב נקבע — הזוג נמצא');
+  assert.equal(c.printed, 0, 'שומר: שני ימים מודפסים שונים — לא זוג (כמו קודם)');
+  assert.equal(c.far, 0, 'שומר: נומרטור רחוק — לא זוג');
+  assert.equal(c.unsure, 0, 'שומר: ספק ביום של נייר הזיכוי — אין תיקון');
+});
+
+test('תעודה בלי מספר שהתאריך שלה לא נקרא, שצורפה לקליטה שנשמרה בלי תעודה (מלפני יומיים): היום שלה הוא של הקליטה ההיא, והיא נמצאת בה — לא "ממתינה לקליטה", ולא נפתחת קליטה שנייה', async () => {
+  const day = iso(days(-2));
+  const resp = deliveryV8({ docDate: null, docNumber: null, internalNumber: null }, 'unreadable');
+  resp.verification = { ...resp.verification, status: 'needs_review', issues: [{ noteIndex: 0, field: 'docNumber', reason: 'unreadable' }] };
+  const items = resp.scan.documents[0].rows.map(row => { const p = fixture().products.find(x => x.code === row.itemCode); return { productId: p.id, name: p.name, barcode: p.barcode, qty: Number(row.quantity) }; });
+  const bare = { id: 'rc_bare', date: day, docDate: day, noDoc: true, noteParts: [], items, timestamp: 1 };
+  const a = oneButtonApp(resp, { receipts: [bare] });
+  a.finalCloud.put(a.run(`dataPath('receipts', 'rc_bare').join('/')`), bare);
+  a.run(`currentView = 'ledger';`); // צולם מהמאזן — הנייר נשמר בענן מיד (לא עם קליטה)
+  await readPapers(a);
+  assert.ok(a.run(`papers.some(p => p.kind === 'delivery')`), 'הנייר בענן');
+  const cloudPath = pid => a.run(`dataPath('papers', '${pid}').join('/')`);
+  a.run(`papers.filter(p => p.kind === 'delivery')`).forEach(p => a.finalCloud.put(cloudPath(p.id), JSON.parse(JSON.stringify(p))));
+  const id = a.run('paperIntake.items[0].paperId || paperIntake.items[0].paper && paperIntake.items[0].paper.id') || 'paper_cap_cap0';
+  assert.equal(json(a, `paperFind('${id}').paper`).docDay, TODAY, 'עד הצירוף — יום הצילום');
+  assert.equal(a.run('paperIntake.items[0].join.reason'), 'bare');
+  const { join, confirmLast } = await import('./one-button-helpers.mjs');
+  await join(a, id, 'cap0');
+  await confirmLast(a);
+  assert.equal(a.run('receiptAttachTarget && receiptAttachTarget.id'), 'rc_bare');
+  // מספר התעודה לא נקרא — מקלידים אותו בבדיקת הקריאה של הקליטה, ושומרים
+  a.context.document.querySelectorAll = selector => selector === '[data-ocr-doc]' ? [{ dataset: { ocrDoc: '0', ocrKey: '-1:docNumber' }, value: '77009999' }] : [];
+  assert.equal(a.run('bermanConfirmOcr(0)'), true);
+  const saved = await saveReceipt(a);
+  assert.equal(saved.data.docDate, day, 'הקליטה נשארת של היום שבו נקלטה');
+  // היום של הנייר — של הקליטה שצורף אליה (גם בענן)
+  await new Promise(res => setImmediate(res));
+  const upd = a.writes.filter(w => w.op === 'set' && w.path && w.path.at(-2) === 'papers' && w.path.at(-1) === id).at(-1);
+  assert.ok(upd, 'היום של הנייר עודכן בענן');
+  assert.equal(upd.data.docDay, day);
+  assert.equal(upd.data.docDayDefault.day, day);
+  const p = json(a, `paperFind('${id}').paper`);
+  assert.equal(p.docDay, day);
+  assert.equal(p.docDayDefault.reason, 'unreadable', 'עדיין יום שנקבע (התאריך לא נקרא)');
+  assert.equal(a.run(`paperDayDefaultNote(paperFind('${id}').paper)`), NOTE);
+  // הקליטה השמורה — הנייר נמצא בה (גם בלי מספר), והמאזן לא מבקש לקלוט אותו שוב
+  a.run(`receipts = receipts.filter(x => x.id !== 'rc_bare').concat([${JSON.stringify({ id: 'rc_bare', ...saved.data })}]); ledgerInvalidate();`);
+  assert.equal(a.run(`currentLedger().states['${id}']`), 'in-receipt');
+  assert.equal(a.run(`paperInSavedReceipt(paperFind('${id}').paper)`), true);
+  assert.equal(json(a, `receivingDeliveryRoute(paperIntake.items[0].scan, paperFind('${id}').paper, null, {})`).reason, 'received', 'לא נכנסת לקליטה שנייה');
+  // גם נייר שהיום שלו לא עודכן (טלפון בגרסה ישנה / העדכון עוד בדרך) — נמצא בקליטה לפי הזהות
+  a.run(`papers = papers.map(x => x.id === '${id}' ? { ...x, docDay: '${TODAY}', docDayDefault: { ...x.docDayDefault, day: '${TODAY}' } } : x); ledgerInvalidate();`);
+  assert.equal(a.run(`currentLedger().states['${id}']`), 'in-receipt');
+  // שומר: העדכון בענן רק כל עוד היום שם עדיין נקבע — יום שהעובד קבע בינתיים לא נדרס
+  const userSet = { ...a.finalCloud.get(cloudPath(id)), docDay: iso(days(-3)), docDayDefault: null, docDayBy: 'user' };
+  a.finalCloud.put(cloudPath(id), userSet);
+  a.run(`papers = papers.map(x => x.id === '${id}' ? { ...x, docDay: '${TODAY}', docDayDefault: { ...x.docDayDefault, day: '${TODAY}' } } : x);`);
+  const before = a.writes.length;
+  await a.run(`paperDeliveryDaysFollowReceipt(${JSON.stringify(saved.data)})`);
+  assert.equal(a.writes.length, before, 'לא נכתב');
+  assert.equal(a.finalCloud.get(cloudPath(id)).docDay, iso(days(-3)));
+});
+
+test('תעודה שהתאריך שלה לא נקרא, שצולמה בקליטה, והעובד קבע לקליטה יום אחר — הנייר נשמר עם הקליטה על היום שלה', async () => {
+  const r = oneButtonApp(deliveryV8({ docDate: null }, 'unreadable'));
+  await receive(r);
+  const id = 'paper_77001234';
+  assert.equal(json(r, `paperFind('${id}').paper`).docDay, TODAY);
+  r.run(`receiptDocDate = '${iso(days(-1))}'; saveReceiptDraft();`);
+  const { countAsPaper } = await import('./one-button-helpers.mjs');
+  countAsPaper(r);
+  const saved = await saveReceipt(r);
+  assert.equal(saved.data.docDate, iso(days(-1)));
+  const w = r.writes.find(x => x.op === 'set' && x.path && x.path.at(-2) === 'papers' && x.path.at(-1) === id);
+  assert.ok(w, 'הנייר נכתב יחד עם הקליטה');
+  assert.equal(w.data.docDay, iso(days(-1)), 'היום של הקליטה');
+  assert.equal(w.data.docDayDefault.day, iso(days(-1)));
+  assert.equal(w.data.docDayDefault.reason, 'unreadable');
+  const local = JSON.parse(r.storage.get('bm_paper_results_v1')).cap0;
+  assert.equal(local.paper.docDay, iso(days(-1)), 'גם העותק במכשיר');
+  assert.ok(local.ackedAt, 'ואושר');
+  // אותו נייר כבר בענן (נשמר גם מטלפון אחר) — היום עובר באותה שמירה, מול העותק שבענן
+  const c = oneButtonApp(deliveryV8({ docDate: null }, 'unreadable'));
+  await receive(c);
+  const copy = JSON.parse(c.storage.get('bm_paper_results_v1')).cap0.paper;
+  c.run(`papers = papers.concat([${JSON.stringify(copy)}]); ledgerInvalidate();`);
+  c.finalCloud.put(c.run(`dataPath('papers', '${id}').join('/')`), copy);
+  c.run(`receiptDocDate = '${iso(days(-1))}'; saveReceiptDraft();`);
+  countAsPaper(c);
+  await saveReceipt(c);
+  const cw = c.writes.find(x => x.op === 'set' && x.path && x.path.at(-2) === 'papers' && x.path.at(-1) === id);
+  assert.ok(cw, 'נכתב באותה טרנזקציה');
+  assert.equal(cw.data.docDay, iso(days(-1)));
+  assert.equal(c.run(`papers.find(x => x.id === '${id}').docDay`), iso(days(-1)));
+  // שומר: תעודה שהתאריך שלה נקרא — היום שלה לא זז עם הקליטה
+  const t = oneButtonApp(deliveryV8({}, null));
+  await receive(t);
+  t.run(`receiptDocDate = '${iso(days(-1))}'; saveReceiptDraft();`);
+  countAsPaper(t);
+  await saveReceipt(t);
+  const tw = t.writes.find(x => x.op === 'set' && x.path && x.path.at(-2) === 'papers' && x.path.at(-1) === id);
+  assert.equal(tw.data.docDay, TODAY);
 });
