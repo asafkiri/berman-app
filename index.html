@@ -831,7 +831,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '142'; // תאריך תעודה שלא נקרא היטב — יום הקליטה, בלי קריאה בתשלום ובלי לעצור את העובד
+const APP_VERSION = '143'; // החלפה בזיכוי לא נעלמת בגלל החזרה מאוחרת של אותו מוצר; החזרה שהנהג זיכה בנייר לא חוזרת לרשימה
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -3648,6 +3648,8 @@ function openReturnUnsendConfirm(id) {
 async function saveReturnUnsend(id) {
   const r = returns.find(x => x.id === id), engine = startReturnsEvents();
   if (!r || r.credited || returnHasCreditAllocations(id) || !engine) return;
+  // v143: נייר זיכוי מהנהג נספר בזמן שחלון האישור היה פתוח
+  if (!returnStillOpen(r)) { showToast('הנהג כבר זיכה את התעודה הזאת בנייר — היא לא חוזרת לרשימה', null, null, 3200); return; }
   const slot = returnsSlot, expected = cloneSafe(r), ref = doc(db, ...dataPath('returns', id));
   const trashId = trashDocId('returns', id), trashRef = doc(db, ...dataPath('trash', trashId));
   try {
@@ -12694,7 +12696,8 @@ function confirmReturnMergePick(sourceId) {
   hideRetMergeModal();
   const target = returns.find(x => x.id === targetId);
   const source = returns.find(x => x.id === sourceId);
-  if (!target || !source || target.credited || source.credited || targetId === sourceId) { showToast('המיזוג בוטל — אחת התעודות כבר לא פתוחה', null, null, 3000); return; }
+  // v143: גם החזרה שנייר זיכוי מהנהג נגע בה (returnStillOpen) — לא נבלעת ולא בולעת
+  if (!target || !source || !returnStillOpen(target) || !returnStillOpen(source) || targetId === sourceId) { showToast('המיזוג בוטל — אחת התעודות כבר לא פתוחה', null, null, 3000); return; }
   // v123: תעודה שיש עליה קישור זיכוי אינה נבלעת — אחרת הזיכוי על תעודת הקליטה היה מצביע על נייר שנמחק
   if (returnHasCreditAllocations(sourceId)) return;
   showConfirm('מיזוג תעודות חזרה',
@@ -12704,7 +12707,7 @@ function confirmReturnMergePick(sourceId) {
 async function mergeReturnDocs(targetId, sourceId) {
   const target = returns.find(x => x.id === targetId);
   const source = returns.find(x => x.id === sourceId);
-  if (!target || !source || target.credited || source.credited || targetId === sourceId) { showToast('המיזוג בוטל — אחת התעודות כבר לא פתוחה', null, null, 3000); return; }
+  if (!target || !source || !returnStillOpen(target) || !returnStillOpen(source) || targetId === sourceId) { showToast('המיזוג בוטל — אחת התעודות כבר לא פתוחה', null, null, 3000); return; }
   if (returnHasCreditAllocations(sourceId)) return;
   if (!db) { showToast('אין חיבור לענן — מיזוג דורש חיבור.', null, null, 3500); return; }
   showCloudBusy();
@@ -12821,7 +12824,7 @@ function returnCardInReceipts(r) {
       di.overItems.map(s => '<div class="flex justify-between text-amber-600"><span>זוכה יתר: ' + htmlEscape(s.name) + '</span><span>' + s.n + ' יח׳</span></div>').join('') +
     '</div>' : '';
   const rid = htmlEscape(r.id);
-  const stillOpen = !credited && !ledgerDone;
+  const stillOpen = returnStillOpen(r); // v143: גם לא כשנייר זיכוי מהנהג כבר נגע בה
   const actionArea = !credited
     ? '<div class="mt-2">' + creditAllocationsHtml(r) + '</div>' +
       // v128: תעודה שהניירות סגרו — בלי "שלח שוב", "החזר לרשימה" ו"מזג" (הנהג כבר זיכה)
@@ -13702,6 +13705,14 @@ function paperLedger(opts) {
   });
   // החלפת מוצר: נייר זיכוי של החזרה זיכה B שלא נשלח בה, ובאותה החזרה A לא זוכה באותה כמות
   const sumGap = k => (gaps[k] || []).reduce((a, x) => a + x.gap, 0);
+  // v143: העודף של B — מול המאזן של B כפי שהיה כשהנייר הודפס (day). חוסר בהחזרה שנשלחה אחרי היום של הנייר
+  // (ממתינה לזיכוי, או שהנייר שלה זיכה פחות), או בקליטה מיותר מיום אחריו, עוד לא היה — הנייר לא יכול היה לזכות
+  // עליו (כמו בשיוך, paperAttach), ולכן הוא לא "בולע" את העודף. זיכוי מכל יום כן נספר (יכול לסגור חוסר ישן), וגם
+  // נייר חיוב (ברמן מבטלת את הזיכוי העודף). בלי זה, החזרה מ-17.10 שחיכתה לזיכוי על חלה מרובעת ×6 העלימה את
+  // ההחלפה מ-10.10 (חלה מרובעת ×3 במקום ×1 וחלה קלועה ×2, אותו מחיר), ובמקומה: "חסר זיכוי על חלה קלועה ×2 —
+  // לבקש זיכוי מהנהג", וההחזרה של 17.10 חיכתה רק ל-4 (18.10.2026)
+  const laterShort = (x, day) => x.gap > 0 && !!day && ((x.type === 'return' && x.day > day) || (x.type === 'receipt' && x.day > ledgerAddDays(day, 1)));
+  const sumGapBy = (k, day) => (gaps[k] || []).reduce((a, x) => a + (laterShort(x, day) ? 0 : x.gap), 0);
   const swaps = [];
   placed.filter(p => p.kind === 'credit' && p.attach.type === 'return').forEach(p => {
     (p.attach.rowTargets || []).forEach(t => {
@@ -13713,7 +13724,7 @@ function paperLedger(opts) {
       // מוצר אחד שהחסר בו בדיוק בכמות הזו (או מועמד יחיד). כמה אפשרויות — לא מנחשים: כל צד מוצג בנפרד
       const exact = cands.filter(k => retGap(k) === q);
       const a = exact.length === 1 ? exact[0] : (!exact.length && cands.length === 1 ? cands[0] : null);
-      if (a && sumGap(b) < 0 && !swaps.some(s => s.b === b)) swaps.push({ a, b, q, returnId: p.attach.id, paperId: p.id });
+      if (a && sumGapBy(b, String(p.docDay || '')) < 0 && !swaps.some(s => s.b === b)) swaps.push({ a, b, q, returnId: p.attach.id, paperId: p.id });
     });
   });
   // v141: החלפה גם כשהמוצר שזוכה במקום כן נשלח בהחזרה — הנייר זיכה עליו יותר ממה שנשלח (נשלחה 1, זוכו 3),
@@ -13748,7 +13759,7 @@ function paperLedger(opts) {
         if (o.kind !== 'credit' || o.attach.type !== 'return' || o.attach.id !== rid) return;
         (o.attach.rowTargets || []).forEach(u => {
           const rr = u && u.type === 'return' && u.id === rid && (o.rows || [])[u.line];
-          if (rr && paperRowKey(rr).key === b) onB.push({ id: o.id, qty: r3(rr.qty) });
+          if (rr && paperRowKey(rr).key === b) onB.push({ id: o.id, qty: r3(rr.qty), day: String(o.docDay || '') });
         });
       });
       const src = onB.filter(z => z.qty === q).pop() || onB.filter(z => z.qty >= q).sort((u, v) => v.qty - u.qty)[0];
@@ -13757,7 +13768,9 @@ function paperLedger(opts) {
       // רק מוצר אחד שחסר בדיוק בכמות העודף (לא "מועמד יחיד" שחסר בו יותר — אז גם העודף וגם החוסר גלויים)
       const exact = cands.filter(k => retGap(k) === q);
       const a = exact.length === 1 ? exact[0] : null;
-      if (a && r3(sumGap(b)) < 0 && !swaps.some(s => s.b === b && s.returnId === rid)) overProps.push({ a, b, q, returnId: rid, paperId: src.id, over: true });
+      // v143: היום של הנייר האחרון שזיכה את B בהחזרה הזו
+      const cut = onB.map(z => z.day).sort().pop();
+      if (a && r3(sumGapBy(b, cut)) < 0 && !swaps.some(s => s.b === b && s.returnId === rid)) overProps.push({ a, b, q, returnId: rid, paperId: src.id, over: true });
     });
   });
   // באותה החזרה — מוצר חסר אחד לעודף אחד (לא מנחשים); אותה החלפה שחוזרת בהחזרה אחרת — החלפה משלה
@@ -16277,7 +16290,14 @@ function receiptOpenNow(rc, di) {
 // תעודת חזרות: 'open' — פער לטיפול; 'credit' — ממתינה לזיכוי; 'done'
 // v128: תעודת חזרות שעוד פתוחה לעריכה כ"לא נשלחה/למיזוג" — לא אומתה, ולא נסגרה בניירות מהנהג
 // (אחרי שהנהג זיכה בנייר, החזרתה לרשימה או מיזוגה היו תובעים את אותם פריטים שוב)
-function returnStillOpen(r) { return !!r && !r.credited && returnStateNow(r) !== 'done'; }
+// v143: וגם לא כשנייר זיכוי מהנהג נגע בה — גם כשחסרה בה שורה: הנהג לקח אותה וזיכה. "החזר לרשימה" היה מוחק אותה
+// ומחזיר לרשימה את כל מה שהוחזר בה (גם מה שזוכה), ו"מזג" — מעביר הכל לתעודה אחרת: שניהם תובעים שוב זיכוי שניתן.
+// החוסר נשאר במאזן ("חסר זיכוי על … — לבקש זיכוי מהנהג")
+function returnStillOpen(r) { return !!r && !r.credited && returnStateNow(r) !== 'done' && !returnHasCreditPaper(r); }
+function returnHasCreditPaper(r) {
+  const ls = r && ledgerDocStatus(r.id);
+  return !!(ls && ls.papers.some(p => p.kind === 'credit'));
+}
 function returnStateNow(r) {
   const ls = ledgerDocStatus(r.id);
   if (ls && ls.byPapers) return ls.open.length ? 'open' : ls.pending.length ? 'credit' : 'done';
