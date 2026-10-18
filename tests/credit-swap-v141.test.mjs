@@ -130,11 +130,17 @@ test('עודף אמיתי — "עודף זיכוי … (החזרת 1, זוכו 3
   const m = app([credit('290099106', [['450', 4], ['238', 5]])], { returns: [R2] });
   assert.deepEqual(m.open().map(i => [i.kind, i.key, i.units]).sort(), [['creditedNotReturned', 'code_450', 3], ['returnedNotCredited', 'code_451', 2]]);
   assert.equal(m.j('openIssuesList().length'), 2, 'החוסר גלוי לצד העודף');
-  // שני מוצרים חסרים באותה כמות — לא בוחרים אחד באקראי
+  // שני מוצרים חסרים באותה כמות — לא בוחרים אחד באקראי. v144: רק אחד מהם באותו מחיר כמו מה שזוכה (חלה קלועה,
+  // לא חלומית ארוזה) — הוא שהוחלף (הנהג מקיש מוצר דומה), והחוסר בחלומית גלוי; שניים באותו מחיר — לא מנחשים
   const R3 = ret('ret_two', [['450', 1], ['451', 2], ['458', 2], ['238', 5]]);
   const t = app([credit('290099107', [['450', 3], ['238', 5]])], { returns: [R3] });
-  assert.ok(!t.items().some(i => i.kind === 'swap' || i.kind === 'autoSwap'));
-  assert.deepEqual(t.open().map(i => i.kind).sort(), ['creditedNotReturned', 'returnedNotCredited']);
+  assert.deepEqual(t.items().filter(i => i.kind === 'autoSwap').map(i => i.swap), [{ a: 'code_451', b: 'code_450', q: 2, over: true, price: 'same' }]);
+  assert.deepEqual(t.open().map(i => [i.kind, i.key, i.units]), [['returnedNotCredited', 'code_458', 2]]);
+  const R4 = ret('ret_two_same', [['3701', 1], ['3712', 2], ['3713', 2], ['238', 5]]);
+  const u = app([credit('290099108', [['3701', 3], ['238', 5]])], { returns: [R4] });
+  assert.deepEqual(u.j(`['code_3712', 'code_3713'].map(k => ledgerSwapPrice(k, 'code_3701', ['2026-10-03', '2026-10-04']))`), ['same', 'same']);
+  assert.ok(!u.items().some(i => i.kind === 'swap' || i.kind === 'autoSwap'));
+  assert.deepEqual(u.open().map(i => i.kind).sort(), ['creditedNotReturned', 'returnedNotCredited']);
 });
 
 test('מחיר שלא אומת מול חשבונית — לא "אותו מחיר": ההחלפה לטיפול ואומרת למה', () => {
