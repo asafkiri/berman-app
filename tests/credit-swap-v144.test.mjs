@@ -6,8 +6,8 @@
 // - החלפות הפוכות (קלועה במקום מרובעת, ואחר כך מרובעת במקום קלועה) — לא חוסמות זו את זו.
 // - החזרה שנשלחה ביום של הנייר — לא "בולעת" את העודף של ההחלפה.
 // - נייר שהחלפה בו הוא עדיין הנייר הראשי: שורה שחסרה בו — חוסר מיד, לא "ממתינה".
-// - נייר שכולו מוצר שלא הוחזר (החזרה של מוצר אחד, או נייר השלמה עם המוצר הלא נכון) — "של איזו החזרה הוא?" עם
-//   ההחזרה שחסר בה בדיוק זה; אחרי הבחירה ההחלפה מזוהה, וההחזרה "זוכתה — נייר …". "לא שייך להחזרה" — כמו קודם.
+// - נייר שכולו מוצר שלא הוחזר (החזרה של מוצר אחד, או נייר השלמה עם המוצר הלא נכון) — v145: בלי שאלה; הנייר נספר,
+//   ומזוהה כהחלפה של ההחזרה היחידה שחסר בה בדיוק זה (v144 שאל "של איזו החזרה הוא?" — ראה README v145).
 // הרצה: TZ=Asia/Jerusalem node --test tests/credit-swap-v144.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -82,58 +82,67 @@ test('נייר שהחלפה בו הוא הנייר הראשי — שורה שח�
   assert.deepEqual(r.swaps(), ['autoSwap:ret_r:code_451>code_450×1'], 'קלועה ×1 וברמן אקטיב ×1 חסרים — המרובעת באותו מחיר כמו הקלועה');
 });
 
-test('נייר שכולו מוצר שלא הוחזר — "של איזו החזרה הוא?" עם ההחזרה שחסר בה בדיוק זה; אחרי הבחירה — "זוכתה"', () => {
-  // החזרה של מוצר אחד: ברמן אקטיב ×4. הנהג זיכה דגני קלות ×4 (מחיר שונה במבצע)
+// v145: השאלה "של איזו החזרה הוא?" (v144) ירדה — כל עוד לא נענתה היא עצרה את ספירת הנייר והחזיקה החזרות אחרות
+// כ"ממתינות" (חוסר אמיתי ירד מהאדום, החלפה שנסגרה חזרה לאדום). עכשיו הנייר תמיד נספר, וכשיש בדיוק החזרה אחת מהשבועיים
+// שלפניו שכל מה שחסר בה הוא מוצר אחד בכמות של השורה — זו החלפה שלה (נבדקת כמו כל החלפה)
+test('נייר שכולו מוצר שלא הוחזר — בלי שאלה: נספר, ומזוהה כהחלפה של ההחזרה היחידה שחסר בה בדיוק זה', () => {
+  // החזרה של מוצר אחד: ברמן אקטיב ×4. הנהג זיכה דגני קלות ×4 (מחיר שונה במבצע). ההחזרה מ-6.10 עוד ממתינה לכל שתי שורותיה
   const R = ret('ret_r', '2026-10-05', [['339', 4]]), O = ret('ret_o', '2026-10-06', [['238', 4], ['2381', 2]]);
   const P = credit('290099441', [['333', 4]], '2026-10-07');
   const r = app([P], { returns: [R, O], today: '2026-10-07' });
-  const ask = r.items().filter(i => i.kind === 'needsAttach');
-  assert.deepEqual(ask.map(i => [i.state, i.why, i.text]), [['pending', 'substitute', 'נייר הזיכוי 99441 מ-7.10 זיכה דגני קלות ×4 — מוצר שלא החזרת. של איזו החזרה הוא? (לא נספר עד שתבחר)']]);
-  // ההחזרות שחסר בהן מוצר בדיוק בכמות הזו; קודם זו שבה המוצר באותו מחיר קטלוג (ברמן אקטיב כמו דגני קלות), אחר כך
-  // ההחזרה מ-6.10 שעוד ממתינה (ברמן אסלי ×4)
-  assert.deepEqual(ask[0].actions, ['ההחזרה מ-5.10 — חסר בה ברמן אקטיב ×4', 'ההחזרה מ-6.10 — חסר בה ברמן אסלי 5 פיתות ×4', 'לא שייך להחזרה']);
-  assert.deepEqual(r.open(), [], 'שאלה (ממתין), לא "עודף" ו"חסר" באדום');
-  assert.match(strip(r.run('openIssuesBannerContentHtml({})')), /של איזו החזרה הוא\?/, 'השאלה בהתראה העליונה');
-  r.answer(P.id, R.id);
-  assert.deepEqual(r.open().map(i => [i.kind, i.swap && i.swap.price]), [['swap', 'diff']], 'מחיר שונה — החלפה עם "מקבל את ההחלפה"');
-  // אותו נייר, במוצר באותו מחיר (חלומית אישית ← בייגל): אחרי הבחירה נסגר לבד, וההחזרה "זוכתה — נייר"
+  assert.ok(!r.items().some(i => i.kind === 'needsAttach'), 'בלי שאלה');
+  assert.deepEqual(r.open().map(i => [i.kind, i.swap && i.swap.ret, i.swap && i.swap.price]), [['swap', 'ret_r', 'diff']], 'מחיר שונה — החלפה עם "מקבל את ההחלפה"');
+  assert.equal(r.state('ret_o'), 'credit', 'ההחזרה האחרת ממשיכה לחכות');
+  // אותו נייר, במוצר באותו מחיר (חלומית אישית ← בייגל): נסגר לבד, וההחזרה "זוכתה — נייר"
   const S = ret('ret_s', '2026-10-05', [['3701', 2]]), Q = credit('290099442', [['3712', 2]], '2026-10-07');
   const s = app([Q], { returns: [S], today: '2026-10-07' });
-  assert.equal(s.items().filter(i => i.kind === 'needsAttach').length, 1);
-  s.answer(Q.id, S.id);
   assert.deepEqual(s.open(), []);
   assert.deepEqual(s.swaps(), ['autoSwap:ret_s:code_3701>code_3712×2']);
   assert.equal(s.state('ret_s'), 'done');
   assert.match(s.card('ret_s'), /זוכתה — נייר 99442/);
-  // "לא שייך להחזרה" — נספר כמו קודם (עודף), וההחזרה ממשיכה לחכות
-  const n = app([Q], { returns: [S], today: '2026-10-07' });
-  n.answer(Q.id, '');
-  assert.deepEqual(n.items().filter(i => i.state !== 'info').map(i => i.kind).sort(), ['creditedNotReturned', 'returnNotCreditedYet']);
+  // שתי החזרות כאלה — זו שבה המוצר באותו מחיר; שתיים באותו מחיר — לא מנחשים (נספר כעודף, וההחזרות ממשיכות לחכות)
+  const S2 = ret('ret_s2', '2026-10-06', [['339', 2]]);
+  assert.deepEqual(app([Q], { returns: [S, S2], today: '2026-10-07' }).swaps(), ['autoSwap:ret_s:code_3701>code_3712×2']);
+  const tie = app([Q], { returns: [S, ret('ret_s3', '2026-10-06', [['3701', 2]])], today: '2026-10-07' });
+  assert.deepEqual(tie.swaps(), []);
+  assert.deepEqual(tie.items().filter(i => i.state !== 'info').map(i => i.kind).sort(), ['creditedNotReturned', 'returnNotCreditedYet', 'returnNotCreditedYet']);
+  // החזרה שנשלחה בערב של יום הנייר (אחרי שהודפס) — לא שלו
+  const late = ret('ret_late', '2026-10-07', [['3701', 2]]);
+  assert.deepEqual(app([{ ...Q, printedTime: '07:40' }], { returns: [late], today: '2026-10-07' }).swaps(), []);
   assert.deepEqual(r.j('testWrites.length'), 0);
 });
 
-test('נייר השלמה עם המוצר הלא נכון — שאלה עם ההחזרה; אחרי הבחירה ההחלפה מזוהה (גם כשהמוצר שזוכה כן הוחזר)', () => {
+test('נייר זיכוי לא משויך לא מסתיר חוסר אמיתי בהחזרה אחרת, ולא פותח מחדש החלפה שנסגרה (הבאגים של השאלה ב-v144)', () => {
+  // ההחזרה מ-1.10: בנייר הראשי שלה חסרה חלומית ארוזה ×7 (חוסר אמיתי). החזרה מ-5.10 שזוכתה בהחלפה באותו מחיר.
+  // נייר זיכוי מ-8.10 על מוצר שלא הוחזר (חלומית אישית ×2), ואין החזרה שחסר בה בדיוק זה
+  const A = ret('ret_a', '2026-10-01', [['458', 7], ['238', 6]]), B = ret('ret_b', '2026-10-05', [['450', 2], ['238', 4]]);
+  const r = app([credit('290099471', [['238', 6]], '2026-10-02'), credit('290099472', [['451', 2], ['238', 4]], '2026-10-06'), credit('290099473', [['3701', 2]], '2026-10-08')],
+    { returns: [A, B], today: '2026-10-08' });
+  assert.deepEqual(r.open().map(i => [i.kind, i.state]).sort(), [['creditedNotReturned', 'problem'], ['returnedNotCredited', 'problem']]);
+  assert.match(r.open().find(i => i.kind === 'returnedNotCredited').text, /^חסר זיכוי על חלומית ארוזה ברמן ×7 מההחזרה של 1\.10 — לבקש זיכוי מהנהג$/);
+  assert.equal(r.state('ret_b'), 'done', 'ההחלפה מ-5.10 נשארת סגורה');
+  assert.ok(r.items().some(i => i.kind === 'autoSwap'));
+});
+
+test('נייר השלמה עם המוצר הלא נכון — מזוהה כהחלפה, בלי שאלה (גם כשהמוצר שזוכה כן הוחזר)', () => {
   const R = ret('ret_r', '2026-10-10', [['238', 6], ['339', 6], ['450', 1], ['451', 2]]);
   const main = credit('290099451', [['238', 6], ['339', 6], ['450', 1]], '2026-10-11'), fix = credit('290099452', [['450', 2]], '2026-10-12');
   const r = app([main, fix], { returns: [R], receipts: visits(['2026-10-11', '2026-10-12']) });
-  const ask = r.items().filter(i => i.kind === 'needsAttach');
-  assert.deepEqual(ask.map(i => i.actions), [['ההחזרה מ-10.10 — חסר בה חלה קלועה ברמן ×2', 'לא שייך להחזרה']]);
-  assert.equal(r.items().find(i => i.kind === 'returnedNotCredited').state, 'pending', 'ממתין לנייר שצולם, לא "לבקש מהנהג"');
-  r.answer(fix.id, R.id);
+  assert.ok(!r.items().some(i => i.kind === 'needsAttach'));
   assert.deepEqual(r.open(), []);
   assert.deepEqual(r.swaps(), ['autoSwap:ret_r:code_451>code_450×2']);
   assert.match(r.card('ret_r'), /זוכתה — 2 ניירות .* זוכתה בניירות 99451 מ-11\.10, 99452 מ-12\.10/);
+  // לפני שנייר ההשלמה צולם — חוסר מיד (הנייר הראשי חסר שורה), כמו ב-v141
+  assert.deepEqual(app([main], { returns: [R], receipts: visits(['2026-10-11']) }).open().map(i => i.kind), ['returnedNotCredited']);
   // בייגל במקום חלומית אישית (בייגל לא הוחזר) — אותו דבר
   const R2 = ret('ret_r2', '2026-10-10', [['238', 6], ['3701', 1]]);
   const m2 = credit('290099453', [['238', 6]], '2026-10-11'), f2 = credit('290099454', [['3712', 1]], '2026-10-12');
   const s = app([m2, f2], { returns: [R2], receipts: visits(['2026-10-11', '2026-10-12']) });
-  assert.equal(s.items().filter(i => i.kind === 'needsAttach').length, 1);
-  s.answer(f2.id, R2.id);
   assert.deepEqual(s.open(), []);
   assert.equal(s.state('ret_r2'), 'done');
 });
 
-test('בלי החזרה שחסר בה בדיוק זה — אין שאלה: "עודף זיכוי" כמו קודם', () => {
+test('בלי החזרה שחסר בה בדיוק זה — "עודף זיכוי" כמו קודם', () => {
   const R = ret('ret_r', '2026-10-05', [['339', 3]]);
   const r = app([credit('290099461', [['333', 4]], '2026-10-07')], { returns: [R], today: '2026-10-07' });
   assert.ok(!r.items().some(i => i.kind === 'needsAttach'));

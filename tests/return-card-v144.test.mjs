@@ -196,3 +196,28 @@ test('כרטיס שהיה פתוח נשאר פתוח בציור מחדש (כמו
   assert.match(html, /data-rc-card="ret:ret_r2" open>/);
   assert.doesNotMatch(html, /data-rc-card="ret:ret_r1" open>/);
 });
+
+// v145 — מהבדיקה של 144: הכרטיס לא אומר יותר ממה שהניירות באמת עשו
+test('v145: אומתה ידנית והנייר רק השלים — לא "הנייר זיכה הכל"; שורה בכמות 0 שזוכתה — בטבלה; נייר משלים עם זיכוי על מוצר שלא הוחזר — ב"פתוחות"', () => {
+  // אומתה ידנית (הכל זוכה), ונייר משלים זיכה שורה אחת
+  const M = ret('ret_m', '2026-10-08', [['238', 6], ['344', 3], ['458', 2]], { credited: true, creditStatus: 'ok' });
+  M.items.forEach(l => { l.noteQty = l.qty; });
+  const m = app([credit('290099701', [['458', 2]], '2026-10-09')], { returns: [M] });
+  const sm = strip(m.card('ret_m'));
+  assert.match(sm, /✓ ההחזרה אומתה ידנית, ונייר 99701 מהנהג נספר — אין מה לעשות\./);
+  assert.doesNotMatch(sm, /זיכה את כל מה שהוחזר|צולם ומתאים/);
+  // שורה שנשארה בכמות 0 אחרי עריכה (זוכתה 2) — הנייר זיכה אותה: בטבלה, כמו בכותרת
+  const Z = ret('ret_z', '2026-10-10', [['450', 0], ['238', 6], ['344', 2]], { credited: true, creditStatus: 'ok' });
+  Z.items[0].noteQty = 2; Z.items[1].noteQty = 6; Z.items[2].noteQty = 2;
+  const z = app([credit('290099705', [['450', 2], ['238', 6], ['344', 2]], '2026-10-11')], { returns: [Z] });
+  const sz = strip(z.card('ret_z'));
+  assert.match(sz, /עודף זיכוי 2 יח׳/);
+  assert.match(sz, /חלה מרובעת ברמן 0 2 עודף 2 — לבדוק שהנייר נקרא נכון/);
+  // נייר משלים (שורה אחת מארבע) שזיכה גם מוצר שלא הוחזר — ההחזרה ב"פתוחות", והכותרת אומרת את שניהם
+  const S = ret('ret_s', '2026-10-10', [['101', 2], ['238', 4], ['344', 2], ['458', 2]]);
+  const s = app([credit('290099721', [['101', 2], ['2387', 9]], '2026-10-11')], { returns: [S] });
+  assert.match(strip(s.card('ret_s')), /ממתינה · עודף זיכוי 9 יח׳/);
+  assert.ok(s.history('open').includes('data-rc-card="ret:ret_s"'));
+  assert.ok(!s.history('credit').includes('data-rc-card="ret:ret_s"'));
+  assert.equal([m, z, s].reduce((a, x) => a + x.j('testWrites.length'), 0), 0, 'תצוגה בלבד');
+});
