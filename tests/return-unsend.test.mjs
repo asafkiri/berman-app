@@ -39,7 +39,7 @@ function refreshAfterReturnCarry() { refreshes++; }
 function restoreDoc(name, obj) { restored = { name, obj }; }
 
 const FNS = ['r2', 'fmtMoney', 'lineTotalFromUnit', 'anIsDepositLine', 'anIsCarriedLine',
-  'returnSentUnits', 'returnItemsSignature', 'retLedgerView', 'ledgerDocStatus', 'retWaitingPaper', 'retVerifyRowHtml', 'retUnsendLineKind', 'retUnsendPlan', 'retUnsendSameLine',
+  'returnSentUnits', 'returnItemsSignature', 'retLedgerView', 'ledgerDocStatus', 'retWaitingPaper', 'retMainPaper', 'retDoneText', 'retVerifyRowHtml', 'retUnsendLineKind', 'retUnsendPlan', 'retUnsendSameLine',
   'retUnsendNewId', 'applyReturnUnsend', 'undoReturnUnsendItems', 'retUnsendBtnHtml'];
 // eslint-disable-next-line no-eval
 const api = eval(extractSource(FNS, []) + '\n({ ' + FNS.join(', ') + ' })');
@@ -189,9 +189,10 @@ head('[7] החיווט — כל תפקיד שנפלט חייב מטפל, ובכ�
     ok('נפלט data-role="' + role + '"', src.indexOf('data-role="' + role + '"') > -1);
     ok('ול-' + role + ' יש מטפל בקוד', new RegExp("role === '" + role + "'").test(src));
   });
-  // הקריאה נספרת בשרשור בלבד — ההגדרה עצמה נראית זהה ואינה קריאה.
+  // הקריאה נספרת בלי ההגדרה עצמה (שנראית זהה ואינה קריאה).
   // v114: מסך היסטוריית החזרות אוחד לתוך מסך התעודות — נשאר כרטיס חזרה אחד, והוא חייב לשאת את שניהם.
-  ok('שורת האימות יושבת בכרטיס החזרה המאוחד (ורק בו)', (src.match(/retVerifyRowHtml\(r\) \+/g) || []).length === 1);
+  // v144: בכרטיס — רק כשהניירות לא סגרו את ההחזרה ("אין מה לעשות" עבר לראש הכרטיס)
+  ok('שורת האימות יושבת בכרטיס החזרה המאוחד (ורק בו)', (src.match(/(?<!function )retVerifyRowHtml\(r\)/g) || []).length === 1 && /\(ledgerDone \? '' : retVerifyRowHtml\(r\)\) \+/.test(src));
   ok('וכפתור ההחזרה יושב בו גם (v128: רק כשהתעודה עוד פתוחה)', (src.match(/\(stillOpen \? retUnsendBtnHtml\(r\) : ''\) \+/g) || []).length === 1);
   ok('אין יותר שתי העתקות של שדה סכום הזיכוי', (src.match(/id="rvNote_/g) || []).length === 1);
   ok('המחיקה וההוספה נכתבות באותה עסקת אירועים', /engine\.mutate\(\[ref\],/.test(src) && /changes: \{ \[slot\]: current \}, writes:/.test(src));

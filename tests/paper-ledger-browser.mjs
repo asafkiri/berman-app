@@ -120,10 +120,13 @@ try {
   await page.evaluate(() => window.t.history());
   const hist = await page.locator('#app').evaluate(el => el.textContent); // הכרטיסים מקופלים (details)
   assert.ok((hist.match(/במאזן: \d+ לטיפול|מוסבר במאזן/g) || []).length >= 2, 'שורת המאזן בכרטיסי 4.10 ו-5.10');
-  // v127: הניירות עצמם — כרטיסים בהיסטוריה, והסטטוס מהמאזן
-  assert.match(hist, /נייר זיכוי מהנהג/); assert.match(hist, /נייר חיוב מהנהג/);
+  // v127: הניירות עצמם — כרטיסים בהיסטוריה, והסטטוס מהמאזן. v144: נייר הזיכוי 142 — בתוך כרטיס ההחזרה של 4.10
+  assert.doesNotMatch(hist, /נייר זיכוי מהנהג/); assert.match(hist, /נייר חיוב מהנהג/);
   assert.match(hist, /אומתה — ניירות 95141, 95142/);
-  await page.locator('#app details', { hasText: 'נייר זיכוי מהנהג' }).locator('summary').click();
+  const retCard = page.locator('#app details[data-rc-card^="ret:"]', { hasText: 'נייר הזיכוי 95142' });
+  assert.equal(await retCard.count(), 1, 'הנייר בתוך כרטיס ההחזרה');
+  await retCard.locator('summary').first().click();
+  assert.ok(await retCard.locator('[data-role="paper-open"][data-id="paper_290095142"]').isVisible(), '"פתח" על הנייר, בתוך הכרטיס');
   const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(over <= 1, 'היסטוריה: גלילה לצדדים ' + over);
   // v131: "לאיזו החזרה?" על כרטיס הנייר אחרי הצילום — בלי גלילה לצדדים ברוחב טלפון

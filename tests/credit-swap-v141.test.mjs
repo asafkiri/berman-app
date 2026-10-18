@@ -7,6 +7,8 @@
 // - עודף אמיתי — "עודף זיכוי על … (החזרת 1, זוכו 3)". כשהכמויות לא מתאימות בדיוק — לא מנחשים החלפה, ושני הצדדים גלויים.
 // - החזרה בלי תעודת זיכוי — "ממתינה" (בכתום) עד 4 ביקורים של הנהג, ואז חוסר.
 // - כרטיס ההחזרה: לכל מוצר "זוכה N · חסר / עודף / במקומו זוכה …"; המרכזת: "הוחלף" ולא "חסר שטרם זוכה".
+//   v144: הכרטיס — טבלת "הוחזרו / זוכו" ומה קרה בכל מוצר ("חסר 2 — לא בנייר הזיכוי", "זוכו כ״…״ ×2 — אותו מחיר, אין
+//   מה לבקש"), "מה לעשות" בראשו, וכותרת שאומרת מה בדיוק ("חסר זיכוי על 2 יח׳").
 // - שום תעודה שמורה לא נכתבת.
 // הרצה: TZ=Asia/Jerusalem node --test tests/credit-swap-v141.test.mjs
 import test from 'node:test';
@@ -29,7 +31,8 @@ function app(papersList, { receipts = [], returns = [], today = '2026-10-05' } =
     text: ledgerItemText(i, currentLedger(), ledgerAllPapers(currentLedger())).text, detail: ledgerItemText(i, currentLedger(), ledgerAllPapers(currentLedger())).detail || '' }))`);
   r.open = () => r.items().filter(i => i.state === 'problem' || i.state === 'question');
   r.card = () => { r.run(`currentView = 'receiptsHistory'; receiptHistoryFilter = 'all'; renderReceiptsHistory();`);
-    return (r.node('app').innerHTML.split('<details').slice(1).map(c => '<details' + c).find(c => /תעודת חזרות/.test(strip(c))) || ''); };
+    // v144: בכרטיס ההחזרה יש details מקופל ("עוד N מוצרים — זוכו במלואם") — הוא חלק מהכרטיס
+    return (r.node('app').innerHTML.split(/<details(?! class="ret-fold")/).slice(1).map(c => '<details' + c).find(c => /תעודת חזרות/.test(strip(c))) || ''); };
   r.state = () => r.run('returnStateNow(returns[0])');
   return r;
 }
@@ -57,9 +60,14 @@ test('אותו מחיר: ברמן זיכתה חלה מרובעת ×3 במקום 
   assert.deepEqual(r.j('openIssuesList()'), []);
   const card = strip(r.card());
   assert.match(card, /זוכתה — נייר 99101/);
-  assert.match(card, /חלה מרובעת ברמן .*זוכה 3 · 2 מהן במקום חלה קלועה ברמן \(אותו מחיר — התקזז\)/);
-  assert.match(card, /חלה קלועה ברמן .*זוכה 0 · במקומו זוכה חלה מרובעת ברמן ×2 \(אותו מחיר — התקזז\)/);
+  // v144: טבלת הוחזרו/זוכו — לכל מוצר שקרה בו משהו: הוחזרו, זוכו, ומה קרה; מה שזוכה במלואו — מקופל
+  assert.match(card, /הוחזרו · זוכו 12 · 12/);
+  assert.match(card, /חלה מרובעת ברמן 1 3 2 מהן במקום חלה קלועה ברמן/);
+  assert.match(card, /חלה קלועה ברמן 2 0 זוכו כ״חלה מרובעת ברמן״ ×2 — אותו מחיר, אין מה לבקש/);
+  assert.match(card, /עוד 2 מוצרים — זוכו במלואם/);
+  assert.match(card, /ההחזרה זוכתה\. אין מה לעשות/);
   assert.doesNotMatch(card, /חסר זיכוי|עודף זיכוי/);
+  assert.doesNotMatch(r.card(), /<\/i> מה לעשות<\/div>/, 'בלי "מה לעשות" — אין מה לעשות');
   // המרכזת נשארת לפי הנייר (בחשבונית זוכה חלה מרובעת ×3), ובשורות המוצר — "הוחלף", לא "חסר שטרם זוכה"
   const adj = r.j(`ledgerMatrixAdjust(paperLedger({ recs: receipts, rets: returns, papers, from: ledgerFrom, asOf: todayStr() }), '2026-10-01', '2026-10-31', papers).map(x => [x.key, x.credit])`);
   assert.deepEqual(adj.filter(x => x[0] === 'code_450' || x[0] === 'code_451'), [['code_450', 3]]);
@@ -81,9 +89,13 @@ test('מחיר שונה: אותה החלפה — לטיפול, אומרת למה
   assert.equal(r.state(), 'open');
   assert.match(r.run('pendingReturnsBannerHtml()'), /bg-rose-600[\s\S]*יש פער בזיכוי בתעודת חזרות[\s\S]*לפרטים ←/);
   const card = strip(r.card());
-  assert.match(card, /אחיד פרוס ברמן .*זוכה 0 · חסר 2 · במקומו זוכה לחם אחיד ברמן ×2/);
-  assert.match(card, /לחם אחיד ברמן .*זוכה 3 · עודף 2 · 2 מהן במקום אחיד פרוס ברמן/);
-  assert.match(card, /חסר זיכוי 2 · עודף זיכוי 2/, 'בשורת הסיכום — שני הצדדים, לא נטו');
+  assert.match(card, /זוכה מוצר אחר — לבדוק/, 'v144: בכותרת — מה בדיוק');
+  assert.match(card, /אחיד פרוס ברמן 2 0 במקומן זוכו לחם אחיד ברמן ×2 — לא נסגר לבד \(מחיר שונה\)/);
+  assert.match(card, /לחם אחיד ברמן 1 3 2 מהן במקום אחיד פרוס ברמן — לא נסגר לבד \(מחיר שונה\)/);
+  assert.match(card, /הוחזרו · זוכו 12 · 12 חסר 2 · עודף 2/, 'בשורת הסיכום — שני הצדדים, לא נטו');
+  // v144: "מה לעשות" — עם הכפתור של המאזן עצמו
+  assert.match(card, /מה לעשות ברמן זיכתה לחם אחיד ברמן ×2 במקום אחיד פרוס ברמן שהחזרת ב-3\.10 .*מקבל את ההחלפה פרטים/);
+  assert.match(r.card(), /data-role="ledger-accept-swap" data-item="swap\|ret_swap_diff\|code_101\|code_100"/);
   // ההסכמה נשמרת עם ההחזרה; הסכמה שנאמרה על החזרה אחרת — לא חלה
   const pair = { a: 'code_101', b: 'code_100', q: 2 };
   const other = app([P, declared({ id: 'decl_swap_other', declare: 'accept-swap', pair, standsFor: { returnId: 'ret_other' } })], { returns: [R] });
@@ -93,7 +105,7 @@ test('מחיר שונה: אותה החלפה — לטיפול, אומרת למה
   assert.deepEqual(ok.open(), []);
   assert.equal(ok.state(), 'done');
   assert.deepEqual(ok.j(`fullLedger().docViews['${R.id}'].gap`), 0, 'ההסכמה מתקזזת גם מול העודף שעל שורת ההחזרה');
-  assert.match(strip(ok.card()), /זוכה 0 · במקומו זוכה לחם אחיד ברמן ×2 \(קיבלת את ההחלפה\)/);
+  assert.match(strip(ok.card()), /אחיד פרוס ברמן 2 0 זוכו כ״לחם אחיד ברמן״ ×2 — קיבלת את ההחלפה/);
   // הכפתור במסך המאזן כותב את ההסכמה עם הכמות של ההחלפה (העודף בלבד), ופריט "לידיעה" אינו מקבל אותו
   assert.deepEqual(r.j(`ledgerItemText(currentLedger().items.find(i => i.kind === 'swap'), currentLedger(), papers).actions.map(a => a.role)`), ['ledger-accept-swap', 'ledger-paper-open']);
 });
@@ -110,9 +122,10 @@ test('חוסר חלקי בתעודת הזיכוי — חוסר מיד: בהתר�
   assert.match(r.run('pendingReturnsBannerHtml()'), /bg-rose-600[\s\S]*יש פער בזיכוי בתעודת חזרות/);
   assert.match(strip(r.run('returnsBalanceBannerHtml()')), /חסר זיכוי על 2 יח׳ בתעודה אחת .*לבקש זיכוי מהנהג; הפירוט בכרטיס ההחזרה/, 'לא "כל מה שהחזרת זוכה"');
   const card = strip(r.card());
-  assert.match(card, /לטיפול במאזן/);
-  assert.match(card, /חסר זיכוי 2/);
-  assert.match(card, /חלה קלועה ברמן .*זוכה 0 · חסר 2/);
+  assert.match(card, /תעודת חזרות \/ זיכוי חסר זיכוי על 2 יח׳/, 'v144: בכותרת — כמה חסר (לא "לטיפול במאזן")');
+  assert.match(card, /הוחזרו · זוכו 8 · 6 חסר 2/);
+  assert.match(card, /מה לעשות לבקש מהנהג זיכוי על חלה קלועה ברמן ×2 מההחזרה של 3\.10\./);
+  assert.match(card, /חלה קלועה ברמן 2 0 חסר 2 — לא בנייר הזיכוי/);
   const done = app([credit('290099103', [['450', 1], ['238', 5]]), credit('290099104', [['451', 2]], '2026-10-05')], { returns: [R] });
   assert.deepEqual(done.open(), []);
   assert.equal(done.state(), 'done');
@@ -124,7 +137,7 @@ test('עודף אמיתי — "עודף זיכוי … (החזרת 1, זוכו 3
   const open = r.open();
   assert.deepEqual(open.map(i => [i.kind, i.key, i.units]), [['creditedNotReturned', 'code_450', 2]]);
   assert.equal(open[0].text, 'עודף זיכוי על חלה מרובעת ברמן ×2 בהחזרה מ-3.10 (החזרת 1, זוכו 3) — לבדוק שהנייר נקרא נכון');
-  assert.match(strip(r.card()), /חלה מרובעת ברמן .*זוכה 3 · עודף 2/);
+  assert.match(strip(r.card()), /עודף זיכוי 2 יח׳[\s\S]*חלה מרובעת ברמן 1 3 עודף 2 — לבדוק שהנייר נקרא נכון/);
   // עודף 3 מול חוסר 2 — לא החלפה: החוסר והעודף, כל אחד בשמו, שניהם לטיפול ובהתראה
   const R2 = ret('ret_mismatch', [['450', 1], ['451', 2], ['238', 5]]);
   const m = app([credit('290099106', [['450', 4], ['238', 5]])], { returns: [R2] });
@@ -223,7 +236,7 @@ test('סקירה: חלק שני של זיכוי מפוצל צולם ועוד ל�
   assert.deepEqual(u.items().filter(i => i.kind === 'returnedNotCredited').map(i => i.state), ['pending'], 'נייר שלא נקרא עד הסוף — ממתין לו');
 });
 
-test('סקירה: כרטיס הנייר הראשי שחסרה בו שורה — לא "תואם לנייר"; בהיסטוריה "לטיפול במאזן"', () => {
+test('סקירה: כרטיס הנייר הראשי שחסרה בו שורה — לא "תואם לנייר"; בהיסטוריה — בתוך כרטיס ההחזרה, שאומר מה חסר', () => {
   const R = ret('ret_card', [['450', 1], ['451', 2], ['238', 5]]);
   const P = credit('290099141', [['450', 1], ['238', 5]]);
   const r = app([P], { returns: [R] });
@@ -231,9 +244,11 @@ test('סקירה: כרטיס הנייר הראשי שחסרה בו שורה — 
   const intake = strip(r.node('app').innerHTML.split('paperIntakeList')[1] || '');
   assert.match(intake, /נקרא, ויש פער מול ההחזרה.*חסר זיכוי על חלה קלועה ברמן ×2/);
   assert.doesNotMatch(intake, /תואם לנייר/);
-  r.run(`currentView = 'receiptsHistory'; receiptHistoryFilter = 'all'; renderReceiptsHistory();`);
-  const pcard = strip(r.node('app').innerHTML.split('<details').slice(1).find(c => /נייר זיכוי מהנהג/.test(strip(c))) || '');
-  assert.match(pcard, /לטיפול במאזן/);
+  // v144: הנייר — בתוך כרטיס ההחזרה (לא כרטיס נפרד עם אותו משפט), והכרטיס אומר מה חסר
+  const card = strip(r.card());
+  assert.doesNotMatch(strip(r.node('app').innerHTML), /נייר זיכוי מהנהג/);
+  assert.match(card, /חסר זיכוי על 2 יח׳[\s\S]*נייר הזיכוי מהנהג של ההחזרה הזו נייר הזיכוי 99141 מ-4\.10 10:00 2 שורות · 6 יח׳ · תעודת הזיכוי של ההחזרה פתח/);
+  assert.match(r.card(), /data-role="paper-open" data-id="paper_290099141"/);
 });
 
 test('סקירה: החזרה בלי נייר אחרי 4 ביקורים — פתוחה בכל המסכים; ממתינה (נייר משלים בלבד) — לא "כל מה שהחזרת זוכה"', () => {
@@ -244,7 +259,7 @@ test('סקירה: החזרה בלי נייר אחרי 4 ביקורים — פת�
   assert.equal(r.run(`returnStateNow(returns[0])`), 'open');
   assert.match(r.run('pendingReturnsBannerHtml()'), /bg-rose-600/);
   assert.match(strip(r.run('returnsBalanceBannerHtml()')), /חסר זיכוי על 3 יח׳ בתעודה אחת/);
-  assert.match(strip(r.card()), /לטיפול במאזן/);
+  assert.match(strip(r.card()), /חסר זיכוי על 3 יח׳[\s\S]*מה לעשות לבקש מהנהג זיכוי על חלה מרובעת ברמן ×1, חלה קלועה ברמן ×2 מההחזרה של 3\.10\./);
   // חלק מההחזרה זוכה בנייר משלים והשאר ממתין — אין "כל מה שהחזרת זוכה ✓", ובכרטיס "טרם זוכה" (לא "חסר")
   const S = ret('ret_side', [['450', 1], ['451', 2], ['238', 5], ['344', 4], ['100', 2]]);
   const s = app([credit('290099151', [['450', 1], ['451', 2]])], { returns: [S], receipts: [delivery('rc_s', '2026-10-04')] });
@@ -263,7 +278,8 @@ test('סקירה: זיכוי על מוצר שלא הוחזר, בנייר של ה
   assert.ok(r.j('openIssuesList()').some(x => /^עודף זיכוי: ברמן זיכתה לחם אחיד ברמן ×2 שלא החזרת/.test(x.text)), 'העודף בהתראה העליונה');
   const card = strip(r.card());
   assert.match(card, /עודף זיכוי: ברמן זיכתה לחם אחיד ברמן ×2 שלא החזרת/);
-  assert.match(card, /זוכה גם על מוצרים שלא הוחזרו: לחם אחיד ברמן עודף 2 זוכה 2/);
+  // v144: בטבלה — שורה למוצר שזוכה ולא הוחזר
+  assert.match(card, /לחם אחיד ברמן לא הוחזר 0 2 עודף 2 — לבדוק שהנייר נקרא נכון/);
   assert.doesNotMatch(r.card(), /data-role="ret-unsend"|data-role="ret-resend"/);
   const D = { schema: 1, id: 'decl_done_old', kind: 'declared', declare: 'complete', returnId: 'ret_c', state: 'accepted', docDay: '2026-10-05', timestamp: 3 };
   const c = app([credit('290099162', [['450', 1], ['238', 5]]), D], { returns: [ret('ret_c', [['450', 1], ['451', 2], ['238', 5]])] });
@@ -379,9 +395,13 @@ test('סבב 2: החזרה שזוכתה ויש לה זיכוי על מוצר ש�
   const R = ret('ret_ex', [['450', 1], ['238', 5], ['344', 4]]);
   const r = app([credit('290099401', [['450', 1], ['238', 5], ['344', 4], ['100', 2]])], { returns: [R] });
   const card = strip(r.card());
-  assert.match(card, /זיכה את כל מה שהוחזר — וגם מוצר שלא הוחזר\. בדוק את הנייר במאזן/);
-  assert.match(card, /במאזן: 1 לטיפול/);
-  assert.doesNotMatch(card, /אין מה לעשות|מוסבר במאזן/);
+  // v144: בכותרת "זוכתה · עודף", וב"מה לעשות" — מה בדיוק לבדוק, עם "פרטים" (במקום "בדוק את הנייר במאזן")
+  assert.match(card, /זוכתה · עודף זיכוי 2 יח׳/);
+  assert.match(card, /מה לעשות עודף זיכוי: ברמן זיכתה לחם אחיד ברמן ×2 שלא החזרת — לבדוק שהנייר נקרא נכון בנייר הזיכוי 99401 מ-4\.10 10:00\. פרטים/);
+  assert.doesNotMatch(card, /אין מה לעשות|מוסבר במאזן|ראה במאזן|בדוק את הנייר במאזן/);
+  // והיא ב"פתוחות" (עד v143 — דרך כרטיס הנייר, שעכשיו בתוכה)
+  r.run(`receiptHistoryFilter = 'open'; renderReceiptsHistory();`);
+  assert.match(strip(r.node('app').innerHTML), /זוכתה · עודף זיכוי 2 יח׳/);
   const V = { ...ret('ret_ver_ex', [['450', 2], ['238', 5]]), credited: true, creditStatus: 'closed' };
   const P = credit('290099601', [['100', 2]]);
   const u = app([{ ...P, attach: { by: 'user', type: 'return', id: V.id, role: 'side', rowTargets: [{ line: 0, type: null, id: null }] } }], { returns: [V] });
