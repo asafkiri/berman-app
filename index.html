@@ -838,7 +838,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '145'; // תיקונים ל-144: בלי "של איזו החזרה?" שעצר ספירה; זיהוי החלפות שלא נחסם בהצעה שנדחתה; כרטיס ההחזרה מדויק יותר
+const APP_VERSION = '146'; // סגירת חודש לא יוצרת חוסר שקרי: תיקון של ברמן מזוהה גם כשהחודש הקודם סגור
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -13492,13 +13492,16 @@ function paperAttach(p, base, others, all, start) {
     // חלק משורות ההחזרה מכריע רק בנייר של כמה שורות; נייר של שורה אחת שמתאים לכמה החזרות — שואלים
     // בשוויון — החזרה מתוך תקופת המאזן קודמת להחזרה מלפניה (שהניירות שלה לא נספרים כאן)
     const inR = d => !start || d.day >= start ? 1 : 0;
-    const cmp = (a, b) => b.score - a.score || b.exact - a.exact || (a.score >= 2 ? b.share - a.share : 0) || b.open - a.open || inR(b.d) - inR(a.d);
+    const cmp0 = (a, b) => b.score - a.score || b.exact - a.exact || (a.score >= 2 ? b.share - a.share : 0) || b.open - a.open;
+    const cmp = (a, b) => cmp0(a, b) || inR(b.d) - inR(a.d);
     const cands = rets.filter(d => d.day <= day && d.day >= ledgerAddDays(day, -LEDGER_RETURN_WINDOW_DAYS)).map(score).filter(c => c.score > 0)
       .sort((a, b) => cmp(a, b) || b.d.day.localeCompare(a.d.day));
     const top = cands[0], next = cands[1];
     if (top && top.score * 2 >= rows.length && !(next && cmp(top, next) === 0)) R = top.d;
     // v130: ניצחה רק בגלל שהיא בתקופת המאזן (בכל השאר שוות) — נספרת שם כמו קודם, אבל אינה ראיה לתיקון של ברמן
-    if (R && next && cmp(top, next) === inR(next.d) - inR(top.d)) periodOnly = true;
+    // v146: "רק בגלל התקופה" = בכל השאר שוות (cmp0 = 0). עד v145 הושווה ערך ההפרש, ונייר שניצח בציון גבוה
+    // ב-1 מהחזרה מלפני חודש שנסגר נחשב כאילו ניצח רק בגלל התקופה — אז תיקון של ברמן לא זוהה, ונהיה חוסר אדום
+    if (R && next && !cmp0(top, next)) periodOnly = true;
     else if (cands.length) ask = cands.slice(0, 4).map(c => c.d.id);
     // fit: המועמדת המובילה מכסה לפחות חצי משורות הנייר (השאלה בגלל תיקו) — אחרת השורות נספרות לפי היעדים שלהן
     if (ask) askFit = !!(top && top.score * 2 >= rows.length);
