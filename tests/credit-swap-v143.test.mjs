@@ -85,8 +85,8 @@ test('המקרה: החזרה מאוחרת שמחכה לזיכוי על חלה מ
   assert.doesNotMatch(strip(r.run('returnsBalanceBannerHtml()')), /חסר זיכוי/);
   const card = strip(r.card('ret_r'));
   assert.match(card, /זוכתה — נייר 99701/);
-  assert.match(card, /חלה קלועה ברמן .*זוכה 0 · במקומו זוכה חלה מרובעת ברמן ×2 \(אותו מחיר — התקזז\)/);
-  assert.doesNotMatch(card, /חסר זיכוי|לטיפול במאזן/);
+  assert.match(card, /חלה קלועה ברמן 2 0 זוכו כ״חלה מרובעת ברמן״ ×2 — אותו מחיר, אין מה לבקש/);
+  assert.doesNotMatch(card, /חסר זיכוי|לטיפול במאזן|חסר \d/);
   assert.deepEqual(r.j('testWrites.length'), 0, 'תצוגה בלבד');
 });
 
@@ -166,7 +166,7 @@ test('החזרה שנייר זיכוי מהנהג נגע בה — בלי "החז
   assert.equal(r.state('ret_short'), 'open');
   assert.equal(r.run(`returnStillOpen(returns[0])`), false);
   const card = r.card('ret_short');
-  assert.match(strip(card), /לטיפול במאזן/);
+  assert.match(strip(card), /חסר זיכוי על 2 יח׳/);
   assert.doesNotMatch(card, /data-role="ret-unsend"|data-role="ret-merge"|data-role="ret-resend"/);
   assert.match(card, /data-role="ret-edit-items"[\s\S]*data-role="ret-delete"/, 'עריכה ומחיקה — כמו קודם');
   assert.match(r.card('ret_o1'), /data-role="ret-resend"[\s\S]*data-role="ret-unsend"[\s\S]*data-role="ret-merge"/, 'החזרה בלי נייר — כמו קודם');

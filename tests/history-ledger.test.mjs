@@ -2,7 +2,7 @@
 // על הנתונים של 4–5.10.2026 (tests/ledger-2026-10.json) ועל החזרות קטנות סינתטיות.
 // מה שנבדק:
 // - בלי ניירות — כל קליטה וכל החזרה מסווגות בדיוק כמו קודם (פתוחה/ממתינה/הושלמה).
-// - עם 141 ו-142: שני כרטיסי נייר; הקליטה של 4.10 "אומתה — ניירות 95141, 95142"; הקליטה של 5.10 אומרת
+// - עם 141 ו-142: כרטיס לנייר החיוב, ונייר הזיכוי — בתוך כרטיס ההחזרה שלו (v144); הקליטה של 4.10 "אומתה — ניירות 95141, 95142"; הקליטה של 5.10 אומרת
 //   "חויבת פעמיים"; ההחזרה של 4.10 — שאלת התיקון; המסננים והבאנרים בהתאם; אין הצעת קיזוז על 1231.
 // - "כן, זה תיקון" — ההחזרה של 4.10 "זוכתה — נייר 95142".
 // - החזרה שתעודת הזיכוי שלה צולמה (ראשי) — "זוכתה" גם בלי "אישור", ולא בבאנר; נייר משלים — עדיין ממתינה.
@@ -28,8 +28,8 @@ function app(papersList, opts = {}) {
   r.run(`receipts = testL.receipts; returns = testL.returns; papers = testL.papers; todayStr = () => '2026-10-05';
     runCloudTask = async (label, task) => { testWrites.push(task); return true; }; runCloudTaskSilent = runCloudTask; ledgerInvalidate();`);
   r.history = (filter = 'all') => { r.run(`currentView = 'receiptsHistory'; receiptHistoryFilter = '${filter}'; renderReceiptsHistory();`); return r.node('app').innerHTML; };
-  // כרטיס לפי מה שכתוב בו
-  r.card = (html, re) => (html.split('<details').slice(1).map(c => '<details' + c).find(c => re.test(strip(c))) || '');
+  // כרטיס לפי מה שכתוב בו (v144: בכרטיס ההחזרה יש details מקופל — "עוד N מוצרים — זוכו במלואם" — והוא חלק ממנו)
+  r.card = (html, re) => (html.split(/<details(?! class="ret-fold")/).slice(1).map(c => '<details' + c).find(c => re.test(strip(c))) || '');
   return r;
 }
 const declared = o => ({ schema: 1, kind: 'declared', state: 'accepted', docDay: '2026-10-05', timestamp: 2, ...o });
@@ -48,10 +48,11 @@ test('בלי ניירות — כל תעודה מסווגת בדיוק כמו ק�
 test('עם 141 ו-142: כרטיסי נייר, וסטטוס הקליטות וההחזרה מהמאזן', () => {
   const r = app([L.papers.p141, L.papers.p142]);
   const html = r.history();
-  // הניירות עצמם
-  const c142 = r.card(html, /נייר זיכוי מהנהג/), c141 = r.card(html, /נייר חיוב מהנהג/);
-  assert.match(strip(c142), /נספר במאזן[\s\S]*4\.10\.2026 · 09:04 · 290095142[\s\S]*זיכוי משלים להחזרה מ-4\.10[\s\S]*זוכו 17 יח׳ · 4 שורות/);
-  assert.match(strip(c142), /אחיד פרוס ברמן[\s\S]*13 יח׳/);
+  // הניירות עצמם. v144: נייר הזיכוי 142 (זיכוי משלים להחזרה מ-4.10) — בתוך כרטיס ההחזרה, לא כרטיס נפרד עם אותו משפט
+  const c141 = r.card(html, /נייר חיוב מהנהג/);
+  assert.equal(r.card(html, /נייר זיכוי מהנהג/), '', 'אין כרטיס נפרד לנייר הזיכוי');
+  const c142 = r.card(html, /תעודת חזרות.*4\.10\.2026/);
+  assert.match(strip(c142), /נייר הזיכוי מהנהג של ההחזרה הזו נייר הזיכוי 95142 מ-4\.10 09:04 4 שורות · 17 יח׳ · זיכוי משלים פתח/);
   assert.match(c142, /data-role="paper-open" data-id="paper_290095142"/);
   // v130: התיקון של ברמן מזוהה לבד — בלי "שאלה במאזן"
   assert.match(strip(c141), /נספר במאזן[\s\S]*עודף לחמניות 10 בשקית ×2 בקליטה מ-4\.10 · תיקון של ברמן: לחם אחיד ברמן ×13 \(התקזז\)[\s\S]*חויבו 15 יח׳ · 2 שורות/);
@@ -76,7 +77,8 @@ test('עם 141 ו-142: כרטיסי נייר, וסטטוס הקליטות והה
   const open = strip(r.history('open')), done = strip(r.history('done'));
   assert.doesNotMatch(open, /נייר חיוב מהנהג|נייר זיכוי מהנהג/, 'שני הניירות הוסברו — לא "פתוחות"');
   assert.match(open, /חויבת פעמיים/); assert.doesNotMatch(open, /אומתה — ניירות 95141/);
-  assert.match(done, /נייר זיכוי מהנהג/); assert.match(done, /נייר חיוב מהנהג/); assert.match(done, /אומתה — ניירות 95141, 95142/);
+  assert.match(done, /נייר הזיכוי 95142/); assert.match(done, /נייר חיוב מהנהג/); assert.match(done, /אומתה — ניירות 95141, 95142/);
+  assert.doesNotMatch(done, /נייר זיכוי מהנהג/, 'v144: בתוך כרטיס ההחזרה');
   // באנרים: החוסר של 5.10 נשאר; מה ש-142 זיכה בהחזרה של 4.10 כבר לא "חסר זיכוי"
   const rb = r.run('receiptsBalance()'), tb = r.run('returnsBalance()');
   assert.equal(rb.shortUnits, 2); assert.equal(rb.shortDocs, 1);
@@ -121,7 +123,8 @@ test('החזרה שתעודת הזיכוי שלה צולמה — "זוכתה" ג
   const q = app([creditPaper('290099003', [['101', 2]]), creditPaper('290099004', [['344', 1]]), creditPaper('290099005', [['238', 1]]), creditPaper('290099006', [['233', 1]])].map((p, i) => ({ ...p, timestamp: p.timestamp + i })), { receipts: [], returns: [R3] });
   assert.equal(q.run(`returnStateNow(returns[0])`), 'done');
   const c3 = strip(q.card(q.history(), /תעודת חזרות/));
-  assert.match(c3, /זוכתה — ניירות 99003, 99004, 99005, 99006[\s\S]*מהנהג זיכו את כל מה שהוחזר/);
+  // v144: בכותרת — כמה ניירות; המספרים — מתחת לתאריך (רשימה ארוכה דחקה את הכותרת לשתי שורות)
+  assert.match(c3, /זוכתה — 4 ניירות[\s\S]*זוכתה בניירות 99003 מ-4\.10, 99004 מ-4\.10, 99005 מ-4\.10, 99006 מ-4\.10[\s\S]*ניירות 99003, 99004, 99005, 99006 מהנהג זיכו את כל מה שהוחזר/);
   assert.doesNotMatch(c3, /תעודת הזיכוי — צלם/);
   // נייר משלים על שורה אחת מתוך שלוש — השאר עדיין ממתין לתעודת זיכוי
   const R2 = ret('ret_t2', [['101', 2], ['344', 1], ['238', 1]]);
@@ -129,7 +132,12 @@ test('החזרה שתעודת הזיכוי שלה צולמה — "זוכתה" ג
   assert.equal(s.run(`returnStateNow(returns[0])`), 'credit');
   assert.match(s.run('pendingReturnsBannerHtml()'), /פתוחה לאימות/);
   assert.match(strip(s.card(s.history(), /תעודת חזרות/)), /ממתינה לתעודת זיכוי[\s\S]*ממתינה לתעודת זיכוי/);
-  assert.match(strip(s.card(s.history(), /נייר זיכוי מהנהג/)), /נספר במאזן[\s\S]*זיכוי משלים להחזרה מ-3\.10/);
+  // v144: הנייר המשלים — בתוך כרטיס ההחזרה, שאומר שזוכתה חלקית ומה עוד ממתין
+  const sc = strip(s.card(s.history(), /תעודת חזרות/));
+  assert.match(sc, /זוכתה חלקית בנייר 99002 מ-4\.10/);
+  assert.match(sc, /נייר הזיכוי 99002 מ-4\.10 10:00 שורה אחת · 1 יח׳ · זיכוי משלים פתח/);
+  assert.match(sc, /אחיד פרוס ברמן 2 0 טרם זוכה 2 — ממתינה לתעודת זיכוי/);
+  assert.doesNotMatch(s.history(), /נייר זיכוי מהנהג/);
 });
 
 test('תעודת משלוח שצולמה ועוד לא נקלטה — כרטיס בלי כמויות, עם "לקליטה"; אחרי הקליטה — רק כרטיס הקליטה', () => {

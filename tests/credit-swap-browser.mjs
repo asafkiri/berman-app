@@ -103,13 +103,15 @@ try {
   await page.evaluate(() => window.t.history());
   const cards = page.locator('#app details', { hasText: 'תעודת חזרות' });
   assert.equal(await cards.count(), 3);
-  for (let i = 0; i < 3; i++) await cards.nth(i).locator('summary').click();
+  // v144: בכרטיס יש גם details מקופל ("עוד N מוצרים — זוכו במלואם") — פותחים את הכרטיס עצמו
+  for (let i = 0; i < 3; i++) await cards.nth(i).locator('summary').first().click();
   const hist = await page.locator('#app').innerText();
-  assert.match(hist, /זוכה 0 · במקומו זוכה חלה מרובעת ברמן ×2 \(אותו מחיר — התקזז\)/);
-  assert.match(hist, /זוכה 0 · חסר 2 · במקומו זוכה לחם אחיד ברמן ×2/);
-  assert.match(hist, /זוכה 0 · חסר 4/);
-  assert.match(hist, /חסר זיכוי 2 · עודף זיכוי 2/);
-  assert.match(hist, /חסר זיכוי 4/);
+  assert.match(hist, /זוכו כ״חלה מרובעת ברמן״ ×2 — אותו מחיר, אין מה לבקש/);
+  assert.match(hist, /במקומן זוכו לחם אחיד ברמן ×2 — לא נסגר לבד \(מחיר שונה\)/);
+  assert.match(hist, /חסר 4 — לא בנייר הזיכוי/);
+  assert.match(hist, /חסר 2 · עודף 2/);
+  assert.match(hist, /חסר זיכוי על 4 יח׳/);
+  assert.match(hist, /מה לעשות\s+לבקש מהנהג זיכוי על/);
   await noScroll('היסטוריה, כרטיסים פתוחים');
   await page.screenshot({ path: shots + '/berman-v141-history.png', fullPage: true });
   // החזרות: הבאנר אדום — יש פער בזיכוי
