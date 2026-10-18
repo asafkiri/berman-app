@@ -75,6 +75,17 @@ test('אחרי 141 ו-142: רק חיוב כפול על 1231 ×2; התיקון ש
   assert.deepEqual(lg.placed.find(p => p.id === P.p141.id).attach.rowTargets.map(t => t.type + ':' + t.id), ['null:null', 'receipt:' + RC1004], '1231 ×2 לעודף ב-4.10');
 });
 
+// v146: ספטמבר נסגר — 142 שייך להחזרה של 4.10 כי היא מכסה יותר משורותיו (ציון גבוה ב-1 מהחזרה של ספטמבר),
+// לא "רק בגלל התקופה". עד v145 הפרש של 1 בציון נחשב כאילו הוא הפרש התקופה — התיקון לא זוהה, ונהיה חוסר אדום
+test('ספטמבר סגור: התיקון של לחם אחיד עדיין מזוהה ומתקזז — בלי "חוסר בקליטה של 4.10 ×13"', () => {
+  const papers = [P.p141, P.p142], open = ledger(papers), lg = ledger(papers, { closedThrough: '2026-09-30' });
+  assert.ok(!lg.placed.find(p => p.id === P.p142.id).attach.tiePick, 'לא "בחירה בשוויון"');
+  assert.deepEqual(brief(lg), [['chargedTwice', 'code_1231', 2, 'problem']]);
+  assert.deepEqual(lg.items.filter(i => i.key === 'code_100').map(i => [i.kind, i.units, i.state]), [['autoCorrection', 13, 'info']]);
+  assert.deepEqual(lg.autoDeclared.map(d => d.id), open.autoDeclared.map(d => d.id));
+  assert.equal(lg.products.code_100.net, 0);
+});
+
 test('"כן, זה תיקון" — נשאר רק 1231 ×2; ההצהרה מתבטלת לבד כשהזיכוי הראשון מצולם', () => {
   const corr = declared({ id: 'decl_corr_1', declare: 'correction', rows: [row(1, '100', 13)], standsFor: { returnId: R1004, chargePaperId: P.p141.id } });
   let lg = ledger([P.p141, P.p142, corr]);
