@@ -28,3 +28,25 @@ test('חודשים שבהם לחלק מהניירות חסרה שורה — כל
   assert.deepEqual(bad.map(([seed, w]) => 'חודש ' + seed + ' — ' + w.slice(0, 3).join(' | ')), []);
   assert.equal(app.context.testWrites.length, 0, 'תצוגה בלבד');
 });
+
+// v150 — אותם חודשים בדיוק, אבל בחצי מהביקורים שבהם ממתינות כמה החזרות הנהג מדפיס להן נייר אחד (כמו נייר 95955 מ-22.10,
+// שזיכה את ההחזרות מ-20.10 ומ-21.10). עד v149: ב-18 מ-40 החודשים שבהם הכל זוכה — התראת שווא, "לאיזו החזרה?", או החזרה
+// שנשארה "ממתינה לזיכוי" אחרי שהנייר שלה צולם (הבדיקה הזו נוספה ב-v150: replay)
+test('נייר אחד לכמה החזרות, כשהכל זוכה (גם בהחלפות) — כל ההחזרות שבו "זוכתה", בלי שאלה ובלי התראת שווא', () => {
+  let combined = 0;
+  const bad = SEEDS(40).map(seed => { const S = month(seed, 0, { combine: 0.5 }); combined += S.papers.filter(p => p.rids.length > 1).length; return [seed, replay(S)]; }).filter(([, w]) => w.length);
+  assert.ok(combined > 15, 'נבדקו ' + combined + ' ניירות של כמה החזרות');
+  assert.deepEqual(bad.map(([seed, w]) => 'חודש ' + seed + ' — ' + w.slice(0, 3).join(' | ')), []);
+});
+
+// כשבנייר של כמה החזרות חסרה שורה: החוסר מוצג נכון (מוצר שמשותף לכמה מהן — על אחת מהן, בסכום הנכון). מה שעוד לא נפתר
+// לבד — רק נייר שיש בהחזרות שלו שני דברים לפחות (חוסר והחלפה, או כמה חוסרים): עד v149 נכשלו 13 מ-40 החודשים, עכשיו 3
+test('נייר אחד לכמה החזרות, כשחסרה בו שורה — החוסר מוצג נכון; מה שלא נפתר לבד — רק נייר עם שני חוסרים או החלפות לפחות', () => {
+  let combined = 0;
+  const hard = S => S.papers.some(p => p.rids.length > 1 && S.truth.shorts.concat(S.truth.swaps).filter(x => p.rids.indexOf(x.ret) !== -1).length >= 2);
+  const bad = SEEDS(40).map(seed => { const S = month(seed + 3, 0.5, { combine: 0.5 }); combined += S.papers.filter(p => p.rids.length > 1).length; return [seed, replay(S), S]; }).filter(([, w]) => w.length);
+  assert.ok(combined > 15, 'נבדקו ' + combined + ' ניירות של כמה החזרות');
+  assert.deepEqual(bad.filter(([, , S]) => !hard(S)).map(([seed, w]) => 'חודש ' + seed + ' — ' + w.slice(0, 3).join(' | ')), []);
+  assert.ok(bad.length <= 3, bad.length + ' חודשים');
+  assert.equal(app.context.testWrites.length, 0, 'תצוגה בלבד');
+});
