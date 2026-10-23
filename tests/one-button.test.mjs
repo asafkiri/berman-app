@@ -429,7 +429,7 @@ test('טלפון שני: רואה "קורא…" ולא יכול לסיים; אח
   assert.equal(back.state.aiScanResponse.perDocument[0].paperId, 'paper_77001234');
   assert.equal(back.state.aiScanDocuments[0].paperId, 'paper_77001234');
   assert.deepEqual(Object.keys(plain(b.run('emptySharedReceipt()')).state).sort(), Object.keys(plain(b.run('sharedReceiptBindings()'))).sort());
-  assert.equal(Object.keys(back.state).length, 37);
+  assert.equal(Object.keys(back.state).length, 38); // v149: + aiReceivedEdits (השורות הירוקות של מסך החוסרים)
   // מיזוג: B ספר תוך כדי, A הכניס את התעודה — בלי התנגשות
   const base = plain(b.run('captureSharedReceipt()'));
   base.state.aiScanResponse = null; base.state.aiScanDocuments = []; base.state.receiptNotes = []; base.state.receiptPaperScanState = 'running'; base.state.aiScanBusy = true;
