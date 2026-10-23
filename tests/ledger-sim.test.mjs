@@ -40,13 +40,14 @@ test('נייר אחד לכמה החזרות, כשהכל זוכה (גם בהחל�
 });
 
 // כשבנייר של כמה החזרות חסרה שורה: החוסר מוצג נכון (מוצר שמשותף לכמה מהן — על אחת מהן, בסכום הנכון). מה שעוד לא נפתר
-// לבד — רק נייר שיש בהחזרות שלו שני דברים לפחות (חוסר והחלפה, או כמה חוסרים): עד v149 נכשלו 13 מ-40 החודשים, עכשיו 3
+// לבד — רק נייר שיש בהחזרות שלו שני דברים לפחות (חוסר והחלפה, או כמה חוסרים): עד v149 נכשלו 13 מ-40 החודשים, בסבב
+// הראשון של v150 — 3, עכשיו 1 (אותה החלפה בכמה החזרות, שורה שנשכחה בכל אחת, חוסר במוצר משותף, החזרה קטנה שזוכתה בחלקה)
 test('נייר אחד לכמה החזרות, כשחסרה בו שורה — החוסר מוצג נכון; מה שלא נפתר לבד — רק נייר עם שני חוסרים או החלפות לפחות', () => {
   let combined = 0;
   const hard = S => S.papers.some(p => p.rids.length > 1 && S.truth.shorts.concat(S.truth.swaps).filter(x => p.rids.indexOf(x.ret) !== -1).length >= 2);
   const bad = SEEDS(40).map(seed => { const S = month(seed + 3, 0.5, { combine: 0.5 }); combined += S.papers.filter(p => p.rids.length > 1).length; return [seed, replay(S), S]; }).filter(([, w]) => w.length);
   assert.ok(combined > 15, 'נבדקו ' + combined + ' ניירות של כמה החזרות');
   assert.deepEqual(bad.filter(([, , S]) => !hard(S)).map(([seed, w]) => 'חודש ' + seed + ' — ' + w.slice(0, 3).join(' | ')), []);
-  assert.ok(bad.length <= 3, bad.length + ' חודשים');
+  assert.ok(bad.length <= 1, bad.length + ' חודשים');
   assert.equal(app.context.testWrites.length, 0, 'תצוגה בלבד');
 });

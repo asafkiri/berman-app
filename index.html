@@ -13612,7 +13612,14 @@ function paperPrintTs(p) {
 // באף אחת מהן נשאר כמו שהוא. opts.min — לפחות כמה החזרות. opts.holes — מה שעוד חסר בהחזרה הראשית אחרי הנייר (מוצר →
 // כמות). לא מנחשים: החזרה של שורה אחת שהכמות שלה היא בדיוק של חוסר במוצר אחר, או החלפה שהכמות שלה היא של חוסר אחר —
 // אולי החלפה שם; ושני פתרונות שונים באותה עדיפות כשיש בהם החזרה שחסר בה משהו. מחזיר { members: [{ id, alloc, swap,
-// short, partial }], loose } (loose — כמה מכל מוצר נשאר בלי שיוך, בשביל החלפה) או null.
+// short, partial }], loose, pieces } (loose — כמה מכל מוצר נשאר בלי שיוך, בשביל החלפה; pieces — אותו דבר, כל החלפה
+// לחוד: [{ q, id }], id — ההחזרה שההחלפה שלה, או null לחוסר בראשית) או null.
+// v150 (סבב 2): אותה החלפה בכמה החזרות — הנהג זיכה "דגני קלות" במקום "ברמן לענין קל ×1" בכל אחת, והנייר מאחד לשורה
+// אחת "דגני קלות ×2": שורה של מוצר שאינו באף החזרה מתחלקת בין ההחלפות של אותו מוצר חסר בכמה החזרות, כשהיא נגמרת בדיוק
+// (או שמה שנשאר ממנה הוא בדיוק החוסר באותו מוצר בראשית — אותה החלפה גם בה). opts.weak(id, k) —
+// גם החזרה קטנה שנמצאה בנייר רק בחלקה (שורה אחת בדיוק מתוך שתיים), רק כשהיא היחידה שמסבירה את מה שנשאר: כל מה שנשאר
+// הוא שורות שלה בדיוק בכמות, הן לפחות חצי ממנה, אין עוד מועמדת עם המוצרים האלה, והם לא של הראשית ולא פתוחים בהחזרה
+// אחרת (opts.weak).
 function paperReturnCover(need, cands, opts) {
   opts = opts || {};
   const r3 = n => Math.round((Number(n) || 0) * 1000) / 1000, eq = (a, b) => Math.abs(a - b) < 1e-9;
@@ -13627,20 +13634,25 @@ function paperReturnCover(need, cands, opts) {
   // כל מה שפתוח בהחזרה, מתוך rest — חוץ ממוצר אחד לכל היותר שחסר ממנו (אולי הוחלף, כולו או חלק ממנו); לפחות מוצר
   // אחד שלם. מוצר שיש ממנו רק חלק — גם בלי לקחת ממנו כלום (אולי החלק הזה של החזרה אחרת, וכאן הוא הוחלף כולו), וגם רק
   // ממה שנשאר אחרי שכל ההחזרות האחרות קיבלו את שלהן (defer)
-  const take = (c, rest) => {
-    const alloc = {}, missing = [];
+  // v150 (סבב 2): took — מוצרים שהחזרות ישנות יותר בפתרון כבר קיבלו. מוצר כזה שלא נשאר ממנו כלום — חוסר במוצר משותף
+  // (sshort), לא "חסר" שצריך החלפה; רק כשלפחות חצי מהשורות של ההחזרה בנייר בדיוק, ולא בהחזרה (c.noShared) שאומתה ידנית,
+  // שיש לה קישור זיכוי או שורה שהועברה
+  const take = (c, rest, took) => {
+    const alloc = {}, missing = [], sshort = [];
     let part = null;
     for (const k of Object.keys(c.open)) {
       const o = c.open[k], x = rest[k] || 0;
       if (x > o - 1e-9) alloc[k] = o;
+      else if (!(x > 1e-9) && !c.noShared && took.has(k)) sshort.push(k);
       else { if (x > 1e-9) { alloc[k] = r3(x); part = k; } missing.push(k); }
     }
     const whole = a => Object.keys(a).some(k => eq(a[k], c.open[k]));
     if (missing.length > 1 || !whole(alloc)) return [];
-    const out = [{ alloc, missing }];
+    if (sshort.length && Object.keys(alloc).filter(k => eq(alloc[k], c.open[k])).length * 2 < Object.keys(c.open).length) return [];
+    const out = [{ alloc, missing, sshort }];
     if (part) {
       const z = { ...alloc }; delete z[part];
-      if (whole(z)) out.push({ alloc: z, missing }, { alloc: z, missing, defer: part });
+      if (whole(z)) out.push({ alloc: z, missing, sshort }, { alloc: z, missing, sshort, defer: part });
     }
     return out;
   };
@@ -13651,7 +13663,7 @@ function paperReturnCover(need, cands, opts) {
     // פחות הנחות (החלפה, החזרה שחסר בה משהו), פחות החזרות; ובאותה עדיפות — הישנות. שני פתרונות שקולים עם החזרות אחרות,
     // כשבאחד מהם החזרה שחסר בה משהו — לא מנחשים. אותן החזרות, ורק לא ברור באיזו מהן חסר מוצר שמשותף להן (הנייר מאחד אותו
     // לשורה אחת) — החוסר גלוי בכל מקרה: בחדשה מביניהן
-    sol.rank = [sol.unexplained, sol.unlike, sol.members.filter(m => m.swap || m.partial).length, sol.members.length];
+    sol.rank = [sol.unexplained, sol.unlike, sol.members.filter(m => m.swap || m.partial || m.shared).length, sol.members.length];
     sol.order = sol.members.map(m => m.idx + (m.partial ? 100 : 0)).sort((a, b) => a - b);
     sol.set = sol.members.map(m => m.idx).sort((a, b) => a - b).join(',');
     const c = best ? cmp(sol.rank, best.rank) : -1;
@@ -13663,7 +13675,8 @@ function paperReturnCover(need, cands, opts) {
   };
   // ההחלפה של כל החזרה שחסר בה מוצר: המוצר החסר ↔ שורה של מוצר שאינו באף החזרה, או מה שנשאר ממוצר של ההחזרות אחרי
   // שכל אחת קיבלה את שלה — באותה כמות. עודף על מוצר של אותה החזרה — לה (המאזן מזהה "זוכה יותר על מוצר שהוחזר"); אחרת —
-  // בלי שיוך. כמה אפשרויות — כל אחת נבדקת עד הסוף, והטובה נבחרת
+  // בלי שיוך. כמה אפשרויות — כל אחת נבדקת עד הסוף, והטובה נבחרת. v150 (סבב 2): שורה של מוצר שאינו באף החזרה — גם חלק
+  // ממנה, להחלפה של אותו מוצר חסר בכמה החזרות; היא צריכה להיגמר בדיוק (complete)
   const finish = (rest, chosen0) => {
     // defer: המוצר שיש ממנו רק חלק — ממה שנשאר אחרי שכל ההחזרות האחרות קיבלו את שלהן
     const r0 = { ...rest };
@@ -13674,24 +13687,35 @@ function paperReturnCover(need, cands, opts) {
       r0[k] = r3(r0[k] - d);
       return { ...m, defer: null, alloc: { ...m.alloc, [k]: r3(d) }, missing: eq(d, o) ? [] : m.missing };
     });
-    const pair = (i, r, usedF, loose, members) => {
+    // fq — כמה עוד לא נלקח מכל שורה של מוצר שאינו באף החזרה; fa — איזה מוצר חסר הוחלף בה (שורה אחת — אותה החלפה בלבד);
+    // pieces — מה שנשאר בלי שיוך, כל החלפה לחוד
+    const pair = (i, r, fq, fa, loose, pieces, members) => {
       if (++work > 20000) return;
-      if (i === chosen.length) return complete(r, usedF, loose, members, chosen);
+      if (i === chosen.length) return complete(r, fq, fa, loose, pieces, members, chosen);
       const m = chosen[i];
-      const out = { id: m.c.id, idx: m.idx, alloc: { ...m.alloc }, swap: null, short: {}, full: Object.keys(m.alloc).filter(k => eq(m.alloc[k], m.c.open[k])).length };
-      if (!m.missing.length) return pair(i + 1, r, usedF, loose, members.concat([out]));
+      const ss = {};
+      (m.sshort || []).forEach(k => { ss[k] = m.c.open[k]; });
+      const out = { id: m.c.id, idx: m.idx, alloc: { ...m.alloc }, swap: null, short: ss, ...((m.sshort || []).length ? { shared: true } : {}), full: Object.keys(m.alloc).filter(k => eq(m.alloc[k], m.c.open[k])).length };
+      if (!m.missing.length) return pair(i + 1, r, fq, fa, loose, pieces, members.concat([out]));
       const a = m.missing[0], qa = r3(m.c.open[a] - (m.alloc[a] || 0));
-      foreign.filter(b => !usedF.has(b) && eq(want[b], qa)).forEach(b => pair(i + 1, r, new Set([...usedF, b]), { ...loose, [b]: qa }, members.concat([{ ...out, swap: { a, b, q: qa } }])));
+      const pc = b => ({ ...pieces, [b]: (pieces[b] || []).concat([{ q: qa, id: m.c.id }]) });
+      // v150 (סבב 2): מוצר שמשותף להחזרה אחרת בנייר, והנייר זיכה ממנו פחות מכולן יחד — כל מה שבנייר ממנו כבר התחלק (מהישנה
+      // לחדשה, כמו בחלוקה של מוצר משותף): החוסר נשאר בהן. הנייר מאחד את המוצר לשורה אחת, ולא אומר של מי החוסר
+      if (!m.c.noShared && !(r[a] > 1e-9) && chosen.some((o, j) => j !== i && !o.c.noShared && (o.c.open[a] || 0) > 0)) pair(i + 1, r, fq, fa, loose, pieces, members.concat([{ ...out, short: { ...out.short, [a]: qa }, shared: true }]));
+      foreign.filter(b => fq[b] > qa - 1e-9 && (!fa[b] || fa[b] === a)).forEach(b => pair(i + 1, r, { ...fq, [b]: r3(fq[b] - qa) }, { ...fa, [b]: a },
+        { ...loose, [b]: r3((loose[b] || 0) + qa) }, pc(b), members.concat([{ ...out, swap: { a, b, q: qa } }])));
       Object.keys(r).filter(b => b !== a && dom.has(b) && eq(r[b] || 0, qa)).forEach(b => {
         const r2 = { ...r, [b]: 0 };
-        if (m.alloc[b] != null) pair(i + 1, r2, usedF, loose, members.concat([{ ...out, alloc: { ...out.alloc, [b]: r3(out.alloc[b] + qa) }, swap: { a, b, q: qa, own: true } }]));
-        else pair(i + 1, r2, usedF, { ...loose, [b]: r3((loose[b] || 0) + qa) }, members.concat([{ ...out, swap: { a, b, q: qa } }]));
+        if (m.alloc[b] != null) pair(i + 1, r2, fq, fa, loose, pieces, members.concat([{ ...out, alloc: { ...out.alloc, [b]: r3(out.alloc[b] + qa) }, swap: { a, b, q: qa, own: true } }]));
+        else pair(i + 1, r2, fq, fa, { ...loose, [b]: r3((loose[b] || 0) + qa) }, pc(b), members.concat([{ ...out, swap: { a, b, q: qa } }]));
       });
     };
-    pair(0, r0, new Set(), {}, []);
+    const fq0 = {};
+    foreign.forEach(b => { fq0[b] = want[b]; });
+    pair(0, r0, fq0, {}, {}, {}, []);
   };
-  const complete = (r0, usedF, loose0, members0, chosen) => {
-    const r = { ...r0 }, loose = { ...loose0 }, members = members0.slice();
+  const complete = (r0, fq, fa, loose0, pieces0, members0, chosen) => {
+    const r = { ...r0 }, loose = { ...loose0 }, pieces = { ...pieces0 }, members = members0.slice();
     let restKeys = Object.keys(r).filter(k => dom.has(k) && r[k] > 1e-9);
     // מה שנשאר — החזרה אחת שחסר בה משהו (opts.partial): לפחות שתי שורות שלה בדיוק, והן לפחות חצי ממנה
     const ids = new Set(chosen.map(m => m.c.id));
@@ -13700,62 +13724,81 @@ function paperReturnCover(need, cands, opts) {
       const n = Object.keys(c.open).filter(k => eq(r[k] || 0, c.open[k])).length;
       return n >= 2 && n * 2 >= Object.keys(c.open).length;
     });
-    let strong = strongFor(restKeys);
     // אין החזרה כזו — מה שנשאר בדיוק בכמות של חוסר במוצר אחר של ההחזרה הראשית הוא החלפה בה (גם כשהמוצר נמצא בהחזרה
     // אחרת שאינה בנייר): מוצר של הראשית — נשאר לה (המאזן מזהה עודף על מוצר שהוחזר), אחר — בלי שיוך
     const usedH = new Set(), like = (a, b) => !opts.like || opts.like(a, b);
     let unlike = members.filter(m => m.swap && !like(m.swap.a, m.swap.b)).length;
     // חוסר בראשית באותה כמות — קודם במוצר באותו מחיר
     const holeFor = (k, q) => { const hs = holes0.filter(x => !usedH.has(x) && x.k !== k && eq(x.q, q)); return hs.find(x => like(x.k, k)) || hs[0] || null; };
+    const pairHole = k => {
+      const h = holeFor(k, r[k]);
+      if (!h) return false;
+      usedH.add(h);
+      if (!like(h.k, k)) unlike++;
+      if ((opts.own || []).indexOf(k) === -1) { loose[k] = r3((loose[k] || 0) + r[k]); pieces[k] = (pieces[k] || []).concat([{ q: r[k], id: null }]); }
+      r[k] = 0;
+      return true;
+    };
+    let strong = strongFor(restKeys), weak = false;
     if (restKeys.length && !strong.length) {
-      restKeys = restKeys.filter(k => {
-        const h = holeFor(k, r[k]);
-        if (!h) return true;
-        usedH.add(h);
-        if (!like(h.k, k)) unlike++;
-        if ((opts.own || []).indexOf(k) === -1) loose[k] = r3((loose[k] || 0) + r[k]);
-        r[k] = 0;
-        return false;
-      });
+      restKeys = restKeys.filter(k => !pairHole(k));
       strong = strongFor(restKeys);
+    }
+    // v150: opts.weak — החזרה קטנה שהנייר זיכה רק חלק ממנה, כשרק היא מסבירה את מה שנשאר
+    if (restKeys.length && !strong.length && opts.weak) {
+      const hit = list.map((c, idx) => ({ c, idx })).filter(({ c }) => !ids.has(c.id) && restKeys.every(k => eq(c.open[k] || 0, r[k])));
+      const c = hit.length === 1 ? hit[0].c : null;
+      if (c && restKeys.length * 2 >= Object.keys(c.open).length && restKeys.every(k => (opts.own || []).indexOf(k) === -1
+        && !list.some(o => o !== c && !ids.has(o.id) && (o.open[k] || 0) > 0) && opts.weak(c.id, k))) { strong = hit; weak = true; }
     }
     if (strong.length > 1) return;
     if (strong.length === 1) {
       const { c, idx } = strong[0], alloc = {}, short = {};
       Object.keys(c.open).forEach(k => { const x = Math.min(c.open[k], r[k] || 0); if (x > 0) alloc[k] = r3(x); if (c.open[k] - x > 1e-9) short[k] = r3(c.open[k] - x); });
-      members.push({ id: c.id, idx, alloc, swap: null, short, partial: true, full: Object.keys(c.open).filter(k => eq(alloc[k] || 0, c.open[k])).length });
+      members.push({ id: c.id, idx, alloc, swap: null, short, partial: true, ...(weak ? { weak } : {}), full: Object.keys(c.open).filter(k => eq(alloc[k] || 0, c.open[k])).length });
       restKeys.forEach(k => { r[k] = 0; });
       restKeys = [];
     }
     // opts.extra: מה שעוד נשאר נשאר כמו שהוא — רק כשכל החזרה בפתרון נמצאה בנייר בשתי שורות שלמות לפחות
     if (restKeys.length && !(opts.extra && members.length && members.every(m => m.full >= 2))) return;
     // opts.all: כל הנייר מוסבר — גם שורה של מוצר שאינו באף החזרה היא החלפה שלה
-    if (opts.all && foreign.some(b => !usedF.has(b))) return;
+    if (opts.all && foreign.some(b => fq[b] > 1e-9)) return;
+    // v150: שורה של מוצר שאינו באף החזרה שהחלפות לקחו ממנה רק חלק — השאר רק כחוסר באותה כמות באותו מוצר בראשית (אותה
+    // החלפה גם בה)
+    for (const b of foreign) {
+      if (!(fq[b] > 1e-9) || eq(fq[b], want[b])) continue;
+      const h = holes0.find(x => !usedH.has(x) && x.k === fa[b] && eq(x.q, fq[b]));
+      if (!h) return;
+      usedH.add(h);
+      if (!like(h.k, b)) unlike++;
+    }
     if (members.length < (opts.min || 1)) return;
     // לא מנחשים: חוסר (בראשית, בהחזרה שחסר בה משהו, או המוצר שהוחלף) באותה כמות כמו החזרה של שורה אחת, או כמו החלפה אחרת —
-    // אולי החלפה שם. אלא אם ההחלפה שם היא בין מוצרים שאינם באותו מחיר, וכאן לא
-    const holes = holes0.filter(h => !usedH.has(h)).concat(...members.map(m => Object.keys(m.short).map(k => ({ k, q: m.short[k], m }))), members.filter(m => m.swap).map(m => ({ k: m.swap.a, q: m.swap.q, m })));
+    // אולי החלפה שם. אלא אם ההחלפה שם היא בין מוצרים שאינם באותו מחיר, וכאן לא. v150: אותה החלפה בהחזרה אחרת (אותו מוצר
+    // חסר ואותו מוצר במקומו, מאותה שורה) אינה הסבר אחר; החזרה שנמצאה רק בחלקה (opts.weak) — מול כל חוסר באותה כמות
+    const holes = holes0.filter(h => !usedH.has(h)).concat(...members.map(m => Object.keys(m.short).map(k => ({ k, q: m.short[k], m }))), members.filter(m => m.swap).map(m => ({ k: m.swap.a, q: m.swap.q, m, sw: m.swap })));
     for (const m of members) {
       const ks = Object.keys(m.alloc);
-      if (!m.swap && !m.partial && ks.length === 1 && holes.some(h => h.m !== m && h.k !== ks[0] && eq(h.q, m.alloc[ks[0]]) && like(h.k, ks[0]))) return;
-      if (m.swap && holes.some(h => h.m !== m && eq(h.q, m.swap.q) && (like(h.k, m.swap.b) || !like(m.swap.a, m.swap.b)))) return;
+      if (!m.swap && (!m.partial || m.weak) && ks.length === 1 && holes.some(h => h.m !== m && h.k !== ks[0] && eq(h.q, m.alloc[ks[0]]) && (m.weak || like(h.k, ks[0])))) return;
+      if (m.swap && holes.some(h => h.m !== m && eq(h.q, m.swap.q) && !(h.sw && h.sw.a === m.swap.a && h.sw.b === m.swap.b) && (like(h.k, m.swap.b) || !like(m.swap.a, m.swap.b)))) return;
     }
     // בלי הסבר: מה שנשאר ממוצרי ההחזרות, ושורות של מוצר שאינו באף אחת מהן — חוץ משורה בכמות של חוסר בראשית (החלפה בה)
     let unexplained = restKeys.reduce((a, k) => a + r[k], 0);
-    foreign.filter(b => !usedF.has(b)).forEach(b => {
+    foreign.filter(b => eq(fq[b], want[b])).forEach(b => {
       const h = holeFor(b, want[b]);
       if (!h) { unexplained += want[b]; return; }
       usedH.add(h);
       if (!like(h.k, b)) unlike++;
     });
-    consider({ members, loose, unexplained: r3(unexplained), unlike });
+    consider({ members, loose, pieces, unexplained: r3(unexplained), unlike });
   };
   let steps = 0, work = 0;
   const dfs = (i, rest, chosen) => {
     if (++steps > 4096) return;
     finish(rest, chosen);
+    const took = new Set(chosen.filter(m => !m.c.noShared).flatMap(m => Object.keys(m.alloc)));
     for (let j = i; j < list.length; j++) {
-      for (const t of take(list[j], rest)) {
+      for (const t of take(list[j], rest, took)) {
         const next = { ...rest };
         Object.keys(t.alloc).forEach(k => { next[k] = r3(next[k] - t.alloc[k]); });
         chosen.push({ c: list[j], idx: j, ...t }); dfs(j + 1, next, chosen); chosen.pop();
@@ -13763,7 +13806,7 @@ function paperReturnCover(need, cands, opts) {
     }
   };
   dfs(0, want, []);
-  return best && !tie ? { members: best.members.map(({ idx, full, ...m }) => m), loose: best.loose } : null;
+  return best && !tie ? { members: best.members.map(({ idx, full, ...m }) => m), loose: best.loose, pieces: best.pieces } : null;
 }
 // טביעת נייר: יום, יחידות, שורות, וקוד:כמות של כל שורה כפי שמודפסים — בלי מספר
 // התעודה, כדי לתפוס אותו נייר שנקרא פעם עם ספרה שגויה במספר, או שנכלל כבר בקליטה.
@@ -13949,29 +13992,46 @@ function paperAttach(p, base, others, all, start) {
     Object.keys(d.rows).forEach(k => { if (!(d.rows[k].sent > 0 || d.rows[k].cred > 0)) return; const x = r3(left(d, k)); if (x > 0) o[k] = x; });
     return o;
   };
+  // v150 (סבב 2): שורה "מפער קודם" (v78) — שהועברה מהחזרה להחזרה אחרת (בהחזרה שאליה הועברה, או זו שממנה)
+  const carried = (d, k) => (Array.isArray(d.doc && d.doc.items) ? d.doc.items : []).some(l => l && (l.carried || String(l.productId || '').indexOf('carry_') === 0) && (k == null || ledgerLineKey(l).key === k))
+    || (Array.isArray(d.doc && d.doc.carriedNotes) ? d.doc.carriedNotes : []).some(n => n && (k == null || ledgerLineKey(n).key === k));
+  // noShared — לא בחלוקה של חוסר במוצר משותף: החזרה שאומתה ידנית, שיש לה קישור זיכוי (v87) או שורה שהועברה — שם ההחלטה כבר נעשתה
   const coverCands = skip => rets.filter(d => d !== skip && d.day <= day && d.day >= ledgerAddDays(day, -LEDGER_RETURN_WINDOW_DAYS)
       && !(d.day === day && pts && (Number(d.doc && d.doc.timestamp) || 0) > pts) && roleOn(d.id) === 'main')
     .sort((a, b) => a.day.localeCompare(b.day) || (Number(a.doc && a.doc.timestamp) || 0) - (Number(b.doc && b.doc.timestamp) || 0))
-    .map(d => ({ id: d.id, d, open: openOf(d) })).filter(c => Object.keys(c.open).length);
+    .map(d => ({ id: d.id, d, open: openOf(d), ...(d.credited || Object.keys(d.links || {}).length || carried(d) ? { noShared: true } : {}) }))
+    .filter(c => Object.keys(c.open).length);
   const needOf = list => { const o = {}; list.forEach(r => { if (r.q > 0) o[r.k] = r3((o[r.k] || 0) + r.q); }); return o; };
   const inRange = d => !start || (d && d.day >= start) ? 1 : 0;
   // החלפה סבירה — בין מוצרים באותו מחיר ביום הנייר (כמו במאזן: הנהג מקיש מוצר דומה)
   const like = (a, b) => ledgerSwapPrice(a, b, [day]) === 'same';
   // השורות לפי היעדים: share — כמה מכל מוצר לכל החזרה, לפי הסדר (הראשית קודם); looseQ — כמה נשאר בלי שיוך (החלפה);
-  // מה שנשאר — rest(השורה עם הכמות שנשארה). שורה שכולה ליעד אחד — כמו עד v149, בלי qty
-  const splitRows = (order, share, looseQ, rest) => {
-    const sh = {}, lq = { ...looseQ }, out = [];
+  // מה שנשאר — rest(השורה עם הכמות שנשארה). שורה שכולה ליעד אחד — כמו עד v149, בלי qty. v150 (סבב 2): pz — מה שנשאר בלי
+  // שיוך, כל החלפה לחוד (אותה החלפה בכמה החזרות: "דגני קלות ×2" — 1 לכל אחת), וכל חלק עם for — ההחזרה שההחלפה שלה, כדי
+  // שהמאזן יחפש אותה קודם שם
+  const splitRows = (order, share, looseQ, rest, pz0) => {
+    const sh = {}, lq = { ...looseQ }, pz = {}, out = [];
+    Object.keys(pz0 || {}).forEach(k => { pz[k] = (pz0[k] || []).map(x => ({ ...x })); });
     order.forEach(id => { sh[id] = { ...(share[id] || {}) }; });
     rows.forEach(r => {
       let q = r.q;
-      const pieces = [];
-      const add = (type, id, x) => { const pc = pieces.find(z => z.type === type && z.id === id); if (pc) pc.q = r3(pc.q + x); else pieces.push({ type, id, q: x }); q = r3(q - x); };
+      const pieces = [], sep = !!(pz[r.k] && pz[r.k].length);
+      const add = (type, id, x, own, fr) => { const pc = !own && pieces.find(z => !z.own && z.type === type && z.id === id); if (pc) pc.q = r3(pc.q + x); else pieces.push({ type, id, q: x, own, fr }); q = r3(q - x); };
       order.forEach(id => { const x = Math.min(q, sh[id][r.k] || 0); if (x > 0) { sh[id][r.k] = r3(sh[id][r.k] - x); add('return', id, x); } });
-      const l = Math.min(q, lq[r.k] || 0);
-      if (l > 0) { lq[r.k] = r3(lq[r.k] - l); add(null, null, l); }
-      if (q > 0 || !pieces.length) { const t = rest({ ...r, q }); add(t.type || null, t.id || null, q); }
-      if (pieces.length === 1) out.push({ line: r.i, type: pieces[0].type, id: pieces[0].id });
-      else pieces.forEach(pc => out.push({ line: r.i, type: pc.type, id: pc.id, qty: pc.q }));
+      if (sep) {
+        while (q > 1e-9 && pz[r.k].length) {
+          const x = Math.min(q, pz[r.k][0].q);
+          add(null, null, x, true, pz[r.k][0].id); lq[r.k] = r3((lq[r.k] || 0) - x);
+          pz[r.k][0].q = r3(pz[r.k][0].q - x); if (!(pz[r.k][0].q > 1e-9)) pz[r.k].shift();
+        }
+      } else {
+        const l = Math.min(q, lq[r.k] || 0);
+        if (l > 0) { lq[r.k] = r3(lq[r.k] - l); add(null, null, l); }
+      }
+      if (q > 0 || !pieces.length) { const t = rest({ ...r, q }); add(t.type || null, t.id || null, q, sep && !t.type); }
+      const fr = pc => pc.fr ? { for: pc.fr } : {};
+      if (pieces.length === 1) out.push({ line: r.i, type: pieces[0].type, id: pieces[0].id, ...fr(pieces[0]) });
+      else pieces.forEach(pc => out.push({ line: r.i, type: pc.type, id: pc.id, qty: pc.q, ...fr(pc) }));
     });
     return out;
   };
@@ -13988,7 +14048,7 @@ function paperAttach(p, base, others, all, start) {
     const share = { [prim.id]: primShare };
     mem.forEach(m => { share[m.id] = m.alloc; });
     return { type: 'return', id: prim.id, role: primRole, also: mem.map(m => ({ id: m.id, role: roleOn(m.id) })),
-      rowTargets: splitRows([prim.id].concat(mem.map(m => m.id)), share, sol.loose || {}, rest), by: 'auto' };
+      rowTargets: splitRows([prim.id].concat(mem.map(m => m.id)), share, sol.loose || {}, rest, sol.pieces), by: 'auto' };
   };
   // כל הנייר הוא בדיוק כל מה שפתוח בשתי החזרות או יותר (גם כשאותו מוצר בכמה מהן והנייר מאחד אותו לשורה אחת, ואז אף
   // החזרה לבד לא "מתאימה" לו). החזרה אחת שמסבירה את כל הנייר — כמו קודם; נייר שהמשתמש בחר לו החזרה — לפי הבחירה (למטה).
@@ -14006,7 +14066,7 @@ function paperAttach(p, base, others, all, start) {
       break;
     }
   }
-  let R = null, ask = null, askFit = false, periodOnly = false;
+  let R = null, ask = null, askFit = false, periodOnly = false, tied = [];
   if (p.forReturnId) {
     const f = rets.find(d => d.id === p.forReturnId);
     // צולם מכרטיס ההחזרה — רק אם רוב שורותיו באמת נשלחו בה; אחרת לפי הציון. המשתמש בחר אותה בשאלה — תמיד
@@ -14029,13 +14089,87 @@ function paperAttach(p, base, others, all, start) {
     else if (cands.length) ask = cands.slice(0, 4).map(c => c.d.id);
     // fit: המועמדת המובילה מכסה לפחות חצי משורות הנייר (השאלה בגלל תיקו) — אחרת השורות נספרות לפי היעדים שלהן
     if (ask) askFit = !!(top && top.score * 2 >= rows.length);
+    // v150 (סבב 2): ההחזרות שהשוויון ביניהן עצר את הבחירה — כל אחת מכסה לפחות חצי מהנייר
+    if (!R && askFit) tied = cands.filter(c => !cmp(top, c)).map(c => c.d);
   }
+  // השיוך כשההחזרה הראשית היא R — שנבחרה, או (v150, סבב 2) בבדיקה של כל תשובה אפשרית לשאלה "לאיזו החזרה?"
+  const withMain = (R, periodOnly) => {
+    const keysOnR = Object.keys(R.rows).filter(k => R.rows[k].sent > 0);
+    const covered = new Set(rows.filter(r => onR(R, r.k)).map(r => r.k));
+    // v144: שורה של מוצר שלא הוחזר, כשבהחזרה חסר מוצר אחר בדיוק בכמות שלה — הנהג זיכה אותו במקום: גם הוא "מכוסה"
+    // (נייר עם החלפה הוא עדיין הנייר הראשי — שורה שחסרה בו היא חוסר מיד, לא "ממתינה")
+    const swapped = new Set();
+    // v145: לא שורה שהולכת לחוסר בקליטה (זיכוי לקליטה אינו החלפה, ונייר משלים לא יהפוך בגללה לראשי)
+    const toRec = r => (R.recAllocs || []).some(a => a.key === r.k) || !!findRec(r, -1);
+    // v150: מה שבנייר מעבר למה שההחזרה הראשית יכולה לקבל — שורות של מוצר שלא נשלח בה (ולא לחוסר בקליטה), והעודף על מוצר
+    // שכן — כשהוא כל מה שפתוח בהחזרה אחרת (או בכמה): הנייר זיכה גם אותן. holes — מה שעוד חסר בראשית אחרי הנייר
+    const tot = needOf(rows), capR = k => Math.max(0, r3(left(R, k)));
+    const extra = {}, holes = {}, shareR = {};
+    Object.keys(tot).forEach(k => { if (!covered.has(k)) return; shareR[k] = Math.min(tot[k], capR(k)); if (tot[k] > capR(k)) extra[k] = r3(tot[k] - capR(k)); });
+    rows.forEach(r => { if (!covered.has(r.k) && r.q > 0 && !toRec(r)) extra[r.k] = r3((extra[r.k] || 0) + r.q); });
+    Object.keys(R.rows).forEach(k => { if (!onR(R, k)) return; const x = r3(capR(k) - Math.min(capR(k), tot[k] || 0)); if (x > 0) holes[k] = x; });
+    // v150 (סבב 2): החזרה קטנה שהנייר זיכה רק חלק ממנה — רק כשאף החזרה אחרת מהשבועיים שלפני הנייר (גם כזו שכבר יש לה
+    // תעודת זיכוי) לא פתוחה במוצר; לא החזרה שאומתה ידנית, ולא מוצר "מפער קודם" (v78) — שורה שהועברה מהחזרה להחזרה אחרת
+    // (בראשית, או מההחזרה הזו) היא של ההחזרה שאליה הועברה
+    const weak = (id, k) => {
+      const c = rets.find(d => d.id === id);
+      return !!c && !c.credited && !carried(R, k) && !carried(c, k) && !rets.some(d => d !== R && d !== c && d.day <= day && d.day >= ledgerAddDays(day, -LEDGER_RETURN_WINDOW_DAYS)
+        && !(d.day === day && pts && (Number(d.doc && d.doc.timestamp) || 0) > pts) && (open(d, k) || carried(d, k)));
+    };
+    const more = Object.keys(extra).length ? paperReturnCover(extra, coverCands(R), { partial: true, extra: true, holes, own: [...covered], like, weak }) : null;
+    // שורה שהולכת להחזרה אחרת, או שנשארת בשביל החלפה באחת מהן — אינה החלפה בראשית
+    const free = r => !more || !(more.members.some(m => (m.alloc[r.k] || 0) > 0) || (more.loose[r.k] || 0) > 0);
+    rows.filter(r => !onR(R, r.k) && !toRec(r) && free(r)).forEach(r => { const a = keysOnR.find(k => !covered.has(k) && !swapped.has(k) && R.rows[k].sent - R.rows[k].cred - onPaper(R, k) === r.q); if (a) swapped.add(a); });
+    const hasMain = (others || []).some(o => paperReturnRole(o, R.id) === 'main');
+    // "ראשי" — רק לפי כמה מההחזרה הנייר מכסה. v130: בלי הורדה ל"משלים" בגלל נייר חיוב סמוך — נייר ראשי
+    // שחסרה בו שורה צריך להראות את החסר (בלי שאלות, תיקון של ברמן מזוהה רק כשהנייר הראשי באמת לא צולם).
+    // גם בהחזרה שנבחרה לבד בשוויון: בחירה לא נכונה — לכל היותר התראת שווא, לא חוסר שנעלם.
+    const role = !hasMain && (covered.size + swapped.size) * 2 >= keysOnR.length ? 'main' : 'side';
+    // v128: שורה שאינה בהחזרה, ושחלק מתעודת הזיכוי שלה כבר שויך לחוסר בקליטה — לאותה קליטה (בלי חלון ימים)
+    const allocTarget = row => {
+      const ids = (R.recAllocs || []).filter(a => a.key === row.k).map(a => a.receiptId);
+      const d = ids.length ? recs.find(x => ids.indexOf(x.id) !== -1 && x.rows[row.k]) : null;
+      if (!d) return targetRow(row, -1);
+      used[d.id + '|' + row.k] = (used[d.id + '|' + row.k] || 0) + row.q;
+      return { line: row.i, type: 'receipt', id: d.id };
+    };
+    // v150: מה שלא הלך להחזרה אחרת — כמו קודם: לראשית אם המוצר בה (גם מעבר למה שנשלח), אחרת לחוסר בקליטה או בלי שיוך
+    if (more) return { ...attachOf(more, R, shareR, role, r => covered.has(r.k) ? { type: 'return', id: R.id } : allocTarget(r)), ...(periodOnly ? { tiePick: true } : {}) };
+    return { type: 'return', id: R.id, role, rowTargets: rows.map(r => covered.has(r.k) ? { line: r.i, type: 'return', id: R.id } : allocTarget(r)), by: 'auto', ...(periodOnly ? { tiePick: true } : {}) };
+  };
   if (!R) {
     // v150: אף החזרה לבד לא מתאימה — אולי כמה ביחד (גם כשבאחת מהן חסר משהו). לא נייר שהמשתמש בחר לו החזרה
     if (!p.userPick) {
       const need = needOf(rows.filter(r => !findRec(r, -1)));
       const sol = Object.keys(need).length ? paperReturnCover(need, coverCands(null), { min: 2, partial: true, extra: true, like }) : null;
       if (sol && (!p.forReturnId || sol.members.some(m => m.id === p.forReturnId))) return attachOf(sol, null, null, null, r => targetRow(r, -1));
+      // v150 (סבב 2): "לאיזו החזרה?" — כשכל תשובה נותנת אותה חלוקה (הנייר זיכה את כולן, כל אחת בחלק שלה), אין מה לשאול.
+      // למשל שתי החזרות שבכל אחת מהן הנהג שכח שורה: איזו שתיבחר, הנייר מתחלק בין שתיהן באותו אופן, וכל אחת מציגה את מה
+      // שנשכח בה. תשובות שההבדל ביניהן רק באיזו מההחזרות החוסר במוצר שמשותף להן (הנייר מאחד אותו לשורה אחת, ולא אומר של מי
+      // החוסר; הסכום אותו סכום) — גם הן אותה חלוקה: הישנה מקבלת קודם, והחוסר בחדשה (כמו בחלוקה של מוצר משותף). הראשית —
+      // הישנה. הבדיקה לא נוגעת בשיוכים לקליטות (used)
+      if (tied.length > 1) {
+        const snap = { ...used }, reset = () => { Object.keys(used).forEach(k => { delete used[k]; }); Object.assign(used, snap); };
+        const alts = tied.map(d => { const at = withMain(d, false); reset(); return at; });
+        const tmp = at => ({ rows: p.rows, attach: at });
+        const who = at => paperReturnsOf(tmp(at)).map(x => x.id + ':' + (x.role || '')).sort().join(',');
+        // כמה מכל מוצר לכל יעד; מוצר שנשלח ביותר מאחת מההחזרות של הנייר — רק כמה לכולן יחד
+        const view = at => {
+          const ids = paperReturnsOf(tmp(at)).map(x => x.id), v = {};
+          const shared = k => ids.filter(id => { const d = rets.find(x => x.id === id); return d && d.rows[k] && d.rows[k].sent > 0; }).length > 1;
+          rows.forEach(r => paperRowSplit(tmp(at), r.i).forEach(t => {
+            const key = JSON.stringify([t.type || null, t.type === 'return' && shared(r.k) ? '*' : t.id || null, r.k]);
+            v[key] = r3((v[key] || 0) + t.q);
+          }));
+          return JSON.stringify(Object.keys(v).sort().map(k => [k, v[k]]));
+        };
+        const w0 = who(alts[0]), v0 = view(alts[0]);
+        if (alts[0].also && alts[0].also.length && alts.every(at => who(at) === w0 && view(at) === v0)
+          && (!p.forReturnId || paperReturnsOf(tmp(alts[0])).some(x => x.id === p.forReturnId))) {
+          const ts = d => Number(d.doc && d.doc.timestamp) || 0;
+          return withMain(tied.slice().sort((a, b) => a.day.localeCompare(b.day) || ts(a) - ts(b))[0], false);
+        }
+      }
     }
     const loose = rows.map(r => targetRow(r, -1));
     // v145: בלי "של איזו החזרה הוא?" לנייר שזיכה רק מוצר שלא הוחזר (v144). כל עוד לא נענתה, השאלה עצרה את
@@ -14043,40 +14177,7 @@ function paperAttach(p, base, others, all, start) {
     // נסגרה חזרה לאדום, והמרכזת השמיטה את הזיכוי. הנייר נספר כמו ב-v143 (זיכוי בלי שיוך)
     return { type: null, id: null, role: null, rowTargets: loose, by: 'auto', ...(ask ? { ask, fit: askFit } : {}) };
   }
-  const keysOnR = Object.keys(R.rows).filter(k => R.rows[k].sent > 0);
-  const covered = new Set(rows.filter(r => onR(R, r.k)).map(r => r.k));
-  // v144: שורה של מוצר שלא הוחזר, כשבהחזרה חסר מוצר אחר בדיוק בכמות שלה — הנהג זיכה אותו במקום: גם הוא "מכוסה"
-  // (נייר עם החלפה הוא עדיין הנייר הראשי — שורה שחסרה בו היא חוסר מיד, לא "ממתינה")
-  const swapped = new Set();
-  // v145: לא שורה שהולכת לחוסר בקליטה (זיכוי לקליטה אינו החלפה, ונייר משלים לא יהפוך בגללה לראשי)
-  const toRec = r => (R.recAllocs || []).some(a => a.key === r.k) || !!findRec(r, -1);
-  // v150: מה שבנייר מעבר למה שההחזרה הראשית יכולה לקבל — שורות של מוצר שלא נשלח בה (ולא לחוסר בקליטה), והעודף על מוצר
-  // שכן — כשהוא כל מה שפתוח בהחזרה אחרת (או בכמה): הנייר זיכה גם אותן. holes — מה שעוד חסר בראשית אחרי הנייר
-  const tot = needOf(rows), capR = k => Math.max(0, r3(left(R, k)));
-  const extra = {}, holes = {}, shareR = {};
-  Object.keys(tot).forEach(k => { if (!covered.has(k)) return; shareR[k] = Math.min(tot[k], capR(k)); if (tot[k] > capR(k)) extra[k] = r3(tot[k] - capR(k)); });
-  rows.forEach(r => { if (!covered.has(r.k) && r.q > 0 && !toRec(r)) extra[r.k] = r3((extra[r.k] || 0) + r.q); });
-  Object.keys(R.rows).forEach(k => { if (!onR(R, k)) return; const x = r3(capR(k) - Math.min(capR(k), tot[k] || 0)); if (x > 0) holes[k] = x; });
-  const more = Object.keys(extra).length ? paperReturnCover(extra, coverCands(R), { partial: true, extra: true, holes, own: [...covered], like }) : null;
-  // שורה שהולכת להחזרה אחרת, או שנשארת בשביל החלפה באחת מהן — אינה החלפה בראשית
-  const free = r => !more || !(more.members.some(m => (m.alloc[r.k] || 0) > 0) || (more.loose[r.k] || 0) > 0);
-  rows.filter(r => !onR(R, r.k) && !toRec(r) && free(r)).forEach(r => { const a = keysOnR.find(k => !covered.has(k) && !swapped.has(k) && R.rows[k].sent - R.rows[k].cred - onPaper(R, k) === r.q); if (a) swapped.add(a); });
-  const hasMain = (others || []).some(o => paperReturnRole(o, R.id) === 'main');
-  // "ראשי" — רק לפי כמה מההחזרה הנייר מכסה. v130: בלי הורדה ל"משלים" בגלל נייר חיוב סמוך — נייר ראשי
-  // שחסרה בו שורה צריך להראות את החסר (בלי שאלות, תיקון של ברמן מזוהה רק כשהנייר הראשי באמת לא צולם).
-  // גם בהחזרה שנבחרה לבד בשוויון: בחירה לא נכונה — לכל היותר התראת שווא, לא חוסר שנעלם.
-  const role = !hasMain && (covered.size + swapped.size) * 2 >= keysOnR.length ? 'main' : 'side';
-  // v128: שורה שאינה בהחזרה, ושחלק מתעודת הזיכוי שלה כבר שויך לחוסר בקליטה — לאותה קליטה (בלי חלון ימים)
-  const allocTarget = row => {
-    const ids = (R.recAllocs || []).filter(a => a.key === row.k).map(a => a.receiptId);
-    const d = ids.length ? recs.find(x => ids.indexOf(x.id) !== -1 && x.rows[row.k]) : null;
-    if (!d) return targetRow(row, -1);
-    used[d.id + '|' + row.k] = (used[d.id + '|' + row.k] || 0) + row.q;
-    return { line: row.i, type: 'receipt', id: d.id };
-  };
-  // v150: מה שלא הלך להחזרה אחרת — כמו קודם: לראשית אם המוצר בה (גם מעבר למה שנשלח), אחרת לחוסר בקליטה או בלי שיוך
-  if (more) return { ...attachOf(more, R, shareR, role, r => covered.has(r.k) ? { type: 'return', id: R.id } : allocTarget(r)), ...(periodOnly ? { tiePick: true } : {}) };
-  return { type: 'return', id: R.id, role, rowTargets: rows.map(r => covered.has(r.k) ? { line: r.i, type: 'return', id: R.id } : allocTarget(r)), by: 'auto', ...(periodOnly ? { tiePick: true } : {}) };
+  return withMain(R, periodOnly);
 }
 // מזהה קיזוז שבוטל: xo2|קליטה|קליטה|מוצר (או מוצר~מוצר) — השוואה מדויקת, לא חיפוש תת-מחרוזת
 function ledgerOffsetIdMatches(id, a, b, key) {
@@ -14342,12 +14443,15 @@ function paperLedger(opts) {
         // מוצר אחד שהחסר בו בדיוק בכמות הזו (או מועמד יחיד). כמה אפשרויות — לא מנחשים: כל צד מוצג בנפרד
         const exact = cands.filter(k => retGap(k) === q), same = samePrice(exact, b, [R && R.day, String(p.docDay || '')]);
         const a = exact.length === 1 ? exact[0] : same.length === 1 ? same[0] : (!exact.length && cands.length === 1 ? cands[0] : null);
-        return a ? { a, rid, exact: exact.length > 0 } : null;
+        return a ? { a, rid, exact: exact.length > 0, same: ledgerSwapPrice(a, b, [R && R.day, String(p.docDay || '')]) === 'same' } : null;
       };
       // v150: נייר של כמה החזרות — ההחלפה בראשית כשחסר בה מוצר בדיוק בכמות של השורה (כמו בנייר של החזרה אחת); אחרת בזו
-      // מהנוספות שחסר בה מוצר בדיוק בכמות (כמה כאלה — לא מנחשים); ואחר כך כמו עד v149 — בראשית
+      // מהנוספות שחסר בה מוצר בדיוק בכמות (כמה כאלה — זו שבה המוצר באותו מחיר, כשהיא היחידה, כמו בתוך החזרה אחת; אחרת לא
+      // מנחשים); ואחר כך כמו עד v149 — בראשית
+      // v150 (סבב 2): חלק שהשיוך שמר להחלפה של החזרה מסוימת (t.for) — קודם בה, כשחסר בה מוצר בדיוק בכמות
       const hits = rids.map(hitIn), ex = hits.slice(1).filter(h => h && h.exact), any = hits.slice(1).filter(Boolean);
-      const hit = hits[0] && hits[0].exact ? hits[0] : ex.length === 1 ? ex[0] : ex.length ? null : hits[0] || (any.length === 1 ? any[0] : null);
+      const exSame = ex.filter(h => h.same), own = t.for && rids.indexOf(t.for) !== -1 ? hits[rids.indexOf(t.for)] : null;
+      const hit = own && own.exact ? own : hits[0] && hits[0].exact ? hits[0] : ex.length === 1 ? ex[0] : ex.length ? (exSame.length === 1 ? exSame[0] : null) : hits[0] || (any.length === 1 ? any[0] : null);
       if (hit && !props.some(s => s.b === b && s.returnId === hit.rid)) props.push({ a: hit.a, b, q, returnId: hit.rid, paperId: p.id, day: String(p.docDay || ''), ts: paperTs(p) });
     });
   });
@@ -16970,11 +17074,19 @@ function returnCreditView(r, ls) {
   // מוצר שלא הוחזר: "זוכה" — מה שהניירות של ההחזרה זיכו עליו בפועל (לא כמות העודף או ההחלפה)
   // v150: נייר שזיכה כמה החזרות — רק החלק שהלך להחזרה הזו; שורה בלי שיוך — של ההחזרה הראשית של הנייר
   const mineOf = (p, t) => !t.outside && (t.type ? t.type === 'return' && t.id === r.id : p.attach.id === r.id);
+  // v150 (סבב 2): אותה החלפה בכמה החזרות ("דגני קלות ×2" — 1 לכל אחת): מה שבלי שיוך הוא של הראשית, חוץ מההחלפות של
+  // ההחזרות האחרות באותו נייר; בהחזרה נוספת — רק ההחלפות שלה
+  const swapOn = (p, k, own) => (lg.swaps || []).filter(s => s.paperId === p.id && s.b === k && !s.over && (s.returnId === r.id) === own).reduce((a, s) => a + (Number(s.q) || 0), 0);
   const paperQty = k => (lg.placed || []).filter(p => p.kind === 'credit' && paperReturnRole(p, r.id))
-    .reduce((a, p) => a + (p.rows || []).reduce((b, row, i) => {
-      if (!row || paperRowKey(row).key !== k) return b;
-      return b + paperRowSplit(p, i).reduce((c, t) => c + (mineOf(p, t) ? t.q : 0), 0);
-    }, 0), 0);
+    .reduce((a, p) => {
+      let mine = 0, loose = 0;
+      (p.rows || []).forEach((row, i) => {
+        if (!row || paperRowKey(row).key !== k) return;
+        paperRowSplit(p, i).forEach(t => { if (t.outside) return; if (!t.type) loose += t.q; else if (t.type === 'return' && t.id === r.id) mine += t.q; });
+      });
+      if (paperReturnsOf(p).length < 2) return a + mine + (p.attach.id === r.id ? loose : 0);
+      return Math.round((a + mine + (p.attach.id === r.id ? Math.max(0, loose - swapOn(p, k, false)) : Math.min(loose, swapOn(p, k, true)))) * 1000) / 1000;
+    }, 0);
   Object.values(extras).forEach(v => { const q = paperQty(v.key); if (q > 0) v.credit = q; });
   // v144: שורה "מפער קודם" (v78) שזוכתה בנייר של ההחזרה הזו — במאזן היא נרשמת בהחזרה שממנה הועברה (כאן היא לא
   // "הוחזרה"), אבל בכרטיס היא זוכתה: מה שבניירות של ההחזרה מעבר למה שזוכה על השורה שלה, עד כמה שהועבר
