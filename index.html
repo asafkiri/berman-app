@@ -11333,7 +11333,7 @@ function aiSetFindingReceived(productId, value) {
     if (!p) { showToast('המוצר לא נמצא במאגר', null, null, 2600); return false; }
     const day = activeReceiptDate(), base = Number(p.price) || 0;
     const pr = promoForProduct(p.id, day), on = promoTriggered(pr, day), pct = on ? promoPctOf(pr, base) : 0;
-    line = { productId: p.id, name: p.name || '', barcode: p.barcode || '', received: 0, noteQty: 0, price: on ? discountedUnitPrice(base, pct) : base, basePrice: base, promoPct: pct, promoOn: on, checked: false };
+    line = { productId: p.id, name: p.name || '', barcode: p.barcode || '', received: 0, noteQty: reconcilePaperEntered ? 0 : qty, price: on ? discountedUnitPrice(base, pct) : base, basePrice: base, promoPct: pct, promoOn: on, checked: false }; // v149: "בנייר" משקף את הספירה עד שהנייר מוזן — כמו בבניית ההשוואה
     reconcileData.unshift(line);
   }
   const before = Math.max(0, Math.round(Number(line.received) || 0));
