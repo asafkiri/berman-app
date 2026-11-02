@@ -842,7 +842,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '150'; // נייר זיכוי אחד לכמה החזרות — הנהג לקח כמה החזרות והדפיס נייר אחד: כולן "זוכתה" לבד
+const APP_VERSION = '151'; // בדיקת נייר: כשאי אפשר לאשר כתוב במילים מה לא תואם ומה לתקן; הכפתור האפור מסביר בלחיצה
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -16673,7 +16673,8 @@ function renderPaperReview() {
     '<div class="fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 p-3 flex gap-2 z-40">' +
       '<button data-role="review-delete" aria-label="מחק את הנייר" class="btn-tap px-4 py-3 rounded-xl font-black bg-white border-2 border-rose-200 text-rose-600"><i class="fa-solid fa-trash-can"></i></button>' +
       '<button data-role="review-back" class="btn-tap flex-1 py-3 rounded-xl font-black bg-slate-100 text-slate-600">חזרה</button>' +
-      '<button id="reviewSave" data-role="review-save" class="btn-tap flex-1 py-3 rounded-xl font-black text-white ' + (st.ok ? 'bg-blue-600' : 'bg-slate-300') + '"' + (st.ok ? '' : ' disabled') + '>אשר את הנייר</button>' +
+      // v151: אפור ולא מושבת — לחיצה כשאי אפשר לאשר מסבירה למה (paperReviewExplain)
+      '<button id="reviewSave" data-role="review-save" aria-disabled="' + (st.ok ? 'false' : 'true') + '" class="btn-tap flex-1 py-3 rounded-xl font-black text-white ' + (st.ok ? 'bg-blue-600' : 'bg-slate-300') + '">אשר את הנייר</button>' +
     '</div><div class="h-24"></div>';
   if (r.pickLine != null) refreshReviewSearch();
 }
@@ -16716,19 +16717,54 @@ function paperReviewAttachHtml(r) {
   return '<div id="reviewAttach" class="bg-white border border-slate-200 rounded-2xl p-3 mb-3"><div class="flex items-center justify-between gap-2"><div class="text-xs font-bold text-slate-600 min-w-0"><span class="font-black text-slate-700">שיוך:</span> ' + htmlEscape(shown) + '</div>' +
     '<button data-role="review-attach-toggle" class="btn-tap shrink-0 min-h-[44px] px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-black">' + (r.attachPick ? 'סגור' : 'שנה') + '</button></div>' + list + '</div>';
 }
+// v151: למה עוד אי אפשר לאשר — במילים, עם המספרים משני הצדדים ומה לתקן. עובד שטעה בין הכמות בשורה לבין
+// "סה״כ כללי" שבתחתית הנייר רואה את זה כתוב, במקום לחפש למה הכפתור אפור. הסדר: מלמעלה למטה במסך.
+function paperReviewBlockers(st) {
+  const r = paperReview, p = r.paper, rows = p.rows || [];
+  st = st || paperReviewState();
+  const out = [];
+  if (st.conflictBlocked) out.push('המספר זהה לנייר שמור — תקן את המספר, או בחר למעלה: החלף / מחק.');
+  if (!st.kindOk) out.push('בחר למעלה מה הנייר: חיוב, זיכוי / החזרה או תעודת משלוח.');
+  if (!st.dayOk) out.push('חסר התאריך המודפס — מלא אותו.');
+  if (!rows.length) out.push('אין שורות — הוסף כל שורה מהנייר ב"שורה שלא נקראה".');
+  if (rows.some(x => !x.productId)) out.push('יש שורה בלי מוצר — "בחר מוצר" בשורה המסומנת.');
+  if (rows.some(x => !(Number(x.qty) > 0))) out.push('יש שורה עם כמות 0 — רשום את הכמות מהנייר, או הסר את השורה.');
+  const u = r.units === '' ? null : Number(r.units), l = r.lines === '' ? null : Number(r.lines);
+  if (u == null) out.push('מלא את "סה״כ כללי" מתחתית הנייר.');
+  else if (rows.length && !st.unitsOk) {
+    const d = u - st.units;
+    out.push((rows.length === 1 ? 'בשורה רשומה כמות ' + mtxQty(st.units) : 'הכמויות בשורות מסתכמות ל-' + mtxQty(st.units)) + ', ובתחתית הנייר "סה״כ כללי" ' + mtxQty(u) + '. ' +
+      (d > 0 ? 'חסר ' + mtxQty(d) : 'יש ' + mtxQty(-d) + ' יותר מדי') + ': תקן את הכמות בשורה, או את "סה״כ כללי" אם הועתק לא נכון.');
+  }
+  if (l == null) out.push('מלא את "סהכ שורות" מתחתית הנייר.');
+  else if (rows.length && !st.linesOk) {
+    out.push('כאן ' + ledgerRowsText(rows.length) + ', ובתחתית הנייר "סהכ שורות" ' + mtxQty(l) + '. ' +
+      (l > rows.length ? 'חסרה שורה: הוסף אותה ב"שורה שלא נקראה"' : 'יש שורה מיותרת: הסר אותה') + ', או תקן את "סהכ שורות" אם הועתק לא נכון.');
+  }
+  if (st.mustCheck && !r.checked) out.push('אחרי שהשווית לנייר — סמן "בדקתי מול הנייר".');
+  return out;
+}
 function paperReviewStatusHtml() {
   const st = paperReviewState(), p = paperReview.paper;
   const mark = ok => ok ? '<span class="text-emerald-700">✓</span>' : '<span class="text-rose-700">✗</span>';
+  const why = paperReviewBlockers(st);
   return mark(st.unitsOk) + ' שורות הנייר: ' + mtxQty(st.units) + ' יח׳ · ' + mark(st.linesOk) + ' ' + ledgerRowsText((p.rows || []).length) +
-    (st.mapped ? '' : ' · <span class="text-amber-800">יש שורה בלי מוצר</span>') + (st.dayOk ? '' : ' · <span class="text-amber-800">חסר תאריך</span>') +
-    (st.kindOk ? '' : ' · <span class="text-amber-800">בחר סוג נייר</span>') + (st.mustCheck && !paperReview.checked ? ' · <span class="text-amber-800">סמן שבדקת מול הנייר</span>' : '') +
-    (st.conflictBlocked ? ' · <span class="text-amber-800">המספר זהה לנייר שמור — תקן את המספר, או בחר למעלה: החלף / מחק</span>' : '');
+    (why.length ? '<div data-review-why class="rounded-xl bg-amber-50 border border-amber-200 p-2.5 mt-2"><div class="text-xs font-black text-amber-800 mb-1">עוד אי אפשר לאשר:</div>' +
+        why.map(t => '<div class="text-xs font-bold text-amber-800">• ' + htmlEscape(t) + '</div>').join('') + '</div>'
+      : ' · <span class="text-emerald-700">✓ תואם לנייר — אפשר לאשר</span>');
+}
+// v151: לחיצה על הכפתור האפור אומרת למה, ומגלגלת אל ההסבר — במקום כפתור מושבת ששותק
+function paperReviewExplain() {
+  const why = paperReviewBlockers();
+  showToast('עוד אי אפשר לאשר: ' + (why[0] || 'השלם את מה שחסר למעלה.'), null, null, 6000);
+  try { const el = document.querySelector('[data-review-why]') || $('reviewStatus'); if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
 }
 function refreshPaperReviewStatus() {
   // השיוך: תיקון שעוד לא נשמר מחליף את [שנה] בהסבר
   const at = document.getElementById('reviewAttach'); if (at && paperReview) at.outerHTML = paperReviewAttachHtml(paperReview) || '<div id="reviewAttach"></div>';
   const el = $('reviewStatus'); if (el) el.innerHTML = paperReviewStatusHtml();
-  const b = $('reviewSave'); if (b) { const ok = paperReviewState().ok; b.disabled = !ok; b.className = 'btn-tap flex-1 py-3 rounded-xl font-black text-white ' + (ok ? 'bg-blue-600' : 'bg-slate-300'); }
+  // v151: הכפתור לא מושבת — אפור עם aria-disabled, כדי שלחיצה עליו תסביר (paperReviewExplain); השמירה עצמה בודקת ok
+  const b = $('reviewSave'); if (b) { const ok = paperReviewState().ok; b.setAttribute('aria-disabled', ok ? 'false' : 'true'); b.className = 'btn-tap flex-1 py-3 rounded-xl font-black text-white ' + (ok ? 'bg-blue-600' : 'bg-slate-300'); }
 }
 function refreshReviewSearch() {
   const box = $('reviewSearchList'); if (!box || !paperReview) return;
@@ -17553,7 +17589,7 @@ function paperUiClick(t) {
   if (role === 'review-pick-product') { const p = products.find(x => x.id === id); const row = r.paper.rows[r.pickLine]; if (p && row) { row.productId = p.id; row.matchedBy = 'user'; if (!row.itemCode) row.itemCode = productCode(p); } r.pickLine = null; r.query = ''; renderPaperReview(); return true; }
   if (role === 'review-row-del') { r.paper.rows.splice(parseInt(id, 10), 1); r.pickLine = null; renderPaperReview(); return true; }
   if (role === 'review-row-add') { r.paper.rows.push({ line: r.paper.rows.length + 1, itemCode: '', barcode: null, description: '', qty: 1, productId: null, matchedBy: 'user' }); r.pickLine = r.paper.rows.length - 1; renderPaperReview(); return true; }
-  if (role === 'review-save') { savePaperReview(); return true; }
+  if (role === 'review-save') { if (paperReviewState().ok) savePaperReview(); else paperReviewExplain(); return true; } // v151: אפור — מסביר למה
   if (role === 'review-delete') { deletePaperFromReview(); return true; }
   return false;
 }
