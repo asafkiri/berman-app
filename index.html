@@ -842,7 +842,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '151'; // בדיקת נייר: כשאי אפשר לאשר כתוב במילים מה לא תואם ומה לתקן; הכפתור האפור מסביר בלחיצה
+const APP_VERSION = '152'; // הבאנר "יש פער בזיכוי" לא מסיק מנתונים חלקיים בפתיחה, ומתרענן במקום כשהניירות מגיעים
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -1779,12 +1779,12 @@ function updateBackBarLabel() {
 function renderOrder() {
   const visible = products.filter(p => !p.hidden);
   if (!visible.length) {
-    app.innerHTML = pendingReturnsBannerHtml() + '<div class="text-center p-10 text-slate-500">אין מוצרים להצגה. הוסף או הצג מוצרים בהגדרות.</div>';
+    app.innerHTML = pendingReturnsBannerBoxHtml() + '<div class="text-center p-10 text-slate-500">אין מוצרים להצגה. הוסף או הצג מוצרים בהגדרות.</div>';
     updateCart(); return;
   }
   const rows = buildOrderRowsGrouped(visible);
   app.innerHTML =
-    pendingReturnsBannerHtml() +
+    pendingReturnsBannerBoxHtml() +
     '<div class="flex items-center justify-between gap-2 mb-3 px-1">' +
       '<div class="text-[11px] text-slate-400 font-medium leading-tight">טפו על <b class="text-blue-500">מומלץ</b> כדי להזמין את הכמות, או הקלידו כמות אחרת</div>' +
       '<button data-role="clear-order" class="btn-tap shrink-0 text-xs font-bold text-red-500 bg-red-50 px-3 py-1.5 rounded-lg">נקה</button>' +
@@ -3056,6 +3056,9 @@ function buildReturnRow(it) {
 // v228: תעודת חזרות פתוחה לאימות — באנר אדום בכל המסכים הראשיים (הזמנה, חזרות,
 // קליטה, ניהול), כדי שאי אפשר לשכוח אותה גם כשלא נמצאים בחזרות.
 function pendingReturnsBannerHtml() {
+  // v152: עד שכל מקורות המאזן הגיעו (גם מהמטמון) אין מסקנה — כמו תיבת "דברים לטיפול" (ledgerSourcesReady).
+  // בלי הניירות כל החזרה ישנה נראית "חסר זיכוי", וזה מה שהבאנר אמר בכל פתיחה.
+  if (!ledgerSourcesReady()) return '';
   // v125: החזרה שתעודת הזיכוי שלה צולמה והמאזן סגור עליה — כבר לא "פתוחה לאימות"
   // v127: גם כשניירות משלימים סגרו אותה (returnStateNow)
   const states = returns.filter(r => !r.credited).map(returnStateNow).filter(s => s !== 'done');
@@ -3068,6 +3071,16 @@ function pendingReturnsBannerHtml() {
   return '<div class="flex gap-2 mb-3"><button data-role="ret-history" class="btn-tap flex-1 min-w-0 ' + cls + ' rounded-xl py-3.5 px-3 font-black text-base flex items-center justify-between gap-2 shadow-md"><span class="min-w-0 truncate"><i class="fa-solid ' + (gaps ? 'fa-triangle-exclamation' : 'fa-hourglass-half') + '"></i> ' + text + '</span><span class="text-xs font-black bg-white/20 px-2 py-1 rounded-lg shrink-0">' + (gaps ? 'לפרטים ←' : 'לאימות ←') + '</span></button>' +
     '</div>'; // v126: צילום — רק בכפתור "צלם נייר מהנהג" שבפס העליון
 }
+// v152: הבאנר יושב במיכל משלו ומתרענן במקום (refreshPendingReturnsBanner) בכל פעם שמקור של המאזן מגיע או משתנה,
+// כמו תיבת "דברים לטיפול". עד כאן הוא צויר פעם אחת עם המסך: בפתיחה, כשההחזרות והקליטות כבר הגיעו מהענן והניירות
+// עוד לא, כל החזרה ישנה נראתה "חסר זיכוי" ("יש פער בזיכוי ב-7 תעודות חזרות"), והבאנר נשאר כך עד שהמסך צויר מחדש.
+// במסך החזרות, בלי באנר, במקומו כפתור ההיסטוריה.
+function ledgerHistoryButtonHtml() {
+  return '<button data-role="ret-history" class="btn-tap w-full bg-white border-2 border-slate-200 text-slate-700 rounded-xl py-3.5 font-black text-base flex items-center justify-center gap-2 mb-3 shadow-sm"><i class="fa-solid fa-clock-rotate-left text-blue-600"></i> היסטוריית תעודות — קליטות וחזרות</button>';
+}
+function pendingReturnsBannerInnerHtml() { return pendingReturnsBannerHtml() || (currentView === 'returns' ? ledgerHistoryButtonHtml() : ''); }
+function pendingReturnsBannerBoxHtml() { return '<div id="pendingReturnsBanner">' + pendingReturnsBannerInnerHtml() + '</div>'; }
+function refreshPendingReturnsBanner() { const el = document.getElementById('pendingReturnsBanner'); if (el) el.innerHTML = pendingReturnsBannerInnerHtml(); }
 // v144: הכרטיסים שהבאנר סופר — אלה שיש בהן פער (או, בלי פער, אלה שממתינות), החדשות קודם, עד 3 — נפתחים בהיסטוריה
 function pendingReturnsFocus() {
   const list = returns.filter(r => r && !r.credited).map(r => ({ r, st: returnStateNow(r) })).filter(x => x.st !== 'done');
@@ -3076,7 +3089,7 @@ function pendingReturnsFocus() {
 }
 
 function renderReturns() {
-  const histBar = pendingReturnsBannerHtml() || '<button data-role="ret-history" class="btn-tap w-full bg-white border-2 border-slate-200 text-slate-700 rounded-xl py-3.5 font-black text-base flex items-center justify-center gap-2 mb-3 shadow-sm"><i class="fa-solid fa-clock-rotate-left text-blue-600"></i> היסטוריית תעודות — קליטות וחזרות</button>';
+  const histBar = pendingReturnsBannerBoxHtml(); // v152: הבאנר, או כפתור ההיסטוריה — במיכל שמתרענן במקום
   // ברמן: אין חיוב/זיכוי ארגזים — נשארה רשימת החזרה אחת (weekly); מנגנון
   // ה-slots נשאר בקוד לתאימות הטיוטות, בלי כפתור מעבר.
   if (returnsSlot !== 'weekly') switchReturnsSlot('weekly');
@@ -6082,7 +6095,7 @@ function renderManage() {
   const btn = (role, icon, label, extra) =>
     '<button data-role="' + role + '" class="btn-tap ' + (extra || 'border-slate-200') + ' bg-white border rounded-2xl py-4 px-3 font-black text-slate-700 text-sm flex flex-col items-center justify-center gap-2 shadow-sm"><i class="fa-solid ' + icon + ' text-2xl"></i><span>' + label + '</span></button>';
   const banner = openIssuesBannerHtml({}); // v129: מה פתוח מול ברמן — משפט לכל דבר
-  app.innerHTML = banner + pendingReturnsBannerHtml() +
+  app.innerHTML = banner + pendingReturnsBannerBoxHtml() +
     '<div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">' +
       '<div class="flex items-center gap-2 mb-3"><i class="fa-solid fa-screwdriver-wrench text-slate-400"></i><span class="font-black text-slate-800 text-base">ניהול</span></div>' +
       '<div class="grid grid-cols-2 gap-2">' +
@@ -6508,7 +6521,7 @@ function renderReceivingScreen() {
     // v126: כפתור אחד לכל נייר — כשאין צילום ישן שמחכה ואין קריאה (תעודה ארוכה: "עמוד אחרי עמוד")
     const oneButton = photoMode && aiTotalPages() === 0 && !aiScanResponse && !rcMultiPhotoWanted;
     const steps = '<div class="grid grid-cols-3 gap-1 mb-4 text-center text-xs font-black"><div class="bg-blue-600 text-white rounded-lg py-2">1 · ' + (oneButton ? 'הניירות מהנהג' : photoMode ? 'צילום התעודה' : 'נתוני תעודה') + '</div><div class="bg-slate-100 text-slate-400 rounded-lg py-2">2 · ' + (oneButton ? 'ספירה' : 'סריקה') + '</div><div class="bg-slate-100 text-slate-400 rounded-lg py-2">3 · בדיקה</div></div>';
-    app.innerHTML = banner + pendingReturnsBannerHtml() + topButtons + receivingAttachBannerHtml() + receivingCountedBannerHtml() +
+    app.innerHTML = banner + pendingReturnsBannerBoxHtml() + topButtons + receivingAttachBannerHtml() + receivingCountedBannerHtml() +
       '<div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm mt-2">' + (oneButton ? '' : steps) +
         (oneButton ? receivingOneButtonCardHtml() + receivingNoDocGateHtml() + receivingMoreOptionsHtml(dateBox)
           : photoMode
@@ -6551,11 +6564,11 @@ function renderReceivingScreen() {
         '<div class="flex items-center gap-1.5 shrink-0"><button data-role="rc-notes-edit" class="btn-tap text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-2 rounded-lg"><i class="fa-solid fa-pen"></i> ערוך</button><button data-role="rc-cancel" class="btn-tap text-xs font-bold text-red-500 bg-red-50 px-2.5 py-2 rounded-lg"><i class="fa-solid fa-xmark"></i></button></div>' +
       '</div>';
   if (receiptUsesManualQuantities()) {
-    app.innerHTML = banner + pendingReturnsBannerHtml() + noteBar + (receivingNoDeliveryYet() ? receivingNoDeliveryBoxHtml() : receivingMorePapersHtml()) + receiptManualReceivingHtml();
+    app.innerHTML = banner + pendingReturnsBannerBoxHtml() + noteBar + (receivingNoDeliveryYet() ? receivingNoDeliveryBoxHtml() : receivingMorePapersHtml()) + receiptManualReceivingHtml();
     return;
   }
   const progress = receivingProgressHtml(t);
-  app.innerHTML = banner + pendingReturnsBannerHtml() + topButtons + noteBar + receivingMorePapersHtml() + paperScanStatusHtml() + '<div id="rcOcrReview">' + receivingOcrPanelHtml() + '</div>' + '<div id="rcQuantityOptions">' + receiptQuantityButtonsHtml() + '</div>' + progress +
+  app.innerHTML = banner + pendingReturnsBannerBoxHtml() + topButtons + noteBar + receivingMorePapersHtml() + paperScanStatusHtml() + '<div id="rcOcrReview">' + receivingOcrPanelHtml() + '</div>' + '<div id="rcQuantityOptions">' + receiptQuantityButtonsHtml() + '</div>' + progress +
     '<button data-role="rc-scan" class="btn-tap w-full bg-blue-600 text-white rounded-2xl py-4 font-black text-lg flex items-center justify-center gap-3 shadow-lg mb-2"><i class="fa-solid fa-barcode text-2xl"></i> סרוק פריט לתעודה</button>' +
     '<button data-role="rc-crates" class="btn-tap w-full bg-amber-50 border-2 border-amber-300 text-amber-900 rounded-2xl py-3 font-black text-base flex items-center justify-center gap-2 mb-2"><i class="fa-solid fa-basket-shopping"></i> הוסף לחם בתפזורת</button>' +
     '<details class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4"><summary class="cursor-pointer p-3 font-black text-sm text-slate-600"><i class="fa-solid fa-circle-question text-slate-400"></i> לא מצליח לסרוק?</summary><div class="px-3 pb-3">' +
@@ -14991,12 +15004,14 @@ function ledgerSourceLoaded(name) {
   ledgerFailedSources.delete(name);
   ledgerInvalidate();
   refreshOpenIssuesBanner();
+  refreshPendingReturnsBanner(); // v152
   if (currentView === 'ledger') rerender();
 }
 function ledgerSourceFailed(name, error) {
   console.error(error);
   ledgerFailedSources.add(name);
   refreshOpenIssuesBanner();
+  refreshPendingReturnsBanner(); // v152
   if (currentView === 'ledger') rerender();
 }
 const PAPER_RESULTS_KEY = 'bm_paper_results_v1';   // תוצאות ששולמו ועוד לא אושרו בענן (וחודש אחרי)
@@ -17427,6 +17442,7 @@ function paperCardInHistory(p, lg, all, isOpenCard) {
 // הפס שמתחת לכותרת: צילום נייר ומצב המאזן, בכל מסכי העבודה
 function refreshLedgerBar() {
   refreshOpenIssuesBanner();
+  refreshPendingReturnsBanner(); // v152: גם הבאנר של ההחזרות — במקום, בלי לצייר את המסך מחדש
   const el = document.getElementById('ledgerBar'); if (!el) return;
   // v126: המקום האחד לכל נייר מהנהג — באותו מקום בכל מסך עבודה (גם בקליטה, במאזן ובמסך הניירות)
   const show = ['receiving', 'returns', 'manage', 'receiptsHistory', 'ledger', 'paperIntake'].indexOf(currentView) !== -1;
