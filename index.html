@@ -842,7 +842,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '152'; // הבאנר "יש פער בזיכוי" לא מסיק מנתונים חלקיים בפתיחה, ומתרענן במקום כשהניירות מגיעים
+const APP_VERSION = '153'; // המרכזת: ההחזרה הולכת אחרי תעודת הזיכוי שלה — נספרת בחודש של הנייר, לא בחודש שנשלחה
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -13413,11 +13413,12 @@ function rangeProductMatrixData(d) {
     });
   });
   (d.rets || []).forEach(rt => {
-    const day = String((rt && (rt.docDate || rt.date)) || todayStr()).slice(0, 10);
+    const day0 = String((rt && (rt.docDate || rt.date)) || todayStr()).slice(0, 10);
     const vat = 1 + vatRateForDoc(rt);
     const credited = !!(rt && rt.credited);
     (rt.items || []).forEach(l => {
       if (!l || isDepositLine(l)) return;
+      const day = l._mday || day0; // v153: שורה שהזיכוי עליה נספר בחודש אחר — ביום הזיכוי (receiptRangeData)
       const qty = Number(l.qty) || 0;
       const row = rowFor(l);
       const pu = unitFor(row, l, day);
@@ -13442,12 +13443,12 @@ function rangeProductMatrixData(d) {
       (al.items || []).forEach(it => {
         const q = Number(it && it.qty) || 0; if (!(q > 0) || isDepositLine(it)) return;
         const row = rowFor(it);
-        const pu = unitFor(row, it, day);
+        const pu = unitFor(row, it, day0);
         if (!(pu.unit > 0)) row.unpriced = true;
-        const c = cell(row, day); c.r += q; c.amt -= pu.unit * q;
+        const c = cell(row, day0); c.r += q; c.amt -= pu.unit * q;
         row.credited += q; row.amount -= pu.unit * q; row.inc -= pu.unit * q * vat;
         row.creditedEx += pu.unit * q; row.rebate -= pu.rebate * q;
-        const a = agg(day); a.r += q; a.amount -= pu.unit * q;
+        const a = agg(day0); a.r += q; a.amount -= pu.unit * q;
       });
     });
   });
@@ -14700,18 +14701,37 @@ function paperLedger(opts) {
 // נייר בלי שיוך ותשובה — ביום המודפס. "מקבל את ההחלפה" לא נספר: בחשבונית זוכה המוצר שבנייר.
 // בלי ניירות — אין שום תוספת (אותם כללים בדיוק כמו המרכזת). lg = paperLedger בלי חודש סגור;
 // allPapers — כל הניירות שנמסרו למאזן. נספר כל מה שהיום שלו בטווח.
+// היום שבו חלק של תעודה נספר במרכזת: של התעודה, אלא אם הנייר המאוחר שלה הודפס בחודש אחר — אז ביום המודפס.
+// v142 (החלטת ברמן): נייר זיכוי/חיוב שהתאריך שלו לא נקרא היטב — יום הצילום הוא היום שבו הנהג זיכה/חייב, ונספר
+// כאן בדיוק כמו יום מודפס (גם כשהוא בחודש אחר מהתעודה). byId — הניירות לפי מזהה.
+function ledgerPartDay(x, byId) {
+  const pd = (x.papers || []).map(id => byId.get(id)).filter(p => p && p.kind !== 'declared' && p.docDay).map(p => String(p.docDay)).sort().pop();
+  return pd && pd.slice(0, 7) !== String(x.day).slice(0, 7) ? pd : String(x.day);
+}
+// v153: ההחזרה הולכת אחרי תעודת הזיכוי שלה. שורת החזרה שהזיכוי עליה נספר בחודש אחר (נייר הזיכוי מחודש אחר
+// מההחזרה) — "הוחזר" שלה נספר באותו יום שבו נספר הזיכוי, לפי אותו כלל בדיוק (ledgerPartDay). גם שורה שזוכתה
+// במוצר אחר (החלפה) — ביום של הנייר שזיכה במקומה. בלי זה אותה החזרה הייתה "חסרו ולא זוכו" בחודש שנשלחה
+// ו"התקבלו מעבר למה שחויב" בחודש של הנייר (2.11: ההחזרה מ-31.10, נייר 96389 מ-1.11). {returnId: {productKey: day}}
+function ledgerReturnLineDays(lg, allPapers) {
+  const byId = new Map((allPapers || []).filter(Boolean).map(p => [p.id, p]));
+  const out = {};
+  const set = (rid, k, day, day0) => { if (rid && k && day && day !== String(day0)) (out[rid] = out[rid] || {})[k] = day; };
+  Object.keys(lg.products || {}).forEach(k => (lg.products[k].parts || []).forEach(x => { if (x && x.type === 'return') set(x.id, k, ledgerPartDay(x, byId), x.day); }));
+  (lg.swaps || []).forEach(s => {
+    const rd = String((lg.docDays || {})[s.returnId] || ''), p = byId.get(s.paperId), pd = p && p.docDay ? String(p.docDay) : '';
+    if (rd && pd && pd.slice(0, 7) !== rd.slice(0, 7)) set(s.returnId, s.a, pd, rd);
+  });
+  return out;
+}
 function ledgerMatrixAdjust(lg, from, to, allPapers) {
   const out = [];
   const inRange = d => !!d && d >= from && d <= to;
   const byId = new Map((allPapers || []).filter(Boolean).map(p => [p.id, p]));
   const lineOf = k => { const pr = lg.products[k] || {}; return String(k).indexOf('n:') === 0 ? { name: String(k).slice(2) } : { productId: k, code: pr.code || '', name: pr.name || '' }; };
-  // היום של התוספת: של התעודה, אלא אם הנייר המאוחר שלה הודפס בחודש אחר — אז ביום המודפס.
-  // v142 (החלטת ברמן): נייר זיכוי/חיוב שהתאריך שלו לא נקרא היטב — יום הצילום הוא היום שבו הנהג זיכה/חייב, ונספר
-  // כאן בדיוק כמו יום מודפס (גם כשהוא בחודש אחר מהתעודה)
-  const dayOf = x => {
-    const pd = (x.papers || []).map(id => byId.get(id)).filter(p => p && p.kind !== 'declared' && p.docDay).map(p => String(p.docDay)).sort().pop();
-    return pd && pd.slice(0, 7) !== String(x.day).slice(0, 7) ? pd : String(x.day);
-  };
+  // היום של התוספת: של התעודה, אלא אם הנייר המאוחר שלה הודפס בחודש אחר — אז ביום המודפס (ledgerPartDay).
+  // v153: שורת החזרה שעוברת לחודש של הזיכוי (ledgerReturnLineDays, גם המוצר שהוחלף) — התוספת שלה באותו יום
+  const dayOf = x => ledgerPartDay(x, byId);
+  const retDays = ledgerReturnLineDays(lg, allPapers);
   Object.keys(lg.products || {}).forEach(k => (lg.products[k].parts || []).forEach(x => {
     let billed = 0, credit = 0;
     if (x.type === 'receipt') { billed = Number(x.charge) || 0; credit = (Number(x.credit) || 0) - (Number(x.baseCredit) || 0); }
@@ -14719,7 +14739,7 @@ function ledgerMatrixAdjust(lg, from, to, allPapers) {
     else if (x.type === 'paper') { const g = Number(x.gap0 != null ? x.gap0 : x.gap) || 0; if (g > 0) billed = g; else credit = -g; }
     else return;
     if (!billed && !credit) return;
-    const day = x.type === 'paper' ? String(x.day) : dayOf(x);
+    const day = x.type === 'paper' ? String(x.day) : (x.type === 'return' && (retDays[x.id] || {})[k]) || dayOf(x);
     if (!inRange(day)) return;
     out.push({ key: k, line: lineOf(k), day, billed, credit, papers: (x.papers || []).slice() });
   }));
@@ -19364,6 +19384,7 @@ function renderRangeResult(from, to) {
   out.innerHTML =
     '<div class="text-[11px] font-bold text-slate-500 mb-2">' + d.recs.length + ' תעודות קליטה · ' + d.rets.length + ' תעודות החזרה' + (d.paperCount ? ' · ' + (d.paperCount === 1 ? 'נייר אחד מהנהג' : d.paperCount + ' ניירות מהנהג') : '') + ' · ' + d.matrix.list.length + ' מוצרים</div>' +
     (d.paperFailed ? '<div class="text-[11px] font-black text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 mb-2"><i class="fa-solid fa-triangle-exclamation"></i> הניירות מהנהג לא חושבו — הסכום כאן בלי ניירות החיוב והזיכוי. רענן את האפליקציה ונסה שוב.</div>' : '') +
+    rangeReturnMovedHtml(d) + // v153
     supplierPaymentModeCardsHtml(d) +
     supplierCalculationStepsHtml(d) +
     rangeProductMatrixHtml(d) +
@@ -19373,16 +19394,27 @@ function renderRangeResult(from, to) {
     monthCloseHtml(d);
   out.classList.remove('hidden');
 }
+// v153: החזרות (או שורות מהן) שנספרות בחודש של תעודת הזיכוי ולא בחודש שנשלחו — שורת מידע, כדי שלא יחפשו אותן:
+// בחודש שנשלחו — לאן הלכו; בחודש של הזיכוי — מאיפה באו.
+function rangeReturnMovedHtml(d) {
+  const m = d.retMoved || { out: [], in: [] };
+  if (!m.out.length && !m.in.length) return '';
+  const line = (x, out) => '<div class="text-[11px] font-bold text-slate-500"><i class="fa-solid fa-arrow-right-arrow-left" aria-hidden="true"></i> ' +
+    (out ? mtxQty(x.units) + ' יח׳ מההחזרה מ-' + ledgerDayShort(x.day) + ' זוכו ב-' + ledgerDayShort(x.creditDay) + ' — נספרות בחודש של הזיכוי'
+      : 'כולל ' + mtxQty(x.units) + ' יח׳ מההחזרה מ-' + ledgerDayShort(x.day) + ' שזוכו ב-' + ledgerDayShort(x.creditDay)) + '</div>';
+  return '<div class="mb-2 space-y-0.5">' + m.out.map(x => line(x, true)).join('') + m.in.map(x => line(x, false)).join('') + '</div>';
+}
 // v128: מה הניירות מוסיפים לטווח. המאזן כאן מתחיל ב-ledgerFrom ולא בחודש הסגור — הניירות של חודש שנסגר
 // נשארים בו. days — אילו ניירות נספרו בכל יום (לפירוט היומי). כשל בחישוב — בלי ניירות, ונאמר.
-function rangePaperAdjust(from, to, recs, rets) {
-  const empty = { adjust: [], days: {}, count: 0, failed: false };
+function rangePaperAdjust(from, to) {
+  const empty = { adjust: [], days: {}, count: 0, failed: false, retDays: {} };
   if (!from || !to || to < ledgerFrom) return empty;
   try {
     const all = papers.filter(p => p && !p.deleted).concat(paperPendingLocal());
     if (!all.length) return empty;
     const lg = paperLedger({ recs: rangeDocsMerged('receipts'), rets: rangeDocsMerged('returns'), papers: all, from: ledgerFrom, asOf: todayStr(), tieStart: ledgerLiveStart() });
     const adjust = ledgerMatrixAdjust(lg, from, to, all);
+    const retDays = ledgerReturnLineDays(lg, all); // v153: שורות החזרה שנספרות בחודש של הזיכוי
     const days = {}, seen = new Set();
     adjust.forEach(x => x.papers.forEach(id => {
       const p = all.find(q => q.id === id); if (!p || p.kind === 'declared') return;
@@ -19399,9 +19431,11 @@ function rangePaperAdjust(from, to, recs, rets) {
       // v142: כמו dayOf — יום הצילום של נייר שהתאריך שלו לא נקרא היטב נספר כמו יום מודפס
       const rd = String((lg.docDays || {})[s.returnId] || ''), pd = String(((lg.placed || []).find(x => x.id === s.paperId) || {}).docDay || '');
       const bd = s.over ? (pd && pd.slice(0, 7) !== rd.slice(0, 7) ? pd : rd) : pd;
-      return { a: s.a, b: s.b, q: Number(s.q) || 0, same: !!s.settled, aIn: inR(rd), bIn: inR(bd) };
+      // v153: המוצר שהוחזר (a) נספר ביום שבו זוכה במקומו — אותו יום כמו בשורת ההחזרה (ledgerReturnLineDays)
+      const ad = (retDays[s.returnId] || {})[s.a] || rd;
+      return { a: s.a, b: s.b, q: Number(s.q) || 0, same: !!s.settled, aIn: inR(ad), bIn: inR(bd) };
     }).filter(s => s.aIn || s.bIn);
-    return { adjust, days, count: seen.size, failed: false, swaps };
+    return { adjust, days, count: seen.size, failed: false, swaps, retDays };
   } catch (e) { console.error('range papers failed', e); return { ...empty, failed: true }; }
 }
 function receiptRangeData(from, to) {
@@ -19411,9 +19445,29 @@ function receiptRangeData(from, to) {
   // של תנובה ידברו באותו סדר בדיוק
   const effT = r => { const e = r.docDate || r.date; return e ? new Date(e + 'T12:00:00').getTime() : (r.timestamp || 0); };
   const recs = rangeDocsMerged('receipts').filter(r => effT(r) >= fromT && effT(r) <= toT);
-  const rets = rangeDocsMerged('returns').filter(r => effT(r) >= fromT && effT(r) <= toT);
   // v128: הניירות מהנהג — מאזן על כל מה שבזיכרון ובטווח, בלי "חודש סגור" (חודש שנסגר נשאר כפי שהושווה לחשבונית)
-  const pp = rangePaperAdjust(from, to, recs, rets);
+  const pp = rangePaperAdjust(from, to);
+  // v153: ההחזרה הולכת אחרי תעודת הזיכוי שלה (ledgerReturnLineDays): שורה שהזיכוי עליה נספר בחודש אחר נספרת שם,
+  // ביום הזיכוי (_mday על השורה, למרכזת). תעודת החזרה בטווח — כשיש לה שורה שנספרת בו. retMoved — מה יצא מהחודש
+  // אל חודש הזיכוי, ומה נכנס אליו מחודש אחר (לשורת המידע במסך).
+  const inT = t => t >= fromT && t <= toT, dayT = d => new Date(d + 'T12:00:00').getTime();
+  const rets = [], retMoved = { out: [], in: [] };
+  rangeDocsMerged('returns').forEach(r => {
+    const moved = (pp.retDays || {})[r.id], own = inT(effT(r));
+    if (!moved) { if (own) rets.push(r); return; }
+    const day0 = String(ledgerReturnDay(r) || todayStr());
+    const items = [], outUnits = {}, inUnits = {};
+    (Array.isArray(r.items) ? r.items : []).forEach(l => {
+      if (!l) return;
+      const md = moved[ledgerLineKey(l).key], q = Number(l.qty) || 0;
+      if (!md) { if (own) items.push(l); return; }
+      if (inT(dayT(md))) { items.push({ ...l, _mday: md }); if (!own) inUnits[md] = (inUnits[md] || 0) + q; }
+      else if (own) outUnits[md] = (outUnits[md] || 0) + q;
+    });
+    if (items.length) rets.push({ ...r, items });
+    const note = (units, list) => Object.keys(units).sort().forEach(md => list.push({ id: r.id, day: day0, creditDay: md, units: units[md] }));
+    note(outUnits, retMoved.out); note(inUnits, retMoved.in);
+  });
   const matrix = rangeProductMatrixData({ recs, rets, adjust: pp.adjust });
   // v141: מוצר שזוכה במקום מוצר אחר (החלפה שנסגרה) — בשורה שלו "הוחלף", לא "חסר שטרם זוכה" / "מעבר לחיוב"
   (pp.swaps || []).forEach(s => {
@@ -19431,7 +19485,7 @@ function receiptRangeData(from, to) {
   let openCnt = 0;
   recs.forEach(r => { if (receiptOpenNow(r)) openCnt++; });
   const vatRates = [...new Set(recs.concat(rets).map(r => r2(vatRateForDoc(r) * 100)))].sort((a, b) => a - b);
-  return { from, to, fromT, toT, recs, rets, matrix, paperDays: pp.days, paperCount: pp.count, paperFailed: pp.failed,
+  return { from, to, fromT, toT, recs, rets, retMoved, matrix, paperDays: pp.days, paperCount: pp.count, paperFailed: pp.failed,
     netEx, netInc, vatAmount: r2(netInc - netEx), fairEx, openClaimsEx,
     openClaimUnits: matrix.openUnits, overUnits: matrix.overUnits, swapShort, swapOver,
     billedEx: matrix.billedEx, creditedEx: matrix.creditedEx, promoEx: matrix.promoEx, openCnt, vatRates };
