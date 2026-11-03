@@ -66,18 +66,13 @@ const staleAttempt = (draftId, data) => ({ sessionId: draftId, recordId: draftId
   fingerprint: 'stale-fingerprint-from-before', token: 'finish_stale', deviceName: '', createdAt: 1 });
 const cloudPath = (r, draftId) => ['artifacts', r.run('appId'), 'public', 'data', 'receipts', draftId].join('/');
 
-test('ניסיון תקוע ובענן אין כלום: "אשר וקלוט" חסום; "בדוק ונסה לשמור שוב" משחרר את הקליטה, ואז השמירה נסגרת (עד v155: נעול לנצח)', async () => {
+test('ניסיון תקוע ובענן אין כלום: "בדוק ונסה לשמור שוב" משחרר את הקליטה בלי לשלוח את הישן, ואז השמירה נסגרת (עד v155: נעול לנצח)', async () => {
   const storage = new QuotaMap(null);
   const r = await toSummary(storage);
   const draftId = r.run('receiptDraftId');
   storage.set(FINAL, JSON.stringify({ [draftId]: staleAttempt(draftId) }));
   assert.equal(r.run('localReceivingPending()'), true);
-  // כמו בטלפון: הלחיצה השנייה על "אשר וקלוט" — חסומה
-  r.toasts.length = 0;
-  await r.run('confirmReceipt()'); await settle();
-  assert.equal(r.run('!!pendingReceipt'), true);
-  assert.match(r.toasts.join(' | '), /השמירה לא אושרה עדיין\. לחץ על בדיקה וניסיון חוזר/);
-  assert.deepEqual(json(r, 'receipts.filter(x => x.docDate)'), [], 'לא נשמר');
+  assert.equal(r.run('canEditSharedReceipt()'), false, 'עם ניסיון תלוי הקליטה לקריאה בלבד');
   // "בדוק ונסה לשמור שוב": השרת ענה שאין שם כלום — הניסיון הישן יורד, לא נשלח
   r.toasts.length = 0;
   await r.run('localReceivingRetry()'); await settle();
@@ -122,4 +117,67 @@ test('ניסיון תקוע כשהשרת לא ענה (בלי רשת) — נשא�
   assert.equal(JSON.parse(storage.get(FINAL))[draftId].token, 'finish_stale');
   assert.deepEqual(json(r, 'receipts.filter(x => x.docDate)'), []);
   assert.match(r.toasts.join(' | '), /השמירה לא אושרה/);
+});
+
+// ===== v157: "אשר וקלוט" בודק בעצמו ניסיון שמירה תלוי =====
+// 3.11.2026, אחרי העדכון ל-156: הכפתור נשאר חסום עם "השמירה לא אושרה עדיין. לחץ על בדיקה וניסיון חוזר בראש מסך הקליטה" —
+// והפס הזה לא נמצא. מעכשיו הלחיצה עצמה עושה את הבדיקה, וממשיכה לשמור כשהניסיון הישן ירד.
+test('v157 — ניסיון תקוע ובענן אין כלום: לחיצה אחת על "אשר וקלוט" מורידה אותו ושומרת את מה שיש עכשיו', async () => {
+  const storage = new QuotaMap(null);
+  const r = await toSummary(storage);
+  const draftId = r.run('receiptDraftId');
+  storage.set(FINAL, JSON.stringify({ [draftId]: staleAttempt(draftId) }));
+  r.toasts.length = 0;
+  await r.run('confirmReceipt()'); await settle();
+  assert.deepEqual(after(r, storage), { summaryOpen: false, modalHidden: true, view: 'receiptsHistory', saved: [['ok', 30, 5]], draftOpened: false, pending: false, throws: 0 });
+  const saved = json(r, 'receipts.find(x => x.docDate)');
+  assert.notEqual(saved.localFinal.token, 'finish_stale', 'נשמר הניסיון החדש, לא הישן');
+  assert.match(r.toasts.join(' | '), /הניסיון הקודם לא הגיע לענן/);
+  assert.match(r.toasts.join(' | '), /התעודה נקלטה ✓/);
+  assert.doesNotMatch(r.toasts.join(' | '), /לחץ על בדיקה וניסיון חוזר/);
+});
+
+test('v157 — ניסיון תקוע שהענן כבר שמר: "אשר וקלוט" אומר שכבר נשמרה, לא שומר שוב, הטיוטה נשארת לבדיקה', async () => {
+  const storage = new QuotaMap(null);
+  const r = await toSummary(storage);
+  const draftId = r.run('receiptDraftId');
+  const data = { schemaVersion: 2, items: [{ productId: 'code_101', qty: 1 }], timestamp: 1, docDate: '2026-11-03', date: '2026-11-03' };
+  storage.set(FINAL, JSON.stringify({ [draftId]: staleAttempt(draftId, data) }));
+  r.finalCloud.put(cloudPath(r, draftId), { ...data, localFinal: { token: 'finish_stale', sessionId: draftId } });
+  r.toasts.length = 0;
+  await r.run('confirmReceipt()'); await settle();
+  assert.match(r.toasts.join(' | '), /התעודה כבר נשמרה/);
+  assert.doesNotMatch(r.toasts.join(' | '), /נקלטה ✓|כבר קיימת/);
+  assert.equal(r.run('localReceivingPending()'), false);
+  assert.equal(r.run('!!pendingReceipt'), true, 'הטיוטה נשארת לבדיקה');
+  assert.equal(r.finalCloud.get(cloudPath(r, draftId)).localFinal.token, 'finish_stale', 'לא נדרס');
+});
+
+test('v157 — ניסיון תקוע בלי רשת: "אשר וקלוט" משאיר אותו תלוי, עם ההודעה, בלי לשמור', async () => {
+  const storage = new QuotaMap(null);
+  const r = await toSummary(storage);
+  const draftId = r.run('receiptDraftId');
+  storage.set(FINAL, JSON.stringify({ [draftId]: staleAttempt(draftId) }));
+  r.context.navigator.onLine = false;
+  r.toasts.length = 0;
+  await r.run('confirmReceipt()'); await settle();
+  assert.equal(r.run('localReceivingPending()'), true);
+  assert.equal(r.run('!!pendingReceipt'), true);
+  assert.deepEqual(json(r, 'receipts.filter(x => x.docDate)'), []);
+  assert.match(r.toasts.join(' | '), /השמירה לא אושרה/);
+});
+
+test('v157 — הניסיון התקוע תואם את הטיוטה (הטביעה לא השתנתה): "אשר וקלוט" שולח אותו, נשמר פעם אחת ונסגר', async () => {
+  const storage = new QuotaMap(null);
+  const r = await toSummary(storage);
+  const draftId = r.run('receiptDraftId');
+  const data = json(r, `({ schemaVersion: 2, quantityCheck: receiptQuantityCheckAudit(), paperDocs: receiptPaperDocsSnapshot(), timestamp: 1, date: todayStr(), docDate: todayStr(), noDoc: false, vatPct: 18,
+    items: receiptList, count: receiptList.length, units: 30, status: 'ok', noteParts: receiptNotes.slice() })`);
+  storage.set(FINAL, JSON.stringify({ [draftId]: { ...staleAttempt(draftId, data), fingerprint: r.run('localReceivingFingerprint()') } }));
+  r.toasts.length = 0;
+  await r.run('confirmReceipt()'); await settle();
+  const a = after(r, storage);
+  assert.deepEqual({ ...a, saved: a.saved.length }, { summaryOpen: false, modalHidden: true, view: 'receiptsHistory', saved: 1, draftOpened: false, pending: false, throws: 0 });
+  assert.equal(json(r, 'receipts.find(x => x.docDate).localFinal.token'), 'finish_stale', 'הניסיון התלוי עצמו נשמר — לא נוצר שני');
+  assert.match(r.toasts.join(' | '), /התעודה נקלטה ✓/);
 });
