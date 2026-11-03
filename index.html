@@ -843,7 +843,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '156'; // "אשר וקלוט" סוגר את התעודה גם כשאין מקום בטלפון; ניסיון שמירה תקוע לא חוסם שמירה חדשה
+const APP_VERSION = '157'; // "אשר וקלוט" בודק בעצמו ניסיון שמירה תלוי וממשיך לשמור, בלי לשלוח לפס למעלה
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -13126,7 +13126,17 @@ function cancelReceiptAttach() {
 }
 const RECEIPT_LINK_KEYS = ['externalOffsets', 'offsetClosed', 'offsetWith', 'offsetAt', 'offsetSchemaVersion', 'legacyOffsetMigratedAt', 'offsetNeedsReview', 'canceledOffsetIds', 'shortCreditUnits', 'shortCreditNotes', 'shortGoodsNotes'];
 async function confirmReceipt() {
-  if (!canEditSharedReceipt()) { sharedReceiptReadOnlyNotice(); return; }
+  if (!canEditSharedReceipt()) {
+    // v157: ניסיון שמירה תלוי מהלחיצה הקודמת — "אשר וקלוט" בודק אותו בעצמו (כמו "בדוק ונסה לשמור שוב" בפס למעלה),
+    // במקום לשלוח לשם. נשמר — נסגר משם. הענן כבר שמר (saved-late) — ההודעה אומרת, ולא שומרים שוב. הניסיון הישן לא
+    // הגיע או כבר לא תואם את הענן (pending-changed+gone / changed) — הוא ירד, וממשיכים לשמור את מה שיש עכשיו באותה
+    // לחיצה. בלי תשובה מהשרת — נשאר תלוי, עם ההודעה. (3.11.2026: אחרי התקלה של v155 הכפתור נשאר חסום עם "לחץ על
+    // בדיקה וניסיון חוזר בראש מסך הקליטה", והפס הזה לא נמצא)
+    if (!localReceivingPending() || sharedReceiptFinalizing) { sharedReceiptReadOnlyNotice(); return; }
+    const res = await localReceivingRetry();
+    if (!res || res.ok || res.saved || localReceivingPending() || !canEditSharedReceipt() || !pendingReceipt) return;
+    if (!['pending-changed', 'changed'].includes(res.reason)) return;
+  }
   if (bermanOcrPendingDocs().length) {
     showToast('לפני השמירה יש לבדוק את המספרים המסומנים מול התעודה.', null, null, 4000);
     saveReceiptDraft(); return;
@@ -24352,15 +24362,17 @@ function localReceivingArchive() {
   } catch(e) { showToast('אין מקום לשמור עותק בטוח; הקליטה נשארה פתוחה.', null, null, 4000); return false; }
   fenceLocalReceivingUI(); receivingHandoffEmpty(); renderSharedReceivingBanner(); return true;
 }
+// v157: מחזיר את תוצאת הניסיון (ל"אשר וקלוט", שממשיך לשמור כשהניסיון הישן ירד)
 async function localReceivingRetry() {
-  if (sharedReceiptFinalizing || !localReceivingPending()) return;
+  if (sharedReceiptFinalizing || !localReceivingPending()) return null;
   if (!localReceivingFinalizer) getLocalReceivingFinalizer();
-  if (!localReceivingFinalizer) return;
+  if (!localReceivingFinalizer) return null;
   const sessionId = receivingSessionOf({ receiptDraftId, receiptAttachTarget }), attempt = localReceivingFinalizer.attempt(sessionId);
-  if (!attempt) return;
+  if (!attempt) return null;
   sharedReceiptFinalizing = true;
+  let result = null;
   try {
-    const result = await localReceivingFinalizer.finish(attempt);
+    result = await localReceivingFinalizer.finish(attempt);
     if (result.ok) {
       localReceivingAckPapers(attempt.extras);
       localReceivingSaved(result); // v147
@@ -24381,6 +24393,7 @@ async function localReceivingRetry() {
         : result.reason === 'paper-received' ? localReceivingPaperReceivedText(result) : 'השמירה לא אושרה. הקליטה נשמרה בטלפון.', null, null, 5000);
     }
   } finally { sharedReceiptFinalizing = false; renderSharedReceivingBanner(); }
+  return result;
 }
 // v147: מה שהענן אישר — ברשימה מיד (גם כשהספירה השתנתה בזמן השמירה), ותעודות המשלוח שבו מסומנות בו כמו בענן.
 // קליטה של טלפון אחר שהענן החזיר כשסירב (התעודה כבר בה) — גם היא, עד שהמאזין מביא אותה.
