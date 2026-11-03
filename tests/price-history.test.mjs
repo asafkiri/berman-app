@@ -29,7 +29,8 @@ test('v118 — אימוץ מחיר חשבונית: רשומת היסטוריה �
   assert.match(rt.toasts.join(' '), /מחיר חשבונית ₪12/);
 });
 
-test('v118 — אימוץ חוזר לאותו חודש דורס; אימוץ לחודש מוקדם יותר מתווסף לפניו', async () => {
+// v155: אימוץ לחודש מוקדם יותר ממשיך עד היום — רשומה מאוחרת (ספטמבר) נדרסת, והמחיר שאומץ הוא גם המחיר הנוכחי
+test('v118/v155 — אימוץ חוזר לאותו חודש דורס; אימוץ לחודש מוקדם יותר ממשיך עד היום ודורס את המאוחר', async () => {
   const rt = runtime();
   const p = product('3604');
   rt.run(`receipts = []; returns = []; monthInvoice = { month: '2026-09', totalEx: null, lines: {} };`);
@@ -38,8 +39,10 @@ test('v118 — אימוץ חוזר לאותו חודש דורס; אימוץ לח
   assert.equal(rt.run(`products.find(x => x.id === '${p.id}').priceHistory.length`), 1);
   assert.equal(rt.run(`priceAt(products.find(x => x.id === '${p.id}'), '2026-09-10')`), 9.55);
   await rt.run(`adoptInvoicePrice('${p.id}', 9.4, '2026-08-01')`);
-  assert.equal(rt.run(`products.find(x => x.id === '${p.id}').priceHistory.map(h => h.from + ':' + h.price).join(',')`), '2026-08-01:9.4,2026-09-01:9.55');
+  assert.equal(rt.run(`products.find(x => x.id === '${p.id}').priceHistory.map(h => h.from + ':' + h.price).join(',')`), '2026-08-01:9.4');
   assert.equal(rt.run(`priceAt(products.find(x => x.id === '${p.id}'), '2026-08-20')`), 9.4);
+  assert.equal(rt.run(`priceAt(products.find(x => x.id === '${p.id}'), '2026-09-10')`), 9.4, 'ספטמבר הולך אחרי האימוץ של אוגוסט');
+  assert.equal(rt.run(`productPriceNow(products.find(x => x.id === '${p.id}'))`), 9.4, 'המחיר הנוכחי הוא המחיר שאומץ');
   assert.equal(rt.run(`priceAt(products.find(x => x.id === '${p.id}'), '2026-07-20')`), p.price);
 });
 

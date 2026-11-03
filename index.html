@@ -843,7 +843,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '154'; // בדיקה שורה-שורה בטלפון, לכל תעודה בנפרד; "הנייר הזה לא שלנו"; כרטיס הקליטה לפי תעודות
+const APP_VERSION = '155'; // מחיר שנשמר מתאריך ממשיך עד היום: רשומות ביניים נדרסות, המחיר שתוקן הוא גם המחיר הנוכחי
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -5336,7 +5336,7 @@ async function executePriceEntryTask(task) {
     // רשומה לאותו תאריך שנכתבה אחרי זו (ממכשיר אחר) גוברת — ניסיון חוזר ישן אינו דורס אותה
     const stamp = s => Number(s && (s.at || s.adoptedAt)) || 0;
     const same = (Array.isArray(cur.priceHistory) ? cur.priceHistory : []).find(h => h && String(h.from) === String(e.from));
-    const h = same && stamp(same.source) > stamp(e.source) ? cur.priceHistory : priceHistoryWith(cur, e.from, e.price, e.source || null);
+    const h = same && stamp(same.source) > stamp(e.source) ? cur.priceHistory : priceHistoryWith(cur, e.from, e.price, e.source || null, e.through || '');
     tx.update(ref, { ...(task.op === 'update' ? (task.data || {}) : {}), priceHistory: h });
     return h;
   });
@@ -13724,12 +13724,31 @@ function productPriceHistoryText(p) {
   list.forEach(h => parts.push('₪' + fmt3(Number(h.price)) + ' מ-' + dDisp(h.from)));
   return parts.join(' · ');
 }
-// הוספת רשומת מחיר להיסטוריה; אותו תאריך תחילה — דריסה, לא כפילות
-function priceHistoryWith(p, from, price, source) {
-  const list = (Array.isArray(p && p.priceHistory) ? p.priceHistory : []).filter(h => h && h.from && String(h.from) !== String(from));
-  list.push({ from: String(from), price: Number(price), source: source || null });
+// הוספת רשומת מחיר להיסטוריה; אותו תאריך תחילה — דריסה, לא כפילות.
+// v155: מחיר שנשמר מ-from ממשיך עד through (היום בעת השמירה): רשומות שבין from ל-through
+// נדרסות, כך שהמחיר שתוקן הוא גם המחיר הנוכחי. רשומה עתידית (אחרי through) נשארת — היא
+// הוגדרה במכוון. רשומה שנכתבה אחרי הרשומה הזו ממכשיר אחר (חותמת מאוחרת יותר) אינה נדרסת,
+// כמו בניסיון חוזר לאותו תאריך (executePriceEntryTask).
+function priceHistoryWith(p, from, price, source, through) {
+  const stamp = s => Number(s && (s.at || s.adoptedAt)) || 0;
+  const mine = stamp(source), f0 = String(from), t0 = through ? String(through).slice(0, 10) : '';
+  const list = (Array.isArray(p && p.priceHistory) ? p.priceHistory : []).filter(h => {
+    if (!h || !h.from) return false;
+    const f = String(h.from);
+    if (f === f0) return false;
+    if (t0 && f > f0 && f <= t0 && !(mine && stamp(h.source) > mine)) return false;
+    return true;
+  });
+  list.push({ from: f0, price: Number(price), source: source || null });
   list.sort((a, b) => String(a.from).localeCompare(String(b.from)));
   return list;
+}
+// v155: הרשומות שהשמירה מ-from תדרוס (לרמז בכרטיס המוצר): מתאריך מאוחר מ-from ועד היום
+function priceHistoryOverridden(p, from, through) {
+  const f0 = String(from), t0 = String(through || todayStr()).slice(0, 10);
+  return (Array.isArray(p && p.priceHistory) ? p.priceHistory : [])
+    .filter(h => h && h.from && Number(h.price) > 0 && String(h.from) > f0 && String(h.from) <= t0)
+    .slice().sort((a, b) => String(a.from).localeCompare(String(b.from)));
 }
 // חוסר שזוכה, ביחידות לכל מוצר — אותו כלל כמו receiptDiscrepancyInfo: קודם הרישום
 // ביחידות (shortCreditUnits), ואחריו זיכוי כספי ישן (shortCreditNotes, לפני v123) על
@@ -19853,10 +19872,12 @@ async function adoptInvoicePrice(pid, price, from) {
   const amount = Number(price); if (!(amount > 0)) return;
   const fromDay = String(from || todayStr()).slice(0, 10);
   const source = { method: 'invoice', month: fromDay.slice(0, 7), adoptedAt: Date.now() };
+  // v155: המחיר מהחשבונית ממשיך מהחודש שנבחר עד היום — רשומה מאוחרת יותר (למשל עריכה "מהיום" בכרטיס) נדרסת
+  const through = fromDay <= todayStr() ? todayStr() : fromDay;
   // v124: טרנזקציה שממזגת לתוך המוצר בענן (executePriceEntryTask) — לא מערך מוכן מראש
-  const ok = await runCloudTask('adopt invoice price', { op: 'price-entry', path: dataPath('products', pid), priceEntry: { from: fromDay, price: amount, source }, operationId: makeOperationId('price_hist') });
+  const ok = await runCloudTask('adopt invoice price', { op: 'price-entry', path: dataPath('products', pid), priceEntry: { from: fromDay, price: amount, source, through }, operationId: makeOperationId('price_hist') });
   if (!ok) return;
-  p.priceHistory = priceHistoryWith(p, fromDay, amount, source);
+  p.priceHistory = priceHistoryWith(p, fromDay, amount, source, through);
   showToast(p.name + ': מחיר חשבונית ₪' + fmt3(amount) + ' מ-' + dDisp(fromDay) + ' — המרכזת חושבה מחדש', null, null, 3500);
   calcReceiptRange();
 }
@@ -20574,7 +20595,12 @@ function updateProdFinalHint() {
     if (noBase && from <= todayStr()) parts.push('למוצר לא היה מחיר — ₪' + fmt3(inv) + ' יחול על כל התאריכים');
     else {
       const cur = priceAt(p, from);
-      if (Math.round(inv * 1000) !== Math.round(cur * 1000)) parts.push('מ-' + dDisp(from) + ': ₪' + fmt3(cur) + ' ← ₪' + fmt3(inv) + (from > todayStr() ? ' (יחול בעתיד)' : ''));
+      if (Math.round(inv * 1000) !== Math.round(cur * 1000)) {
+        parts.push('מ-' + dDisp(from) + ': ₪' + fmt3(cur) + ' ← ₪' + fmt3(inv) + (from > todayStr() ? ' (יחול בעתיד)' : ''));
+        // v155: מה שהשמירה תדרוס בדרך עד היום — כדי שהמחיר שתוקן יהיה גם המחיר הנוכחי
+        const over = from <= todayStr() ? priceHistoryOverridden(p, from, todayStr()) : [];
+        if (over.length) parts.push('ממשיך עד היום ומחליף: ' + over.map(h => '₪' + fmt3(Number(h.price)) + ' מ-' + dDisp(h.from)).join(', '));
+      }
     }
   }
   if (p && productInvoicePriceUnverified(p)) parts.push('מחיר החשבונית לא אומת — שמירה עם המחיר הנכון מאשרת אותו');
@@ -20825,7 +20851,8 @@ async function saveProd(again) {
     const noBase = !!cur && !(Number(cur.price) > 0) && !(Array.isArray(cur.priceHistory) && cur.priceHistory.length);
     if (cur && invoicePrice != null && Math.round(invoicePrice * 1000) !== Math.round(priceAt(cur, priceFrom) * 1000)) {
       if (noBase && priceFrom <= todayStr()) data.price = invoicePrice;
-      else priceEntry = { from: priceFrom, price: invoicePrice, source: { method: 'editor', at: Date.now() } };
+      // v155: המחיר ממשיך מ"בתוקף מ" עד היום — רשומות שביניהן נדרסות; רשומה עתידית נשארת
+      else priceEntry = { from: priceFrom, price: invoicePrice, source: { method: 'editor', at: Date.now() }, through: priceFrom <= todayStr() ? todayStr() : priceFrom };
     }
     const base = data.price != null ? data.price : (Number(cur && cur.price) || 0);
     const listNow = listPrice != null ? listPrice : (Number(cur && cur.listPrice) || 0);
@@ -20840,7 +20867,7 @@ async function saveProd(again) {
     const saved = await runCloudTask('save product', { op: 'update', path: dataPath('products', id), data, ...(priceEntry ? { priceEntry } : {}), operationId: makeOperationId('product_save') });
     if (!saved) return;
     const p = products.find(x => x.id === id);
-    if (p) { Object.assign(p, data); if (priceEntry) p.priceHistory = priceHistoryWith(p, priceEntry.from, priceEntry.price, priceEntry.source); savedProduct = p; }
+    if (p) { Object.assign(p, data); if (priceEntry) p.priceHistory = priceHistoryWith(p, priceEntry.from, priceEntry.price, priceEntry.source, priceEntry.through); savedProduct = p; }
   } else {
     const maxIdx = products.length ? Math.max(...products.map(p => p.orderIndex || 0)) : -1;
     const pendingExisting = products.find(x => x.id === docId);

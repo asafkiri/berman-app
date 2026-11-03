@@ -296,3 +296,72 @@ test('שורת המחירון: המבצע הפעיל מוצג גם כשמבצע 
   assert.match(html, /מרכזת: [^<]*₪8\.20/, 'המבצע הפעיל (8.20), לא זה שפג (8.50)');
   assert.doesNotMatch(html, /₪8\.50|\(לא פעיל\)/);
 });
+
+// ===== v155: מחיר שנשמר מתאריך ממשיך עד היום =====
+// המקרה מ-2.11.2026: לחמ' קשר עם שומשום (241) קיבל בטעות 1.868 (המחיר של שמיניה שומשום) — פעם מהכרטיס "מהיום"
+// (2.11) ופעם מאימוץ בחשבונית (מ-1.10). תיקון ל-2.737 מ-1.10 תיקן את אוקטובר, אבל הרשומה מ-2.11 המשיכה לגבור:
+// הכרטיס הציג 1.868 ונראה כאילו השמירה לא נקלטה. מעכשיו הרשומה ממשיכה עד היום ודורסת את מה שביניהן.
+function setup241(r) {
+  r.run(`products.push({ id: 'code_241', code: '241', name: "לחמ' קשר עם שומשום", barcode: '498140', listPrice: 3.91, discountPct: 30, discountSet: true, price: 2.737, category: 'c1',
+    priceHistory: [{ from: '2026-10-01', price: 1.868, source: { method: 'invoice', month: '2026-10', adoptedAt: 1793603506778 } }, { from: '2026-11-02', price: 1.868, source: { method: 'editor', at: 1793603350568 } }] });
+    todayStr = () => '2026-11-03';`);
+}
+const H = "products.find(p => p.id === 'code_241').priceHistory.map(h => h.from + ':' + h.price).join(',')";
+
+test('v155 — תיקון מ-1.10 בכרטיס דורס את הרשומה מ-2.11: אוקטובר מתוקן וגם המחיר הנוכחי; הרמז אומר מה מוחלף', async () => {
+  const r = setup(); setup241(r);
+  open(r, 'code_241');
+  assert.equal(r.node('prod_invoicePrice').value, '1.868', 'לפני התיקון הכרטיס מציג את הטעות');
+  val(r, 'prod_invoicePrice', '2.737'); val(r, 'prod_priceFrom', '2026-10-01');
+  r.run('updateProdFinalHint()');
+  assert.match(r.node('prod_finalHint').textContent, /מ-1\.10\.2026: ₪1\.868 ← ₪2\.737/);
+  assert.match(r.node('prod_finalHint').textContent, /ממשיך עד היום ומחליף: ₪1\.868 מ-2\.11\.2026/);
+  await r.run('saveProd(false)');
+  const w = productWrites(r).pop();
+  assert.deepEqual([w.priceEntry.from, w.priceEntry.price, w.priceEntry.through], ['2026-10-01', 2.737, '2026-11-03']);
+  assert.equal(r.run(H), '2026-10-01:2.737');
+  assert.equal(r.run("priceAt(products.find(p => p.id === 'code_241'), '2026-10-15')"), 2.737, 'אוקטובר');
+  assert.equal(r.run("productPriceNow(products.find(p => p.id === 'code_241'))"), 2.737, 'המחיר הנוכחי');
+  open(r, 'code_241');
+  assert.equal(r.node('prod_invoicePrice').value, '2.737', 'הכרטיס שנפתח שוב מציג את התיקון');
+});
+
+test('v155 — שמירה "מהיום" (ברירת המחדל) לא נוגעת בעבר, ורשומה עתידית נשארת', async () => {
+  const r = setup(); setup241(r);
+  r.run(`products.find(p => p.id === 'code_241').priceHistory.push({ from: '2026-12-01', price: 2.9, source: { method: 'editor', at: 1 } });`);
+  open(r, 'code_241'); val(r, 'prod_invoicePrice', '2.737');
+  r.run('updateProdFinalHint()');
+  assert.doesNotMatch(r.node('prod_finalHint').textContent, /ומחליף/, 'מהיום — אין מה להחליף בדרך');
+  await r.run('saveProd(false)');
+  assert.equal(r.run(H), '2026-10-01:1.868,2026-11-02:1.868,2026-11-03:2.737,2026-12-01:2.9');
+  assert.equal(r.run("priceAt(products.find(p => p.id === 'code_241'), '2026-10-15')"), 1.868, 'אוקטובר לא השתנה — התאריך היה היום');
+  // תיקון מ-1.10: הרשומות של 2.11 ו-3.11 נדרסות, הרשומה העתידית מ-1.12 נשארת
+  open(r, 'code_241'); val(r, 'prod_invoicePrice', '2.737'); val(r, 'prod_priceFrom', '2026-10-01');
+  await r.run('saveProd(false)');
+  assert.equal(r.run(H), '2026-10-01:2.737,2026-12-01:2.9');
+});
+
+test('v155 — אימוץ מהחשבונית (מרכזת) ממשיך עד היום ודורס עריכה "מהיום" שקדמה לו', async () => {
+  const r = setup(); setup241(r);
+  r.run(`receipts = []; returns = []; monthInvoice = { month: '2026-10', totalEx: null, lines: {} };`);
+  await r.run(`adoptInvoicePrice('code_241', 2.737, '2026-10-01')`);
+  const w = r.writes.filter(x => /products/.test(String(x.path))).pop();
+  assert.equal(w.priceEntry.through, '2026-11-03');
+  assert.equal(r.run(H), '2026-10-01:2.737');
+  assert.equal(r.run("productPriceNow(products.find(p => p.id === 'code_241'))"), 2.737);
+});
+
+test('v155 — בענן: הטרנזקציה דורסת רשומות ביניים, אבל לא רשומה מאוחרת שנכתבה אחרי השמירה ממכשיר אחר', async () => {
+  const { r, db, state } = cloudSetup();
+  setup241(r);
+  db.set('products/code_241', JSON.parse(r.run("JSON.stringify(products.find(p => p.id === 'code_241'))")));
+  state.offline = true;
+  open(r, 'code_241'); val(r, 'prod_invoicePrice', '2.737'); val(r, 'prod_priceFrom', '2026-10-01');
+  await r.run('saveProd(false)');
+  assert.equal(r.run('cloudFailedWrites.length'), 1, 'בתור');
+  // בינתיים מכשיר אחר כתב מחיר מ-3.11 (אחרי השמירה שבתור) — הוא גובר
+  db.get('products/code_241').priceHistory.push({ from: '2026-11-03', price: 2.8, source: { method: 'editor', at: Date.now() + 60000 } });
+  state.offline = false;
+  await r.run('retryCloudFailedWrites()');
+  assert.deepEqual(db.get('products/code_241').priceHistory.map(h => [h.from, h.price]), [['2026-10-01', 2.737], ['2026-11-03', 2.8]]);
+});
