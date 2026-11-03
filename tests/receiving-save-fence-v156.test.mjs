@@ -181,3 +181,74 @@ test('v157 — הניסיון התקוע תואם את הטיוטה (הטביע�
   assert.equal(json(r, 'receipts.find(x => x.docDate).localFinal.token'), 'finish_stale', 'הניסיון התלוי עצמו נשמר — לא נוצר שני');
   assert.match(r.toasts.join(' | '), /התעודה נקלטה ✓/);
 });
+
+// ===== v158: הנייר נמחק בענן בזמן שהקליטה עוד מחזיקה אותו =====
+// 3.11.2026: הנייר 244804072 נמחק לסל המחזור יחד עם הקליטה התקועה. אחרי 156/157 "אשר וקלוט" נפל על
+// "התעודה השתנתה בענן" — הכתיבה של הנייר הייתה "צור אם אין", ומצבת המחיקה נחשבה מסמך אחר.
+const paperPath = (r, id) => ['artifacts', r.run('appId'), 'public', 'data', 'papers', id].join('/');
+function voidPaperInCloud(r) {
+  const paperId = json(r, 'aiScanResponse.perDocument[0].paperId');
+  const paper = json(r, `Object.values(paperLocalResults()).find(rec => rec.paper && rec.paper.id === ${JSON.stringify(paperId)}).paper`);
+  const tomb = { schema: 1, id: paperId, kind: 'delivery', state: 'void', deleted: true, captureId: paper.captureId, number: paper.number, rows: [], rev: 2, timestamp: 5 };
+  r.finalCloud.put(paperPath(r, paperId), tomb);
+  r.run(`papers = papers.filter(p => p.id !== ${JSON.stringify(paperId)}).concat([${JSON.stringify(tomb)}]); ledgerInvalidate();`);
+  return { paperId, paper };
+}
+
+test('v158 — הנייר נמחק בענן (מצבת מחיקה): "אשר וקלוט" שואל; אחרי האישור כותב אותו מחדש מעליה, הקליטה נשמרת ונסגרת (עד v157: "התעודה השתנתה בענן")', async () => {
+  const storage = new QuotaMap(null);
+  const r = await toSummary(storage);
+  const { paperId, paper } = voidPaperInCloud(r);
+  r.toasts.length = 0;
+  await r.run('confirmReceipt()'); await settle();
+  // שואל, ולא שומר בשקט — נייר שנמחק אינו חוזר לענן בלי אישור
+  assert.equal(r.run('testConfirms.length'), 1, 'נשאלה שאלה');
+  assert.match(r.run('testConfirms[0].title'), /נמחק לסל המחזור/);
+  assert.match(r.run('testConfirms[0].message'), /244804072/);
+  assert.equal(r.run('testConfirms[0].label'), 'כתוב מחדש ושמור');
+  assert.equal(r.run('!!pendingReceipt'), true, 'הסיכום פתוח');
+  assert.deepEqual(json(r, 'receipts.filter(x => x.docDate)'), [], 'לא נשמר');
+  assert.equal(r.finalCloud.get(paperPath(r, paperId)).deleted, true, 'המצבה במקומה');
+  assert.doesNotMatch(r.toasts.join(' | '), /השתנתה בענן/);
+  // "כתוב מחדש ושמור"
+  await r.run('testConfirms[0].cb()'); await settle();
+  assert.deepEqual(after(r, storage), { summaryOpen: false, modalHidden: true, view: 'receiptsHistory', saved: [['ok', 30, 5]], draftOpened: false, pending: false, throws: 0 });
+  assert.doesNotMatch(r.toasts.join(' | '), /השתנתה בענן/);
+  assert.match(r.toasts.join(' | '), /התעודה נקלטה ✓/);
+  const cloud = r.finalCloud.get(paperPath(r, paperId));
+  assert.equal(cloud.deleted, undefined, 'המצבה הוחלפה בנייר');
+  assert.equal(cloud.state, 'accepted'); assert.equal(cloud.rows.length, paper.rows.length); assert.equal(cloud.rev, 3, 'מעל המצבה');
+  assert.equal(cloud.receivedIn, json(r, 'receipts.find(x => x.docDate).id'), 'מסומן בקליטה שלו');
+  const mem = json(r, `papers.find(p => p.id === ${JSON.stringify(paperId)})`);
+  assert.equal(mem.deleted, undefined, 'גם בזיכרון'); assert.equal(mem.rows.length, paper.rows.length);
+});
+
+test('v158 — המצב המלא מהטלפון: נייר מחוק בענן וגם ניסיון תקוע עם אותה טביעה — לחיצה אחת שומרת ונסגרת', async () => {
+  const storage = new QuotaMap(null);
+  const r = await toSummary(storage);
+  const { paperId } = voidPaperInCloud(r);
+  const draftId = r.run('receiptDraftId');
+  // הניסיון מ-v155: עם כתיבת הנייר כ"צור אם אין" — מול המצבה הוא נופל על changed, יורד, והלחיצה ממשיכה עם הכתיבה החדשה
+  const data = json(r, `({ schemaVersion: 2, items: receiptList, docDate: todayStr(), date: todayStr(), timestamp: 1, status: 'ok', units: 30, count: 5 })`);
+  const localPaper = json(r, `Object.values(paperLocalResults()).find(rec => rec.paper && rec.paper.id === ${JSON.stringify(paperId)}).paper`);
+  storage.set(FINAL, JSON.stringify({ [draftId]: { ...staleAttempt(draftId, data), fingerprint: r.run('localReceivingFingerprint()'), claims: [paperId],
+    extras: [{ collection: 'papers', id: paperId, data: localPaper, expected: null }] } }));
+  r.toasts.length = 0;
+  await r.run('confirmReceipt()'); await settle();
+  assert.equal(r.run('testConfirms.length'), 1, 'אחרי שהניסיון הישן ירד — השאלה על הנייר');
+  assert.equal(r.run('!!pendingReceipt'), true);
+  await r.run('testConfirms[0].cb()'); await settle();
+  assert.deepEqual(after(r, storage), { summaryOpen: false, modalHidden: true, view: 'receiptsHistory', saved: [['ok', 30, 5]], draftOpened: false, pending: false, throws: 0 });
+  assert.match(r.toasts.join(' | '), /התעודה נקלטה ✓/);
+  assert.equal(r.finalCloud.get(paperPath(r, paperId)).deleted, undefined);
+});
+
+test('v158 — בלי אישור הנייר המחוק לא חוזר לענן: שמירה ישירה (בלי השאלה) נופלת כמו קודם, המצבה נשארת', async () => {
+  const storage = new QuotaMap(null);
+  const r = await toSummary(storage);
+  const { paperId } = voidPaperInCloud(r);
+  const ok = await r.run(`finishSharedReceipt(receiptDraftId, { schemaVersion: 2, items: receiptList, docDate: todayStr(), date: todayStr(), timestamp: 1, paperDocs: receiptPaperDocsSnapshot() })`);
+  assert.equal(ok, false);
+  assert.equal(r.finalCloud.get(paperPath(r, paperId)).deleted, true, 'המצבה במקומה');
+  assert.deepEqual(json(r, 'receipts.filter(x => x.docDate)'), []);
+});

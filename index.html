@@ -843,7 +843,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '157'; // "אשר וקלוט" בודק בעצמו ניסיון שמירה תלוי וממשיך לשמור, בלי לשלוח לפס למעלה
+const APP_VERSION = '158'; // קליטה עם נייר שנמחק בענן כותבת אותו מחדש במקום ליפול על "התעודה השתנתה בענן"
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -13163,6 +13163,20 @@ async function confirmReceipt() {
   // אחרת, זיכוי חוסר (ביחידות, או בכסף ישן), השלמת סחורה — נשמרים, אחרת התאום שלהם
   // בתעודה השנייה נשאר יתום והחוסר שכבר נסגר נפתח מחדש.
   if (attach && attach.expectedReceipt) RECEIPT_LINK_KEYS.forEach(k => { if (attach.expectedReceipt[k] != null) data[k] = cloneSafe(attach.expectedReceipt[k]); });
+  // v158: תעודת משלוח שבקליטה נמחקה בינתיים לסל המחזור (מצבת מחיקה בענן) — שואלים לפני השמירה, במקום ליפול בשקט על
+  // "התעודה השתנתה בענן". האישור כותב אותה מחדש מעל המצבה עם הקליטה (localReceivingPaperExtras); בלי אישור — הקליטה
+  // לא נשמרת איתה (הנייר יוצא ב"הנייר הזה לא שלנו", או משוחזר מהסל).
+  const tomb = receiptTombstonePapers().filter(p => !receiptTombstoneApproved(p.id));
+  if (tomb.length) {
+    const nums = tomb.map(p => receiptPaperNumber(p.number) || p.number || p.id).join(', ');
+    showConfirm('הנייר נמחק לסל המחזור', (tomb.length === 1 ? 'תעודת המשלוח ' + nums + ' נמחקה לסל המחזור, והקליטה הזאת עדיין מחזיקה אותה.' : 'תעודות המשלוח ' + nums + ' נמחקו לסל המחזור, והקליטה הזאת עדיין מחזיקה אותן.') +
+      ' לכתוב אותה מחדש לענן ולשמור את הקליטה איתה? אם הנייר לא שייך לקליטה — "חזרה", ובבדיקה שורה-שורה: "הנייר הזה לא שלנו".', 'כתוב מחדש ושמור', () => {
+      const ids = (receiptTombstoneOk && receiptTombstoneOk.draftId === receiptDraftId ? receiptTombstoneOk.ids : []).concat(tomb.map(p => p.id));
+      receiptTombstoneOk = { draftId: receiptDraftId, ids };
+      confirmReceipt();
+    });
+    return;
+  }
   const saved = await finishSharedReceipt(opId, data);
   if (!saved) return;
   await receiptAfterSave(opId, data, attach, noDoc);
@@ -24342,6 +24356,22 @@ async function restoreSharedReceiptLegacy() {
   catch (error) { sharedReceiptSyncError(error); }
 }
 let localReceivingFinalizer = null, localReceivingSavedFence = null, localReceivingEpoch = 0, qtyReceiptEpoch = 0;
+// v158: תעודות משלוח שבקליטה הזאת שהעותק שלהן בענן נמחק לסל המחזור (מצבת מחיקה) — ועוד לא נכתבו עם קליטה שמורה.
+// "אשר וקלוט" שואל עליהן לפני השמירה; האישור נשמר לטיוטה הזאת בלבד (receiptTombstoneOk), והשמירה כותבת אותן מחדש.
+let receiptTombstoneOk = null; // { draftId, ids: [] }
+function receiptTombstonePapers() {
+  const ids = new Set((aiScanResponse && aiScanResponse.perDocument || []).map(d => d && d.paperId).filter(Boolean));
+  const out = [];
+  for (const rec of Object.values(paperLocalResults())) {
+    if (!rec || !rec.paper || rec.ackedAt || rec.discarded || rec.paper.kind !== 'delivery' || !ids.has(rec.paper.id)) continue;
+    const current = papers.find(p => p && p.id === rec.paper.id);
+    if (current && current.deleted && !out.some(p => p.id === rec.paper.id)) out.push(rec.paper);
+  }
+  return out;
+}
+function receiptTombstoneApproved(id) {
+  return !!(receiptTombstoneOk && receiptDraftId && receiptTombstoneOk.draftId === receiptDraftId && receiptTombstoneOk.ids.includes(id));
+}
 function localReceivingPending() {
   const id = receivingSessionOf({ receiptDraftId, receiptAttachTarget });
   if (!id) return false;
@@ -24563,6 +24593,17 @@ function localReceivingPaperExtras(day) {
       const moved = paperDeliveryDayForReceipt(current, day);
       extras.push(moved ? { collection: 'papers', id: current.id, data: cloneSafe(moved), expected: cloneSafe(current) }
         : { collection: 'papers', id: current.id, data: cloneSafe(current), expected: cloneSafe(current), guardOnly: true });
+      records.push(rec); continue;
+    }
+    // v158: העותק בענן נמחק לסל המחזור (מצבת מחיקה, deleted:true) בזמן שהקליטה עוד מחזיקה את הנייר. רק אחרי שהמשתמש
+    // אישר במפורש ("אשר וקלוט" שואל — receiptTombstoneApproved) הנייר נכתב מחדש מעל המצבה, מול המצבה כפי שהיא (expected),
+    // ותשובת הסריקה (שנמחקה איתו) נכתבת שוב. בלי אישור — כמו קודם: "צור אם אין" מול מצבה נופל על 'changed', ונייר שנמחק
+    // אינו חוזר לענן לבד (הכלל של המצבה). עד עכשיו לא הייתה דרך קדימה: "התעודה השתנתה בענן" בכל לחיצה (3.11.2026:
+    // הנייר 244804072 נמחק עם הקליטה התקועה, ואחרי התיקונים של 156/157 זה מה שחסם).
+    if (current && current.deleted && receiptTombstoneApproved(rec.paper.id)) {
+      const back = { ...(paperDeliveryDayForReceipt(rec.paper, day) || rec.paper), rev: Math.max(Number(rec.paper.rev) || 1, Number(current.rev) || 1) + 1 };
+      extras.push({ collection: 'papers', id: rec.paper.id, data: cloneSafe(back), expected: cloneSafe(current) });
+      if (rec.scan) extras.push({ collection: 'paperScans', id: rec.paper.id, data: cloneSafe(rec.scan), expected: null });
       records.push(rec); continue;
     }
     // v142: הנייר נכתב עם הקליטה ביום שלה. העותק במכשיר לא משתנה לפני השמירה (הוא חלק מטביעת הקליטה) —
