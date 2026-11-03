@@ -843,7 +843,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '155'; // מחיר שנשמר מתאריך ממשיך עד היום: רשומות ביניים נדרסות, המחיר שתוקן הוא גם המחיר הנוכחי
+const APP_VERSION = '156'; // "אשר וקלוט" סוגר את התעודה גם כשאין מקום בטלפון; ניסיון שמירה תקוע לא חוסם שמירה חדשה
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -24365,11 +24365,20 @@ async function localReceivingRetry() {
       localReceivingAckPapers(attempt.extras);
       localReceivingSaved(result); // v147
       paperDeliveryDaysFollowReceipt(attempt.data); // v142: ברקע
-      localReceivingSavedFence = { id: attempt.recordId, fingerprint: attempt.fingerprint };
+      // v156: finish() כבר וידא שהטביעה לא השתנתה עד האישור; הרישום בטלפון (למעלה) משנה אותה — הגדר לפי עכשיו
+      localReceivingSavedFence = { id: attempt.recordId, fingerprint: localReceivingFingerprint() };
       await receiptAfterSave(attempt.recordId, attempt.data, receiptAttachTarget, attempt.data.noDoc);
     } else {
       localReceivingSaved(result); // v147
-      showToast(result.reason === 'saved-late' ? 'התעודה כבר נשמרה. השינויים המאוחרים נשארו בטלפון לבדיקה.' : result.reason === 'paper-received' ? localReceivingPaperReceivedText(result) : 'השמירה לא אושרה. הקליטה נשמרה בטלפון.', null, null, 4500);
+      // v156: ניסיון שהוכרע אינו נשאר תלוי — עד עכשיו הוא נעל את הקליטה לנצח ("השמירה לא אושרה עדיין" בכל לחיצה):
+      // saved-late — הענן מחזיק בדיוק את מה שנשלח, אין מה לנסות שוב; הטיוטה עם השינויים נשארת פתוחה לבדיקה.
+      // pending-changed+gone — קריאה מהשרת ענתה שאין שם כלום: הניסיון הישן לא הגיע, והספירה השתנתה מאז — הקליטה
+      // נפתחת שוב, ו"אשר וקלוט" שומר את מה שיש עכשיו (אותו מזהה תעודה — גם אם הישן ינחת בסוף, לא תהיה כפילות).
+      const resolved = result.reason === 'saved-late' || (result.reason === 'pending-changed' && result.gone);
+      if (resolved) localReceivingFinalizer.forget(sessionId);
+      showToast(result.reason === 'saved-late' ? 'התעודה כבר נשמרה. השינויים המאוחרים נשארו בטלפון לבדיקה — אפשר "לשמור עותק בצד ולפנות את המסך".'
+        : result.reason === 'pending-changed' && result.gone ? 'הניסיון הקודם לא הגיע לענן והקליטה השתנתה מאז. הקליטה פתוחה שוב — בדוק ולחץ "אשר וקלוט".'
+        : result.reason === 'paper-received' ? localReceivingPaperReceivedText(result) : 'השמירה לא אושרה. הקליטה נשמרה בטלפון.', null, null, 5000);
     }
   } finally { sharedReceiptFinalizing = false; renderSharedReceivingBanner(); }
 }
@@ -24564,6 +24573,11 @@ async function finishSharedReceipt(id, data) {
     // v147: claims — תעודות המשלוח שבקליטה: הענן לא שומר קליטה שנייה לתעודה שכבר בקליטה שמורה
     const result = await localReceivingFinalizer.finish({ sessionId, recordId: id, data, expected: receiptAttachTarget && receiptAttachTarget.expectedReceipt || null, fingerprint, extras: staged.extras, claims: receiptPaperIds(data) });
     if (!result.ok) { localReceivingSaved(result); showToast(result.reason === 'paper-received' ? localReceivingPaperReceivedText(result) : ({ exists: 'התעודה כבר קיימת בענן. העותק המקומי נשמר לבדיקה; לא נוצרה כפילות.', changed: 'התעודה השתנתה בענן. השינויים המקומיים נשמרו — בדוק את התעודה בהיסטוריה.', 'saved-late': 'התעודה נשמרה אך הספירה השתנתה בזמן השמירה. השינויים נשארו בטלפון.', storage: 'אין מקום בטלפון לשמירה בטוחה. הטיוטה נשארה פתוחה.' })[result.reason] || 'השמירה לא אושרה. הקליטה נשארה בטלפון — נסה שוב כשיש רשת.', null, null, 5000); return false; }
+    // v156: האם הספירה השתנתה בזמן השמירה — נבדק מיד אחרי שהענן אישר, לפני רישום האישור בטלפון. הרישום עצמו משנה
+    // את טביעת הקליטה (ackedAt על הנייר; וכשאין מקום בטלפון — paperLocalSave מוחק את הסריקה של נייר שאושר; היום של
+    // הנייר שעובר ליום הקליטה), ועד v155 הבדיקה רצה אחריו: התעודה נשמרה בענן, אבל החלון נשאר פתוח, הטיוטה נשארה,
+    // וכל לחיצה נוספת אמרה "השמירה לא אושרה עדיין" (3.11.2026).
+    const changed = fingerprint !== localReceivingFingerprint() || receiptDraftId !== id;
     localReceivingAckPapers(staged.extras);
     for (const rec of staged.records) {
       paperPatchLocal(rec.captureId, cur => cur && JSON.stringify(cur.paper) === JSON.stringify(rec.paper) ? { ...cur, ackedAt: Date.now(), outcome: 'receipt-finalized' } : cur);
@@ -24572,8 +24586,9 @@ async function finishSharedReceipt(id, data) {
     localReceivingSaved(result); // v147: הקליטה ברשימה מיד — לפני שההיסטוריה, המאזן ו"לקליטה" נשאלים עליה
     ledgerInvalidate();
     paperDeliveryDaysFollowReceipt(data); // v142: ברקע — לא עוצר ולא משנה את סיום השמירה
-    if (fingerprint !== localReceivingFingerprint() || receiptDraftId !== id) { showToast('התעודה נשמרה; שינויים מאוחרים נשארו בטלפון לבדיקה.', null, null, 4500); return false; }
-    localReceivingSavedFence = { id, fingerprint };
+    if (changed) { showToast('התעודה נשמרה; שינויים מאוחרים נשארו בטלפון לבדיקה.', null, null, 4500); return false; }
+    // הגדר אחרי הרישום — receiptAfterSave משווה לטביעה של עכשיו (בלי await בדרך אליו)
+    localReceivingSavedFence = { id, fingerprint: localReceivingFingerprint() };
     return true;
   } finally { sharedReceiptFinalizing = false; renderSharedReceivingBanner(); }
 }
