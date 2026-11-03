@@ -843,7 +843,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '158'; // קליטה עם נייר שנמחק בענן כותבת אותו מחדש במקום ליפול על "התעודה השתנתה בענן"
+const APP_VERSION = '159'; // המחיר בקופה ליד כל מוצר בבדיקה שורה-שורה
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -6642,13 +6642,23 @@ function receiptLineSumText(l) {
   if (n == null) return 'הקלד כמה יחידות הגיעו';
   return n === l.paperQty ? 'כמו בתעודה' : 'התקבלו ' + mtxQty(n) + ' · ' + (n < l.paperQty ? 'חוסר ' + mtxQty(l.paperQty - n) : 'עודף ' + mtxQty(n - l.paperQty));
 }
+// v159: המחיר בקופה (כולל מע״מ) ליד כל מוצר בבדיקה שורה-שורה — "כמה זה עובר בקופה" בלי לגשת לקופה, כמו בשורת
+// המוצר שנקלט (receiptRowHtml) ובחלון הכמות. נקרא מכרטיס המוצר ברגע הציור (posPrice) ולא נשמר בבדיקה, ולכן מחיר
+// שעודכן במסך המחירים מופיע בפתיחה הבאה. מוצר בלי מחיר קופה — אותה תזכורת כמו בשאר המסכים.
+function receiptLinePosPriceHtml(productId, cls) {
+  const p = products.find(x => x && x.id === productId);
+  if (!p) return '';
+  return p.posPrice != null
+    ? '<div class="' + (cls || '') + ' text-sm font-black text-sky-700"><i class="fa-solid fa-cash-register text-xs" aria-hidden="true"></i> בקופה: ₪' + fmtMoney(p.posPrice) + '</div>'
+    : '<div class="' + (cls || '') + ' text-[11px] font-black text-amber-600"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> אין מחיר קופה — בדוק בקופה ועדכן במסך המחירים</div>';
+}
 function receiptLineRowHtml(di, li, l) {
   const id = di + ':' + li;
   const tone = { ok: 'border-emerald-300 bg-emerald-50', qty: 'border-amber-300 bg-amber-50', none: 'border-rose-300 bg-rose-50' }[l.mark] || 'border-slate-200 bg-white';
   const btn = (mark, icon, text, on) => '<button type="button" data-line-mark="' + id + ':' + mark + '" aria-pressed="' + (l.mark === mark ? 'true' : 'false') + '" class="btn-tap min-h-[44px] rounded-lg px-1 text-sm font-black flex items-center justify-center gap-1 ' +
     (l.mark === mark ? on : 'bg-white border border-slate-300 text-slate-700') + '"><i class="fa-solid ' + icon + '" aria-hidden="true"></i> ' + text + '</button>';
   return '<div id="lineCheck_' + di + '_' + li + '" class="rounded-xl border-2 p-3 mb-2 ' + tone + '">' +
-    '<div class="flex items-start justify-between gap-2"><div class="font-black text-base text-slate-800 min-w-0">' + htmlEscape(l.name) + '</div>' +
+    '<div class="flex items-start justify-between gap-2"><div class="min-w-0"><div class="font-black text-base text-slate-800">' + htmlEscape(l.name) + '</div>' + receiptLinePosPriceHtml(l.productId, 'mt-0.5') + '</div>' +
       '<div class="shrink-0 text-sm font-black text-slate-600">בתעודה: ' + mtxQty(l.paperQty) + '</div></div>' +
     '<div class="grid grid-cols-3 gap-1.5 mt-2" role="group" aria-label="' + htmlEscape(l.name) + ' — מה הגיע">' +
       btn('ok', 'fa-check', 'הגיע', 'bg-emerald-600 text-white') + btn('qty', 'fa-pen', 'כמות אחרת', 'bg-amber-500 text-white') + btn('none', 'fa-xmark', 'לא הגיע', 'bg-rose-600 text-white') +
@@ -6662,12 +6672,14 @@ function receiptLineSearchResultsHtml(term) {
   if (!r || !q) return '';
   const taken = new Set((r.docs || []).flatMap(d => (d.lines || []).map(l => l.productId)).concat((r.extras || []).map(x => x.productId)));
   const list = products.filter(p => p && !taken.has(p.id) && [p.name, p.barcode, productCode(p)].some(v => String(v || '').toLowerCase().includes(q))).slice(0, 8);
-  return list.length ? list.map(p => '<button type="button" data-extra-add="' + htmlEscape(p.id) + '" class="btn-tap block w-full border border-amber-300 text-amber-900 bg-white rounded-xl p-3 mb-2 text-right text-base font-bold">+ ' + htmlEscape(p.name) + '</button>').join('')
+  // v159: המחיר בקופה גם בתוצאות החיפוש — כשיש
+  return list.length ? list.map(p => '<button type="button" data-extra-add="' + htmlEscape(p.id) + '" class="btn-tap block w-full border border-amber-300 text-amber-900 bg-white rounded-xl p-3 mb-2 text-right text-base font-bold">+ ' + htmlEscape(p.name) +
+      (p.posPrice != null ? ' <span class="text-sm font-black text-sky-700 whitespace-nowrap">· בקופה: ₪' + fmtMoney(p.posPrice) + '</span>' : '') + '</button>').join('')
     : '<div class="text-sm font-bold text-slate-500 py-2">לא נמצא מוצר כזה</div>';
 }
 function receiptLineExtrasHtml(r) {
   const rows = (r.extras || []).map((x, k) => '<div id="lineExtra_' + k + '" class="rounded-xl border-2 border-amber-300 bg-amber-50 p-3 mb-2">' +
-    '<div class="flex items-center justify-between gap-2"><div class="font-black text-base text-slate-800 min-w-0">' + htmlEscape(x.name) + '</div>' +
+    '<div class="flex items-center justify-between gap-2"><div class="min-w-0"><div class="font-black text-base text-slate-800">' + htmlEscape(x.name) + '</div>' + receiptLinePosPriceHtml(x.productId, 'mt-0.5') + '</div>' +
       '<button type="button" data-extra-remove="' + k + '" class="btn-tap shrink-0 min-h-[44px] px-3 text-rose-700 font-black text-sm" aria-label="הסר: ' + htmlEscape(x.name) + '">הסר</button></div>' +
     '<label class="flex items-center gap-2 mt-1 text-sm font-bold text-slate-700">כמה הגיע?<input data-extra-got="' + k + '" type="text" inputmode="numeric" autocomplete="off" value="' + htmlEscape(x.got) + '" aria-label="כמה הגיע: ' + htmlEscape(x.name) + '" class="w-24 border-2 border-amber-300 rounded-lg p-2 text-base text-center font-black bg-white"></label></div>').join('');
   return '<section class="mt-4 pt-3 border-t-2 border-slate-200" aria-label="הגיע משהו נוסף">' +
