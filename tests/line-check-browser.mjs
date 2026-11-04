@@ -5,6 +5,8 @@
 // - לחיצה על "הגיע" מסמנת (aria-pressed) ומעדכנת את המונה; "כמות אחרת" פותח שדה עם פוקוס, והסיכום מתעדכן בהקלדה.
 // - "הנייר הזה לא שלנו" → "הוצא מהקליטה": תעודה אחת נשארת, ההודעה בראש החלון, והנייר בסל המחזור בענן.
 // - "סיום" לפני הזמן: ההודעה בראש החלון והשורה שנשארה מסומנת; אחרי שהכל סומן — החלון נסגר והקליטה ממשיכה.
+// - v159: שורה שסומנה "הגיע" מתקפלת ("הגיע · 12 יח׳", בלי כפתורי סימון), "שנה" פותח אותה עם aria-pressed והפוקוס על "הגיע",
+//   ו"הגיע" שוב מקפל; המונה בראש החלון אומר גם את החוסר.
 // - בלי שגיאות דף ובלי גלילה לצדדים.
 // Run: node tests/line-check-browser.mjs (Playwright + Chromium; BERMAN_CHROMIUM optional)
 import assert from 'node:assert/strict';
@@ -101,13 +103,20 @@ try {
   assert.equal(await page.locator('#receiptQuantityProgress').innerText(), 'סומנו 0 מתוך 7 שורות');
   // 4. סימון, כמות אחרת עם פוקוס, וסיכום בהקלדה
   await page.locator('[data-line-mark="0:0:ok"]').click();
-  assert.equal(await page.locator('[data-line-mark="0:0:ok"]').getAttribute('aria-pressed'), 'true');
+  // v159: השורה שסומנה מתקפלת — "הגיע · 12 יח׳" ו"שנה"; "שנה" פותח אותה עם הסימון והפוקוס על "הגיע"; "הגיע" שוב — מקפל
+  assert.equal(await page.locator('[data-line-mark="0:0:ok"]').count(), 0, 'מקופלת — בלי כפתורי סימון');
+  assert.match(await page.locator('#lineCheck_0_0').innerText(), /הגיע · 12 יח׳/);
   assert.equal(await page.locator('#receiptQuantityProgress').innerText(), 'סומנו 1 מתוך 7 שורות');
+  await page.locator('[data-line-open="0:0"]').click();
+  assert.equal(await page.locator('[data-line-mark="0:0:ok"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.dataset.lineMark), '0:0:ok', 'הפוקוס על "הגיע"');
+  await page.locator('[data-line-mark="0:0:ok"]').click();
+  assert.equal(await page.locator('[data-line-mark="0:0:ok"]').count(), 0, 'מתקפלת שוב');
   await page.locator('[data-line-mark="0:1:qty"]').click();
   assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.dataset.lineGot), '0:1', 'הפוקוס בשדה הכמות');
   await page.keyboard.type('4');
   assert.equal(await page.locator('#lineCheckSum_0_1').innerText(), 'התקבלו 4 · חוסר 2');
-  assert.equal(await page.locator('#receiptQuantityProgress').innerText(), 'סומנו 2 מתוך 7 שורות');
+  assert.equal(await page.locator('#receiptQuantityProgress').innerText(), 'סומנו 2 מתוך 7 שורות · חוסר 2 יח׳');
   assert.ok(await over() <= 1, 'בלי גלילה לצדדים');
   // 5. "הנייר הזה לא שלנו"
   await page.locator('[data-line-drop="1"]').click();
@@ -116,7 +125,7 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('#receiptQuantityRows section').length === 2);
   assert.deepEqual(await page.evaluate(() => window.t.nums()), ['244785003']);
   assert.equal(await page.locator('#receiptQuantityProgress').innerText(), 'ת.משלוח 290096103 יצא מהקליטה ועבר לסל המחזור');
-  assert.equal(await page.locator('[data-line-mark="0:0:ok"]').getAttribute('aria-pressed'), 'true', 'מה שסומן נשאר');
+  assert.match(await page.locator('#lineCheck_0_0').innerText(), /הגיע · 12 יח׳/, 'מה שסומן נשאר (מקופל)');
   await page.waitForFunction(() => true);
   for (let i = 0; i < 50 && ![...documents.keys()].some(k => k.includes('/trash/papers_paper_290096103_')); i++) await new Promise(r => setTimeout(r, 20));
   assert.ok([...documents.keys()].some(k => k.includes('/trash/papers_paper_290096103_')), 'הנייר בסל המחזור');

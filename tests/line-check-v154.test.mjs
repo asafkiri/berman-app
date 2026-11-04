@@ -104,7 +104,7 @@ test('2. השורות של כל תעודה בנפרד; בלי "סמן הכל"; "
   assert.equal(r.run(`$('receiptQuantityProgress').textContent`), 'סומנו 1 מתוך 7 שורות');
   type(r, { lineGot: '0:1' }, '4');
   assert.equal(r.run(`$('lineCheckSum_0_1').textContent`), 'התקבלו 4 · חוסר 2');
-  assert.equal(r.run(`$('receiptQuantityProgress').textContent`), 'סומנו 2 מתוך 7 שורות');
+  assert.equal(r.run(`$('receiptQuantityProgress').textContent`), 'סומנו 2 מתוך 7 שורות · חוסר 2 יח׳', 'v159: המונה אומר גם מה סומן');
   type(r, { lineGot: '0:1' }, 'x'); assert.equal(r.run(`receiptLineGot(receiptQuantityReview.docs[0].lines[1])`), null, 'לא מספר — לא סומנה');
   type(r, { lineGot: '0:1' }, '6'); assert.equal(r.run(`$('lineCheckSum_0_1').textContent`), 'כמו בתעודה');
 });
