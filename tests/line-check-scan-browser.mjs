@@ -72,7 +72,7 @@ setView('receiving'); window.t.loaded = true;
 `;
 const css = `.hidden{display:none!important}.flex{display:flex}.grid{display:grid}.grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.flex-1{flex:1}.min-w-0{min-width:0}.shrink-0{flex-shrink:0}.gap-2{gap:.5rem}.fixed{position:fixed}.inset-0{inset:0}.overflow-y-auto{overflow-y:auto}.min-h-0{min-height:0}.flex-col{flex-direction:column}.w-full{width:100%}.max-w-lg{max-width:32rem}.whitespace-nowrap{white-space:nowrap}body{margin:0;font:16px Arial}button,input{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}
 .absolute{position:absolute}.relative{position:relative}.inset-x-0{left:0;right:0}.bottom-0{bottom:0}.items-center{align-items:center}.items-start{align-items:flex-start}.gap-3{gap:.75rem}.p-3{padding:.75rem}.p-4{padding:1rem}.mt-3{margin-top:.75rem}
-.grid-cols-\\[1\\.15fr_1fr\\]{grid-template-columns:1.15fr 1fr}.grid-cols-\\[1fr_auto_auto\\]{grid-template-columns:1fr auto auto}.bg-white{background:#fff}.bg-black{background:#000}.rounded-2xl{border-radius:1rem}.text-3xl{font-size:1.875rem}.min-h-\\[52px\\]{min-height:52px}.min-h-\\[48px\\]{min-height:48px}.ring-4{box-shadow:0 0 0 4px #93c5fd}.pointer-events-none{pointer-events:none}video{background:#222}`;
+.grid-cols-\\[1\\.15fr_1fr\\]{grid-template-columns:1.15fr 1fr}.grid-cols-\\[1fr_auto_auto\\]{grid-template-columns:1fr auto auto}.bg-white{background:#fff}.bg-black{background:#000}.rounded-2xl{border-radius:1rem}.text-3xl{font-size:1.875rem}.min-h-\\[52px\\]{min-height:52px}.min-h-\\[48px\\]{min-height:48px}.ring-4{box-shadow:0 0 0 4px #93c5fd}.pointer-events-none{pointer-events:none}.h-full{height:100%}.items-stretch{align-items:stretch}.top-0{top:0}.px-4{padding-left:1rem;padding-right:1rem}.pt-4{padding-top:1rem}.pb-4{padding-bottom:1rem}video{background:#222}`;
 const pageHtml = html.replace(/<script\s+src="https:[^"]+"><\/script>/g, '').replace(/<link[^>]+(?:href="https:[^"]+"|rel="manifest")[^>]*>/g, '')
   .replace(/<script type="module">[\s\S]*?<\/script>/, () => '<script type="module">' + setup + moduleSource + replay + '</script>')
   .replace('</head>', '<style>' + css + '</style></head>');
@@ -121,6 +121,10 @@ try {
   assert.equal(await page.evaluate(() => document.getElementById('receiptQuantityFooter').getBoundingClientRect().top), before, 'התחתית לא זזה בגלילה');
   const scanBox = await scanBtn.boundingBox(), finishBox = await finish.boundingBox();
   assert.ok(scanBox.x > finishBox.x && scanBox.width > finishBox.width, '"סרוק" מימין (RTL) ורחב יותר');
+  // v161: בטלפון החלון על כל המסך — התיבה מהקצה לקצה (390×860), והתחתית צמודה לתחתית המסך
+  const box = await page.locator('#receiptQuantityModal > div').boundingBox(), footerBox = await page.locator('#receiptQuantityFooter').boundingBox();
+  assert.ok(Math.abs(box.y) < 1 && Math.abs(box.height - 860) < 2 && Math.abs(box.width - 390) < 2, 'מסך מלא: ' + JSON.stringify(box));
+  assert.ok(Math.abs(footerBox.y + footerBox.height - 860) < 2, 'התחתית צמודה לתחתית המסך: ' + JSON.stringify(footerBox));
   await snap('1-list');
   // 5. הלחיצה פותחת את המצלמה; החלון מוסתר
   await scanBtn.click();
