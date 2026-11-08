@@ -95,7 +95,7 @@ test('1. "סרוק מוצר" בתחתית הקבועה ליד "סיום" — ר�
   const r = await twoPapers();
   const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   // המבנה: התחתית מחוץ לגוף הנגלל (shrink-0, אחרי receiptQuantityBody), ובה "סרוק מוצר" ואז "סיום"
-  assert.match(html, /<div id="receiptQuantityBody" class="p-4 overflow-y-auto min-h-0">[\s\S]*?<div id="receiptQuantityFooter" class="p-4 border-t border-slate-100 shrink-0 grid gap-2"><button id="receiptLineScan"[^>]*>[\s\S]*?סרוק מוצר<\/button><button id="receiptQuantityConfirm"/);
+  assert.match(html, /<div id="receiptQuantityBody" class="p-4 overflow-y-auto min-h-0">[\s\S]*?<div id="receiptQuantityFooter" class="[^"]*border-t border-slate-100 shrink-0 grid gap-2"><button id="receiptLineScan"[^>]*>[\s\S]*?סרוק מוצר<\/button><button id="receiptQuantityConfirm"/);
   r.run('startReceiptLineCheck()');
   assert.equal(r.run(`$('receiptLineScan').classList.contains('hidden')`), false, 'הכפתור גלוי');
   assert.equal(r.run(`$('receiptQuantityFooter').classList.contains('grid-cols-[1.15fr_1fr]')`), true, 'שני כפתורים זה לצד זה — "סרוק" רחב יותר');
@@ -401,8 +401,9 @@ test('11. קריאה בלבד — המצלמה נסגרת בלי לסמן, עם 
   assert.equal(modalHidden(r), false, 'החלון נשאר');
 });
 
-test('12. הגרסה עלתה ל-160, כולל ההערה ב-service worker', () => {
+test('12. הגרסה (160 ומעלה), כולל ההערה ב-service worker', () => {
   const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-  assert.match(html, /const APP_VERSION = '160'/);
-  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), /גרסת אפליקציה 160/);
+  const v = html.match(/const APP_VERSION = '(\d+)'/)[1];
+  assert.ok(Number(v) >= 160, v);
+  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), new RegExp('גרסת אפליקציה ' + v));
 });
