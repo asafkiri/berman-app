@@ -849,7 +849,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '162'; // מעבר מסריקה לבדיקה שורה-שורה: מה שנסרק עובר לרשימה כסימון ("הגיע" / "אחרת" עם המספר)
+const APP_VERSION = '163'; // בדיקה שורה-שורה: סריקה חוזרת של שורה שסומנה — "סרקת עד עכשיו 1 מתוך 2 — עוד כמה?", ומה שמוקלד מתווסף
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -6967,6 +6967,9 @@ function receiptLineCheckDrop(di) {
 // - על המצלמה: "סומנו 9 מתוך 28" (scanOverlayCount) והפעולה האחרונה (scanOverlayName). ✕ → closeScanner →
 //   receiptLineScanClosed: החלון חוזר, מצויר מחדש (מה שסומן בסריקה מקופל כמו ביד), והשורה האחרונה שסומנה מודגשת (receiptLineReveal).
 // - קריאה בלבד (canEditSharedReceipt — שמירה שרצה או ניסיון תלוי): סריקה או לחיצה בכרטיס סוגרות את המצלמה בלי לסמן, עם ההודעה.
+// - v163: סריקה חוזרת של שורה שכבר סומנה — הכרטיס אומר "סרקת עד עכשיו 1 מתוך 2" ושואל "עוד כמה?" (addQty): מה שמוקלד
+//   מתווסף למה שסומן (receiptLineScanAdd), ומה שחסר עד הכמות בתעודה כבר בשדה — "הוסף" אחד משלים את השורה. "לא נכון? תקן את
+//   הסה״כ" מחזיר את הכרטיס הקודם (הגיע N / אחרת / לא הגיע — הסה״כ). הכמות בתעודה נשארת בצד, כמו תמיד. (בעל העסק, 9.11.2026.)
 let receiptLineScanCard = null, receiptLineScanLast = null;
 // גלילה לשורה שכבר ברשימה והדגשה שלה (כמו "סיום" שמביא לשורה שנשארה); ההדגשה נעלמת בציור הבא. (ביטבתה — מגרסה 407.)
 function receiptLineReveal(id) {
@@ -7024,8 +7027,10 @@ function handleLineCheckScan(code) {
   if (!canEditSharedReceipt()) { sharedReceiptReadOnlyNotice(); closeScanner(); return; }
   const t = receiptLineScanTarget(code);
   if (t.kind === 'unknown') { rejectUnknownReceivingBarcode(code); return; }
+  // v163: שורה שכבר סומנה — "עוד כמה?" (addQty), ומה שחסר עד הכמות בתעודה כבר בשדה (כלום — כשהכול כבר הגיע)
+  const l = t.kind === 'line' ? r.docs[t.di].lines[t.li] : null, got = l ? receiptLineGot(l) : null;
   receiptLineScanCard = t.kind === 'line'
-    ? { kind: 'line', di: t.di, li: t.li, others: t.others, scanned: t.scanned, related: t.related, askQty: false, got: '' }
+    ? { kind: 'line', di: t.di, li: t.li, others: t.others, scanned: t.scanned, related: t.related, askQty: false, addQty: got != null, got: got != null && got < l.paperQty ? String(l.paperQty - got) : '' }
     : { kind: 'extra', k: t.k, scanned: t.scanned, got: t.k >= 0 ? String(r.extras[t.k].got == null ? '' : r.extras[t.k].got) : '1' };
   renderReceiptLineScanCard();
 }
@@ -7038,14 +7043,18 @@ function receiptLineScanGotNumber(c) {
 }
 function receiptLineScanSumText(c) {
   const n = receiptLineScanGotNumber(c);
-  if (n == null) return c.invalid ? 'הקלד מספר — כמה יחידות הגיעו' : 'הקלד כמה יחידות הגיעו';
+  if (n == null) return c.invalid ? (c.addQty ? 'הקלד מספר — כמה עוד הגיעו' : 'הקלד מספר — כמה יחידות הגיעו') : (c.addQty ? 'הקלד כמה עוד הגיעו' : 'הקלד כמה יחידות הגיעו');
   if (c.kind === 'extra') return 'התקבלו ' + n + ' · עודף ' + n;
   const l = receiptQuantityReview.docs[c.di].lines[c.li];
-  return n === l.paperQty ? 'כמו בתעודה' : 'התקבלו ' + n + ' · ' + (n < l.paperQty ? 'חוסר ' + (l.paperQty - n) : 'עודף ' + (n - l.paperQty));
+  const diff = t => t === l.paperQty ? 'כמו בתעודה' : t < l.paperQty ? 'חוסר ' + (l.paperQty - t) : 'עודף ' + (t - l.paperQty);
+  // v163: "עוד כמה?" — הסה״כ אחרי ההוספה, מול התעודה
+  if (c.addQty) { const total = (receiptLineGot(l) || 0) + n; return 'סה״כ ' + total + ' · ' + diff(total); }
+  return n === l.paperQty ? 'כמו בתעודה' : 'התקבלו ' + n + ' · ' + diff(n);
 }
-// שדה הכמות ו"שמור" — ל"אחרת" בשורת תעודה ול"הגיע בנוסף"
+// שדה הכמות ו"שמור" — ל"אחרת" בשורת תעודה ול"הגיע בנוסף"; v163: "עוד כמה?" ו"הוסף" — לסריקה חוזרת של שורה שסומנה
 function receiptLineScanQtyHtml(c, name, saveText) {
-  return '<div class="flex items-center gap-2 mt-3"><label class="flex items-center gap-2 text-sm font-bold text-slate-700 flex-1 min-w-0">כמה הגיע?<input id="scanLineGot" data-scan-got type="text" inputmode="numeric" autocomplete="off" value="' + htmlEscape(c.got) + '" aria-label="כמה הגיע: ' + htmlEscape(name) + '" class="w-24 border-2 border-amber-400 rounded-xl p-2 text-xl text-center font-black bg-white tabular-nums"></label>' +
+  const label = c.addQty ? 'עוד כמה?' : 'כמה הגיע?';
+  return '<div class="flex items-center gap-2 mt-3"><label class="flex items-center gap-2 text-sm font-bold text-slate-700 flex-1 min-w-0">' + label + '<input id="scanLineGot" data-scan-got type="text" inputmode="numeric" autocomplete="off" value="' + htmlEscape(c.got) + '" aria-label="' + (c.addQty ? 'עוד כמה הגיעו' : 'כמה הגיע') + ': ' + htmlEscape(name) + '" class="w-24 border-2 border-amber-400 rounded-xl p-2 text-xl text-center font-black bg-white tabular-nums"></label>' +
       '<button type="button" data-scan-save class="btn-tap min-h-[52px] px-5 rounded-xl font-black bg-amber-500 text-white">' + saveText + '</button></div>' +
     '<div id="scanLineSum" class="text-sm font-bold mt-1 ' + (c.invalid ? 'text-rose-700' : 'text-amber-800') + '" aria-live="polite">' + receiptLineScanSumText(c) + '</div>';
 }
@@ -7057,8 +7066,11 @@ function receiptLineScanCardHtml(c) {
     const l = r.docs[c.di].lines[c.li], p = products.find(x => x.id === l.productId) || null, got = receiptLineGot(l), multi = r.docs.length > 1;
     const kin = c.related ? '<div class="text-xs font-black text-indigo-900 bg-indigo-50 border border-indigo-200 rounded-lg px-2 py-1.5 mb-2">סרקת ' + htmlEscape(c.scanned.name) + ' — בתעודה ' +
       (c.scanned.billingPackId === c.related.id ? 'מארז החיוב שלו' : 'היחידה הבודדת שלו') + ':</div>' : '';
-    const state = got == null ? '' : '<div class="text-xs font-black mt-1 ' + (got === l.paperQty ? 'text-emerald-700' : got === 0 ? 'text-rose-700' : 'text-amber-700') + '">כבר סומנה: ' +
-      (got === l.paperQty ? 'הגיע' : got === 0 ? 'לא הגיע' : 'הגיעו ' + got) + ' — אפשר לשנות</div>';
+    // v163: שורה שכבר סומנה — "סרקת עד עכשיו 1 מתוך 2"; אחרי "תקן את הסה״כ" — הכרטיס הקודם: "כבר סומנה: הגיעו 1 — אפשר לשנות"
+    const tone = got === l.paperQty ? 'text-emerald-700' : got === 0 ? 'text-rose-700' : 'text-amber-700';
+    const state = got == null ? '' : '<div class="text-xs font-black mt-1 ' + tone + '">' + (c.addQty
+      ? 'סרקת עד עכשיו ' + got + ' מתוך ' + l.paperQty + (got === l.paperQty ? ' — הכל הגיע' : got > l.paperQty ? ' — עודף ' + (got - l.paperQty) : '')
+      : 'כבר סומנה: ' + (got === l.paperQty ? 'הגיע' : got === 0 ? 'לא הגיע' : 'הגיעו ' + got) + ' — אפשר לשנות') + '</div>';
     const others = c.others ? '<div class="text-[11px] font-bold text-slate-500 mt-1">המוצר גם בשורה נוספת' + (multi ? ' (תעודה אחרת)' : '') + ' — סרוק שוב כדי להגיע אליה</div>' : '';
     const box = receiptLineBoxText(p, l.paperQty);
     const btn = (mark, icon, text, cls, size) => '<button type="button" data-scan-mark="' + mark + '" class="btn-tap min-h-[52px] rounded-xl font-black flex items-center justify-center gap-1 ' + size + ' ' + cls + '"><i class="fa-solid ' + icon + '" aria-hidden="true"></i> ' + text + '</button>';
@@ -7068,6 +7080,9 @@ function receiptLineScanCardHtml(c) {
         '<div class="shrink-0 text-center"><div class="text-3xl font-black text-slate-900 leading-none tabular-nums">' + l.paperQty + '</div><div class="text-[11px] font-bold text-slate-500">יח׳ בתעודה</div>' +
           (box ? '<div class="text-[11px] font-bold text-slate-400">' + box + '</div>' : '') + '</div></div>' +
       (c.askQty ? receiptLineScanQtyHtml(c, l.name, 'שמור')
+        // v163: סריקה חוזרת — "עוד כמה?" עם "הוסף", ומתחת "לא נכון? תקן את הסה״כ" (חזרה לשלושת הכפתורים: הגיע N / אחרת / לא הגיע)
+        : c.addQty ? receiptLineScanQtyHtml(c, l.name, 'הוסף') +
+          '<button type="button" data-scan-mark="fix" class="btn-tap min-h-[44px] w-full mt-1 text-xs font-black text-slate-500">לא נכון? <span class="underline">תקן את הסה״כ</span></button>'
         : '<div class="grid grid-cols-[1fr_auto_auto] gap-1.5 mt-3" role="group" aria-label="' + htmlEscape(l.name) + ' — מה הגיע">' +
           btn('ok', 'fa-check', 'הגיע ' + l.paperQty, 'bg-emerald-600 text-white', 'text-base px-1 min-w-0') +
           btn('qty', 'fa-pen', 'אחרת', 'bg-white border border-slate-300 text-slate-700', 'text-sm px-2 whitespace-nowrap') +
@@ -7087,7 +7102,7 @@ function renderReceiptLineScanCard() {
     '<button type="button" data-scan-dismiss class="btn-tap absolute top-2 left-2 w-10 h-10 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center" aria-label="סגור בלי לסמן"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>' +
     receiptLineScanCardHtml(c) + '</div>';
   box.classList.remove('hidden');
-  if (c.askQty || c.kind === 'extra') { const i = $('scanLineGot'); if (i && i.focus) { try { i.focus(); i.select && i.select(); } catch (e) {} } }
+  if (c.askQty || c.addQty || c.kind === 'extra') { const i = $('scanLineGot'); if (i && i.focus) { try { i.focus(); i.select && i.select(); } catch (e) {} } }
 }
 // סגירת הכרטיס — והסריקה ממשיכה (טיק אחד; הלולאה הייתה מושהית כל עוד הכרטיס היה פתוח). המוצר שזה עתה סומן עדיין מול
 // המצלמה — הברקוד שלו לא ייקרא שוב בשתי השניות הבאות (onScanned)
@@ -7106,10 +7121,21 @@ function receiptLineScanApply(mark, got) {
   receiptLineOpen.delete(c.di + ':' + c.li); receiptLineDropAsk = null; receiptLineNotice = null;
   receiptLineCheckChanged();
   receiptLineScanLast = 'lineCheck_' + c.di + '_' + c.li;
-  const n = receiptLineGot(l);
-  refreshReceiptLineScanOverlay((n === l.paperQty ? '✓ ' : n === 0 ? '✗ ' : '✎ ') + l.name + ' · ' + (n === l.paperQty ? 'הגיע ' + n : n === 0 ? 'לא הגיע' : 'הגיעו ' + n + ' מתוך ' + l.paperQty));
+  const n = receiptLineGot(l), added = c.added != null ? 'עוד ' + c.added + ' — ' : ''; // v163: "✓ שם · עוד 1 — הגיע 2"
+  refreshReceiptLineScanOverlay((n === l.paperQty ? '✓ ' : n === 0 ? '✗ ' : '✎ ') + l.name + ' · ' + added + (n === l.paperQty ? 'הגיע ' + n : n === 0 ? 'לא הגיע' : 'הגיעו ' + n + ' מתוך ' + l.paperQty));
   closeReceiptLineScanCard();
   return true;
+}
+// v163: סריקה חוזרת של שורה שכבר סומנה — מה שהוקלד מתווסף למה שסומן, והסה״כ נכנס באותו נתיב (receiptLineScanApply):
+// בדיוק כמו בתעודה — "הגיע"; 0 — "לא הגיע"; אחרת — "אחרת" עם הסה״כ. בכרטיס הזה אין "הגיע"/"לא הגיע", ולכן ההחלטה כאן —
+// כדי שהשורה תתקפל ברשימה בדיוק כמו בלחיצה עליהם (מה שנשמר זהה בכל מקרה: receiptLineGot).
+function receiptLineScanAdd(n) {
+  const r = receiptQuantityReview, c = receiptLineScanCard;
+  if (!r || r.mode !== 'lines' || !c || c.kind !== 'line' || !c.addQty) return false;
+  const l = r.docs[c.di] && r.docs[c.di].lines[c.li]; if (!l) { closeReceiptLineScanCard(); return false; }
+  const total = (receiptLineGot(l) || 0) + n;
+  c.added = n;
+  return receiptLineScanApply(total === l.paperQty ? 'ok' : total === 0 ? 'none' : 'qty', total);
 }
 // "הגיע בנוסף" מהכרטיס — כמו "+ מוצר" מהחיפוש (data-extra-add), עם הכמות שהוקלדה; מוצר שכבר שם — הכמות מתעדכנת
 function receiptLineScanApplyExtra(got) {
@@ -7132,7 +7158,7 @@ function receiptLineScanSave() {
   const c = receiptLineScanCard; if (!c) return false;
   const n = receiptLineScanGotNumber(c);
   if (n == null) { c.invalid = true; renderReceiptLineScanCard(); return false; }
-  return c.kind === 'extra' ? receiptLineScanApplyExtra(n) : receiptLineScanApply('qty', n);
+  return c.kind === 'extra' ? receiptLineScanApplyExtra(n) : c.addQty ? receiptLineScanAdd(n) : receiptLineScanApply('qty', n);
 }
 function receiptLineScanCardClick(e) {
   const c = receiptLineScanCard; if (!c) return;
@@ -7140,8 +7166,10 @@ function receiptLineScanCardClick(e) {
   if (t.dataset.scanDismiss != null) { closeReceiptLineScanCard(); return; }
   if (t.dataset.scanSave != null) { receiptLineScanSave(); return; }
   const mark = t.dataset.scanMark;
+  // v163: "לא נכון? תקן את הסה״כ" — מ"עוד כמה?" לכרטיס הקודם: "כבר סומנה: … — אפשר לשנות" ושלושת הכפתורים (הסה״כ, לא תוספת)
+  if (mark === 'fix' && c.kind === 'line') { c.addQty = false; c.askQty = false; c.got = ''; c.invalid = false; renderReceiptLineScanCard(); return; }
   if (mark === 'qty') { c.askQty = true; c.got = ''; c.invalid = false; renderReceiptLineScanCard(); return; }
-  if (mark === 'ok' || mark === 'none') receiptLineScanApply(mark, '');
+  if ((mark === 'ok' || mark === 'none') && !c.addQty) receiptLineScanApply(mark, '');
 }
 function receiptLineScanCardInput(e) {
   const c = receiptLineScanCard, el = e.target; if (!c || !el || !el.dataset || el.dataset.scanGot == null) return;
