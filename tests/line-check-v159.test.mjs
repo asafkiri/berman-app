@@ -53,7 +53,8 @@ test('1. השורה כמו במסך הסריקה: מחיר קופה, ברקוד 
   r.run('startReceiptLineCheck()');
   assert.equal(r.run(`$('receiptQuantityModal').classList.contains('hidden')`), false, 'החלון פתוח');
   const a = row(r, 0, 0);
-  assert.equal(strip(a), 'שורה 1 בתעודה אחיד פרוס ברמן בקופה: ₪12.90 497112 · קוד 101 12 יח׳ בתעודה הגיע 12 אחרת לא הגיע');
+  // v164: אחיד פרוס בשני הניירות — שורה אחת של 17 ("ב-2 תעודות", "12 + 5"), והכותרת אומרת איפה עוד
+  assert.equal(strip(a), 'שורה 1 בתעודה · גם בתעודה 2 (5 יח׳) אחיד פרוס ברמן בקופה: ₪12.90 497112 · קוד 101 17 יח׳ ב-2 תעודות 12 + 5 הגיע 17 אחרת לא הגיע');
   // אותה שורת מחיר קופה כמו בשורת המוצר במסך הסריקה
   const pos = r.run(`posPriceLineHtml(products.find(p => p.id === 'code_101'))`);
   assert.match(pos, /fa-cash-register.*בקופה: ₪12\.90/);
@@ -68,7 +69,7 @@ test('1. השורה כמו במסך הסריקה: מחיר קופה, ברקוד 
   assert.equal(r.run(`receiptLineBoxText({ boxSize: 0 }, 6)`), '');
   // "הגיע N" הוא הכפתור הראשי; שלוש הבחירות לכל שורה, בלי "סמן הכל", ואף שורה לא מסומנת מראש (כמו ב-v154)
   const all = rows(r);
-  assert.equal((all.match(/data-line-mark="\d+:\d+:ok"/g) || []).length, 7);
+  assert.equal((all.match(/data-line-mark="\d+:\d+:ok"/g) || []).length, 5); // v164: 5 מוצרים — 5 שורות
   assert.equal((all.match(/aria-pressed="true"/g) || []).length, 0);
   assert.doesNotMatch(strip(all), /סמן הכל|הכל הגיע/);
   assert.match(a, /data-line-mark="0:0:ok"[^>]*class="[^"]*text-base[^"]*bg-emerald-50 border-2 border-emerald-500/, '"הגיע" רחב ומודגש');
@@ -84,22 +85,22 @@ test('2. שורה שסומנה "הגיע" או "לא הגיע" מתקפלת; "ש
   click(r, { lineMark: '0:0:ok' });
   let a = row(r, 0, 0);
   assert.doesNotMatch(a, /data-line-mark=/, 'מקופלת — בלי כפתורי סימון');
-  assert.equal(strip(a), 'אחיד פרוס ברמן הגיע · 12 יח׳ · בקופה ₪12.90 שנה');
+  assert.equal(strip(a), 'אחיד פרוס ברמן הגיע · 17 יח׳ ב-2 תעודות · בקופה ₪12.90 שנה'); // v164: הקבוצה של שני הניירות
   assert.match(a, /data-line-open="0:0"/); assert.match(a, /border-emerald-300 bg-emerald-50/);
-  assert.equal(progress(r), 'סומנו 1 מתוך 7 שורות');
-  assert.equal(json(r, 'receiptQuantityReview.docs[0].lines[0].mark'), 'ok', 'הסימון נשמר כמו ב-v154');
+  assert.equal(progress(r), 'סומנו 1 מתוך 5 שורות');
+  assert.deepEqual(json(r, '[receiptQuantityReview.docs[0].lines[0].mark, receiptQuantityReview.docs[1].lines[0].mark]'), ['ok', 'ok'], 'הסימון נשמר כמו ב-v154 — בשתי השורות של המוצר');
   // "שנה" — נפתחת עם "הגיע" מסומן
   click(r, { lineOpen: '0:0' });
   a = row(r, 0, 0);
   assert.match(a, /data-line-mark="0:0:ok" aria-pressed="true"/);
   assert.equal((a.match(/data-line-mark=/g) || []).length, 3);
-  assert.equal(progress(r), 'סומנו 1 מתוך 7 שורות', 'פתיחה אינה סימון');
+  assert.equal(progress(r), 'סומנו 1 מתוך 5 שורות', 'פתיחה אינה סימון');
   // "הגיע" שוב — מתקפלת שוב; "לא הגיע" — מקופלת אדומה
   click(r, { lineMark: '0:0:ok' });
   assert.doesNotMatch(row(r, 0, 0), /data-line-mark=/);
-  click(r, { lineMark: '0:2:none' });
-  const c = row(r, 0, 2);
-  assert.equal(strip(c), 'ברמן אסלי 5 פיתות לא הגיע · 0 מתוך 4 שנה');
+  click(r, { lineMark: '0:4:none' });
+  const c = row(r, 0, 4);
+  assert.equal(strip(c), 'פיתות עננים 8 לא הגיע · 0 מתוך 3 שנה');
   assert.match(c, /border-rose-300 bg-rose-50/);
   // "אחרת" — פתוחה, עם השדה והסיכום
   click(r, { lineMark: '0:1:qty' }); type(r, { lineGot: '0:1' }, '4');
@@ -113,35 +114,35 @@ test('2. שורה שסומנה "הגיע" או "לא הגיע" מתקפלת; "ש
   assert.doesNotMatch(row(r, 0, 0), /data-line-mark=/); assert.match(row(r, 0, 1), /data-line-got="0:1"/);
   // "סיום" לפני הזמן — השורה הפתוחה הראשונה שנשארה מסומנת (כמו ב-v154)
   assert.equal(r.run('finishReceiptLineCheck()'), false);
-  assert.equal(r.run(`$('lineCheck_0_3').classList.contains('ring-4')`), true);
+  assert.equal(r.run(`$('lineCheck_0_2').classList.contains('ring-4')`), true, 'השורה הפתוחה הראשונה — אסלי (הקבוצה של שני הניירות)');
   // ומשם כמו תמיד: הכל "הגיע", "סיום" — אותה ספירה כמו ב-v154
   markRestOk(r);
-  assert.equal(progress(r), 'כל 7 שורות סומנו — אפשר לסיים · חוסר 6 יח׳');
+  assert.equal(progress(r), 'כל 5 שורות סומנו — אפשר לסיים · חוסר 5 יח׳');
   assert.equal(r.run('finishReceiptLineCheck()'), true);
   assert.equal(r.run(`$('receiptQuantityModal').classList.contains('hidden')`), true, 'החלון נסגר');
-  assert.deepEqual(json(r, 'receiptList.map(l => l.productId + " " + l.qty)'), ['code_101 17', 'code_1231 4', 'code_238 2', 'code_2381 5', 'code_2387 3']);
+  assert.deepEqual(json(r, 'receiptList.map(l => l.productId + " " + l.qty)'), ['code_101 17', 'code_1231 4', 'code_238 6', 'code_2381 5', 'code_2387 0']);
 });
 
 test('3. המונה בראש החלון: החוסרים והעודפים שסומנו עד עכשיו', async () => {
   const r = await twoPapers();
   r.run('startReceiptLineCheck()');
-  assert.equal(progress(r), 'סומנו 0 מתוך 7 שורות');
+  assert.equal(progress(r), 'סומנו 0 מתוך 5 שורות'); // v164: 5 מוצרים — 5 שורות
   click(r, { lineMark: '0:1:qty' }); type(r, { lineGot: '0:1' }, '4');
-  assert.equal(progress(r), 'סומנו 1 מתוך 7 שורות · חוסר 2 יח׳');
-  click(r, { lineMark: '1:0:none' });
-  assert.equal(progress(r), 'סומנו 2 מתוך 7 שורות · חוסר 7 יח׳');
+  assert.equal(progress(r), 'סומנו 1 מתוך 5 שורות · חוסר 2 יח׳');
+  click(r, { lineMark: '0:0:qty' }); type(r, { lineGot: '0:0' }, '12'); // אחיד פרוס: 12 מתוך 17 בשני הניירות — החוסר (5) על הנייר הקטן
+  assert.equal(progress(r), 'סומנו 2 מתוך 5 שורות · חוסר 7 יח׳');
   type(r, { lineGot: '0:1' }, '8');
-  assert.equal(progress(r), 'סומנו 2 מתוך 7 שורות · חוסר 5 יח׳ · עודף 2 יח׳');
+  assert.equal(progress(r), 'סומנו 2 מתוך 5 שורות · חוסר 5 יח׳ · עודף 2 יח׳');
   type(r, { lineGot: '0:1' }, 'x');
-  assert.equal(progress(r), 'סומנו 1 מתוך 7 שורות · חוסר 5 יח׳', 'כמות לא תקינה — השורה לא נספרת');
+  assert.equal(progress(r), 'סומנו 1 מתוך 5 שורות · חוסר 5 יח׳', 'כמות לא תקינה — השורה לא נספרת');
   type(r, { lineGot: '0:1' }, '6');
-  assert.equal(progress(r), 'סומנו 2 מתוך 7 שורות · חוסר 5 יח׳');
+  assert.equal(progress(r), 'סומנו 2 מתוך 5 שורות · חוסר 5 יח׳');
   // "הגיע משהו נוסף" — עודף
   const extra = r.run(`products.find(p => !['code_101','code_1231','code_238','code_2381','code_2387','code_119'].includes(p.id) && p.name).id`);
   click(r, { extraAdd: extra }); type(r, { extraGot: '0' }, '3');
-  assert.equal(progress(r), 'סומנו 2 מתוך 7 שורות · חוסר 5 יח׳ · עודף 3 יח׳');
+  assert.equal(progress(r), 'סומנו 2 מתוך 5 שורות · חוסר 5 יח׳ · עודף 3 יח׳');
   markRestOk(r);
-  assert.equal(progress(r), 'כל 7 שורות סומנו — אפשר לסיים · חוסר 5 יח׳ · עודף 3 יח׳');
+  assert.equal(progress(r), 'כל 5 שורות סומנו — אפשר לסיים · חוסר 5 יח׳ · עודף 3 יח׳');
   // הודעה בראש החלון עדיין גוברת על המונה (כמו ב-v154)
   click(r, { extraRemove: '0' });
   r.run(`receiptLineNotice = { tone: 'ok', text: 'הודעה' }; refreshReceiptLineProgress();`);

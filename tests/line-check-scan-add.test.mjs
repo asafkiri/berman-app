@@ -116,7 +116,7 @@ test('1. סריקה חוזרת של שורה שסומנה "אחרת" חלקית:
   assert.equal(cardOpen(r), false);
   assert.deepEqual(marks(r), [',ok,,,', ',']);
   assert.deepEqual(draftMarks(r), [',ok,,,', ','], 'נשמר בטיוטה');
-  assert.equal(overlay(r), 'סומנו 1 מתוך 7 | ✓ לחמניות 10 בשקית · עוד 2 — הגיע 6');
+  assert.equal(overlay(r), 'סומנו 1 מתוך 5 | ✓ לחמניות 10 בשקית · עוד 2 — הגיע 6');
   assert.equal(json(r, 'receiptQuantityReview.rows.find(x => x.productId === "code_1231")').kind, 'match');
   assert.equal(r.callbacks.length, ticks + 1, 'הסריקה ממשיכה');
   assert.equal(r.run('receiptLineScanLast'), 'lineCheck_0_1');
@@ -124,7 +124,7 @@ test('1. סריקה חוזרת של שורה שסומנה "אחרת" חלקית:
   r.run('closeScanner()');
   assert.match(strip(row(r, 0, 1)), /^לחמניות 10 בשקית הגיע · 6 יח׳ שנה$/);
   assert.equal(r.run(`$('lineCheck_0_1').classList.contains('ring-4')`), true, 'מודגשת');
-  assert.equal(progress(r), 'סומנו 1 מתוך 7 שורות');
+  assert.equal(progress(r), 'סומנו 1 מתוך 5 שורות');
 });
 
 test('2. שורה שכבר "הגיע" כולה: "— הכל הגיע" והשדה ריק; ✕ לא משנה; עוד 1 — עודף, ואז "— עודף 1"', async () => {
@@ -146,7 +146,7 @@ test('2. שורה שכבר "הגיע" כולה: "— הכל הגיע" והשדה
   cardEnter(r);
   assert.equal(cardOpen(r), false);
   assert.deepEqual(marks(r), [',qty:7,,,', ',']);
-  assert.equal(overlay(r), 'סומנו 1 מתוך 7 | ✎ לחמניות 10 בשקית · עוד 1 — הגיעו 7 מתוך 6');
+  assert.equal(overlay(r), 'סומנו 1 מתוך 5 | ✎ לחמניות 10 בשקית · עוד 1 — הגיעו 7 מתוך 6');
   assert.equal(json(r, 'receiptQuantityReview.rows.find(x => x.productId === "code_1231")').kind, 'surplus');
   later(r); beep(r, BC.code_1231);
   assert.match(strip(card(r)), /סרקת עד עכשיו 7 מתוך 6 — עודף 1 6 יח׳ בתעודה עוד כמה\?/);
@@ -164,7 +164,7 @@ test('3. שורה שסומנה "לא הגיע" ואז נסרקה: "סרקת עד
   assert.match(c, /text-rose-700[^>]*>סרקת עד עכשיו 0 מתוך 3</); assert.match(c, /data-scan-got[^>]*value="3"/);
   cardEnter(r);
   assert.deepEqual(marks(r), [',,,,ok', ',']);
-  assert.equal(overlay(r), 'סומנו 1 מתוך 7 | ✓ פיתות עננים 8 · עוד 3 — הגיע 3');
+  assert.equal(overlay(r), 'סומנו 1 מתוך 5 | ✓ פיתות עננים 8 · עוד 3 — הגיע 3');
 });
 
 test('4. "לא נכון? תקן את הסה״כ" — הכרטיס הקודם עם שלושת הכפתורים; "אחרת" שם מקליד סה״כ, לא תוספת; "לא הגיע"', async () => {
@@ -184,13 +184,13 @@ test('4. "לא נכון? תקן את הסה״כ" — הכרטיס הקודם ע�
   cardType(r, '3'); assert.equal(sum(r), 'התקבלו 3 · חוסר 3');
   cardClick(r, { scanSave: '' });
   assert.deepEqual(marks(r), [',qty:3,,,', ',']);
-  assert.equal(overlay(r), 'סומנו 1 מתוך 7 | ✎ לחמניות 10 בשקית · הגיעו 3 מתוך 6');
+  assert.equal(overlay(r), 'סומנו 1 מתוך 5 | ✎ לחמניות 10 בשקית · הגיעו 3 מתוך 6');
   // "לא הגיע" מהכרטיס הקודם
   later(r); beep(r, BC.code_1231);
   assert.match(strip(card(r)), /סרקת עד עכשיו 3 מתוך 6/);
   cardClick(r, { scanMark: 'fix' }); cardClick(r, { scanMark: 'none' });
   assert.deepEqual(marks(r), [',none,,,', ',']);
-  assert.equal(overlay(r), 'סומנו 1 מתוך 7 | ✗ לחמניות 10 בשקית · לא הגיע');
+  assert.equal(overlay(r), 'סומנו 1 מתוך 5 | ✗ לחמניות 10 בשקית · לא הגיע');
 });
 
 test('5. "אחרת" במצלמה עם הכמות שבתעודה בדיוק — "הגיע"; עם אפס — "לא הגיע"; מספר אחר — "אחרת" כמו קודם', async () => {
@@ -199,18 +199,18 @@ test('5. "אחרת" במצלמה עם הכמות שבתעודה בדיוק — "
   assert.equal(sum(r), 'כמו בתעודה');
   cardClick(r, { scanSave: '' });
   assert.deepEqual(marks(r), [',ok,,,', ','], '6 מתוך 6 — "הגיע"');
-  assert.equal(overlay(r), 'סומנו 1 מתוך 7 | ✓ לחמניות 10 בשקית · הגיע 6');
+  assert.equal(overlay(r), 'סומנו 1 מתוך 5 | ✓ לחמניות 10 בשקית · הגיע 6');
   later(r); beep(r, BC.code_2387); cardClick(r, { scanMark: 'qty' }); cardType(r, '0'); cardEnter(r);
   assert.deepEqual(marks(r), [',ok,,,none', ','], 'אפס — "לא הגיע"');
-  assert.equal(overlay(r), 'סומנו 2 מתוך 7 | ✗ פיתות עננים 8 · לא הגיע');
+  assert.equal(overlay(r), 'סומנו 2 מתוך 5 | ✗ פיתות עננים 8 · לא הגיע');
   later(r); beep(r, BC.code_2381); cardClick(r, { scanMark: 'qty' }); cardType(r, '4'); cardClick(r, { scanSave: '' });
   assert.deepEqual(marks(r), [',ok,,qty:4,none', ','], 'מספר אחר — "אחרת" עם המספר, כמו קודם');
-  assert.equal(overlay(r), 'סומנו 3 מתוך 7 | ✎ פיתות פרימיום 10 · הגיעו 4 מתוך 5');
+  assert.equal(overlay(r), 'סומנו 3 מתוך 5 | ✎ פיתות פרימיום 10 · הגיעו 4 מתוך 5');
   r.run('closeScanner()');
   assert.match(strip(row(r, 0, 1)), /^לחמניות 10 בשקית הגיע · 6 יח׳ שנה$/);
   assert.match(strip(row(r, 0, 4)), /^פיתות עננים 8 לא הגיע · 0 מתוך 3 שנה$/);
   assert.match(row(r, 0, 3), /data-line-got="0:3"[^>]*value="4"/);
-  assert.equal(progress(r), 'סומנו 3 מתוך 7 שורות · חוסר 4 יח׳');
+  assert.equal(progress(r), 'סומנו 3 מתוך 5 שורות · חוסר 4 יח׳');
 });
 
 test('6. ברשימה: הכמות שבתעודה — ירוק ו"הגיע" דולק תוך כדי הקלדה בלי ציור מחדש; יציאה מהשדה — "הגיע"; הציור הבא מקפל', async () => {
@@ -225,15 +225,15 @@ test('6. ברשימה: הכמות שבתעודה — ירוק ו"הגיע" דו�
   assert.deepEqual(marks(r), [',qty:6,,,', ','], 'בנתונים עדיין "אחרת" עם 6 — עד שעוזבים את השדה');
   assert.equal(tone(r, 0, 1), 'rounded-2xl border-2 p-3 mb-2.5 shadow-sm border-emerald-300 bg-emerald-50', 'הכרטיס ירוק');
   assert.equal(r.run(`$('lineCheckSum_0_1').textContent`), 'כמו בתעודה');
-  assert.equal(progress(r), 'סומנו 1 מתוך 7 שורות');
+  assert.equal(progress(r), 'סומנו 1 מתוך 5 שורות');
   // ממשיכים להקליד: 60 — שוב כתום ו"אחרת"; 0 — אדום; ריק — כתום ולא סומנה
   type(r, { lineGot: '0:1' }, '60');
   assert.match(tone(r, 0, 1), /border-amber-300 bg-amber-50$/); assert.deepEqual(marks(r), [',qty:60,,,', ',']);
-  assert.equal(progress(r), 'סומנו 1 מתוך 7 שורות · עודף 54 יח׳');
+  assert.equal(progress(r), 'סומנו 1 מתוך 5 שורות · עודף 54 יח׳');
   type(r, { lineGot: '0:1' }, '0');
   assert.match(tone(r, 0, 1), /border-rose-300 bg-rose-50$/, 'אפס — אדום');
   type(r, { lineGot: '0:1' }, '');
-  assert.match(tone(r, 0, 1), /border-amber-300 bg-amber-50$/); assert.equal(progress(r), 'סומנו 0 מתוך 7 שורות');
+  assert.match(tone(r, 0, 1), /border-amber-300 bg-amber-50$/); assert.equal(progress(r), 'סומנו 0 מתוך 5 שורות');
   type(r, { lineGot: '0:1' }, '6');
   // יציאה מהשדה — "הגיע" בנתונים ובטיוטה; הרשימה לא צוירה מחדש (הלחיצה שגרמה ליציאה לא נבלעת)
   const shown = rows(r);
@@ -247,21 +247,21 @@ test('6. ברשימה: הכמות שבתעודה — ירוק ו"הגיע" דו�
   // הפעולה הבאה מציירת — מקופלת וירוקה, בדיוק כמו "הגיע" ביד
   click(r, { lineMark: '0:0:ok' });
   assert.match(strip(row(r, 0, 1)), /^לחמניות 10 בשקית הגיע · 6 יח׳ שנה$/);
-  assert.equal(progress(r), 'סומנו 2 מתוך 7 שורות');
+  assert.equal(progress(r), 'סומנו 2 מתוך 5 שורות');
   // "שנה" פותח אותה כמו שורת "הגיע": "הגיע 6" דולק, בלי שדה
   click(r, { lineOpen: '0:1' });
   assert.match(row(r, 0, 1), /data-line-mark="0:1:ok" aria-pressed="true"/); assert.doesNotMatch(row(r, 0, 1), /data-line-got/);
   // אפס ויציאה — "לא הגיע"
   click(r, { lineMark: '0:3:qty' }); type(r, { lineGot: '0:3' }, '0'); blur(r, '0:3');
-  assert.deepEqual(marks(r), ['ok,ok,,none,', ',']);
+  assert.deepEqual(marks(r), ['ok,ok,,none,', 'ok,'], 'v164: "הגיע" על אחיד פרוס סימן גם את השורה שלו בנייר הקטן');
   click(r, { lineOpen: '0:0' });
   assert.match(strip(row(r, 0, 3)), /^פיתות פרימיום 10 לא הגיע · 0 מתוך 5 שנה$/);
   // מספר אחר — נשאר "אחרת" פתוח, כמו קודם
   click(r, { lineMark: '0:4:qty' }); type(r, { lineGot: '0:4' }, '2'); blur(r, '0:4');
-  assert.deepEqual(marks(r), ['ok,ok,,none,qty:2', ',']);
+  assert.deepEqual(marks(r), ['ok,ok,,none,qty:2', 'ok,']);
   click(r, { lineOpen: '0:0' });
   assert.match(row(r, 0, 4), /data-line-got="0:4"[^>]*value="2"/); assert.match(row(r, 0, 4), /data-line-mark="0:4:qty" aria-pressed="true"/);
-  assert.equal(progress(r), 'סומנו 4 מתוך 7 שורות · חוסר 6 יח׳');
+  assert.equal(progress(r), 'סומנו 4 מתוך 5 שורות · חוסר 6 יח׳');
 });
 
 test('7. בלי יציאה מהשדה: "סיום" ו"סרוק מוצר" מיישבים; שוויון מלא מול "הגיע" ביד — עד הקליטה השמורה', async () => {
@@ -292,7 +292,7 @@ test('7. בלי יציאה מהשדה: "סיום" ו"סרוק מוצר" מייש
   click(c, { lineMark: '0:1:qty' }); type(c, { lineGot: '0:1' }, '6');
   c.events.get('receiptLineScan:click')(); await settle();
   assert.deepEqual(marks(c), [',ok,,,', ',']);
-  assert.equal(c.run(`$('scanOverlayCount').textContent`), '1 מתוך 7');
+  assert.equal(c.run(`$('scanOverlayCount').textContent`), '1 מתוך 5');
   c.run('closeScanner()');
   assert.match(strip(row(c, 0, 1)), /^לחמניות 10 בשקית הגיע · 6 יח׳ שנה$/);
 });
@@ -304,13 +304,13 @@ test('8. המקרה מהטלפון: מוצר שנסרק חלקית בקליטה 
   assert.equal(r.run('testConfirms.length'), 1); r.run('testConfirms[0].cb()');
   assert.deepEqual(marks(r), [',,,qty:3,', ','], 'מה שנסרק עבר לרשימה כ"אחרת" עם 3');
   r.events.get('receiptLineScan:click')(); await settle();
-  assert.equal(r.run(`$('scanOverlayCount').textContent`), '1 מתוך 7');
+  assert.equal(r.run(`$('scanOverlayCount').textContent`), '1 מתוך 5');
   beep(r, BC.code_2381);
   assert.match(strip(card(r)), /^שורה 4 בתעודה 1 מתוך 2 פיתות פרימיום 10 אין מחיר קופה — בדוק בקופה ועדכן סרקת עד עכשיו 3 מתוך 5 5 יח׳ בתעודה עוד כמה\? הוסף סה״כ 5 · כמו בתעודה לא נכון\? תקן את הסה״כ$/);
   assert.match(card(r), /data-scan-got[^>]*value="2"/);
   cardClick(r, { scanSave: '' });
   assert.deepEqual(marks(r), [',,,ok,', ',']);
-  assert.equal(overlay(r), 'סומנו 1 מתוך 7 | ✓ פיתות פרימיום 10 · עוד 2 — הגיע 5');
+  assert.equal(overlay(r), 'סומנו 1 מתוך 5 | ✓ פיתות פרימיום 10 · עוד 2 — הגיע 5');
   r.run('closeScanner()');
   assert.match(strip(row(r, 0, 3)), /^פיתות פרימיום 10 הגיע · 5 יח׳ שנה$/);
 });

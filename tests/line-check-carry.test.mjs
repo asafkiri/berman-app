@@ -70,18 +70,18 @@ test('1. הכלל: כמו בתעודה — "הגיע" (גם בשני ניירו�
   assert.equal(review(r).mode, 'lines');
   assert.deepEqual(marks(r), ['ok,ok,ok,qty:3,qty:4', 'ok,ok'], 'אחיד פרוס ואסלי בשני הניירות — "הגיע" בשניהם; פרימיום ועננים — "אחרת" עם מה שנסרק');
   assert.deepEqual(review(r).extras.map(x => [x.productId, x.got]), [['code_119', '2']]);
-  assert.equal(progress(r), 'כל 7 שורות סומנו — אפשר לסיים · חוסר 2 יח׳ · עודף 3 יח׳');
+  assert.equal(progress(r), 'כל 5 שורות סומנו — אפשר לסיים · חוסר 2 יח׳ · עודף 3 יח׳'); // v164: 5 מוצרים — 5 שורות (אחיד פרוס ואסלי פעם אחת)
   const html = rows(r);
-  assert.match(strip(html), /אחיד פרוס ברמן הגיע · 12 יח׳ שנה/, 'שורה שסומנה "הגיע" — מקופלת, כמו סימון ביד');
+  assert.match(strip(html), /אחיד פרוס ברמן הגיע · 17 יח׳ ב-2 תעודות שנה/, 'שורה שסומנה "הגיע" — מקופלת, כמו סימון ביד; v164: הקבוצה של שני הניירות');
   assert.match(strip(html), /לחמניות 10 בשקית הגיע · 6 יח׳ שנה/);
   assert.match(html, /data-line-got="0:3"[^>]*value="3"/, '"אחרת" פתוחה עם המספר שנסרק');
   assert.match(html, /id="lineCheckSum_0_3"[^>]*>התקבלו 3 · חוסר 2</);
   assert.match(html, /id="lineCheckSum_0_4"[^>]*>התקבלו 4 · עודף 1</);
   assert.doesNotMatch(strip(html), /נסרקו \d+ יח׳ מהמוצר/, 'ההערה — רק למוצר בכמה ניירות שלא התיישב');
   assert.equal(r.run('receiptList.length'), 6, 'הספירה עצמה לא השתנתה עד "סיום"');
-  // אפשר לשנות כל סימון שהגיע מהסריקה, כמו כל סימון
-  click(r, { lineMark: '0:0:none' });
-  assert.deepEqual(marks(r), ['none,ok,ok,qty:3,qty:4', 'ok,ok']);
+  // אפשר לשנות כל סימון שהגיע מהסריקה, כמו כל סימון (v164: אחיד פרוס — קבוצה אחת; "אחרת" 5 מתחלקת 5 בנייר הראשון, 0 בשני)
+  click(r, { lineMark: '0:0:qty' }); type(r, { lineGot: '0:0' }, '5');
+  assert.deepEqual(marks(r), ['qty:5,ok,ok,qty:3,qty:4', 'qty:0,ok']);
   // "סיום" — מה שסומן (כולל מה שהגיע מהסריקה), ואותה דרך כמו תמיד
   assert.equal(r.run('finishReceiptLineCheck()'), true);
   assert.deepEqual(json(r, 'receiptList.map(l => l.productId + " " + l.qty).sort()'), ['code_101 5', 'code_119 2', 'code_1231 6', 'code_238 6', 'code_2381 3', 'code_2387 4']);
@@ -90,21 +90,24 @@ test('1. הכלל: כמו בתעודה — "הגיע" (גם בשני ניירו�
   plain.run('testConfirms = []; startReceiptLineCheck()');
   assert.equal(plain.run('testConfirms.length'), 0);
   assert.deepEqual(marks(plain), [',,,,', ',']);
-  assert.equal(progress(plain), 'סומנו 0 מתוך 7 שורות');
+  assert.equal(progress(plain), 'סומנו 0 מתוך 5 שורות');
 });
 
-test('2. מוצר בשני ניירות שנסרק בכמות שאינה הסך — פתוח, בלי ניחוש, עם ההערה; אחרי "לא שלנו" הוא שורה אחת ומתיישב לבד', async () => {
+test('2. מוצר בשני ניירות שנסרק בכמות שאינה הסך — v164: קבוצה אחת "אחרת" עם המספר, מחולק לפי הסדר; אחרי "לא שלנו" הוא שורה אחת ומתיישב לבד', async () => {
   const r = await twoPapers();
   scannedThen(r, [['code_101', 12], ['code_1231', 6]]); // אחיד פרוס: 12 מול 12 + 5
-  assert.deepEqual(marks(r), [',ok,,,', ','], 'אחיד פרוס לא סומן באף נייר — אין לדעת איפה ה-12');
-  assert.deepEqual(json(r, 'receiptQuantityReview.docs.map(d => d.lines.map(l => l.scanned == null ? null : l.scanned))'), [[12, null, null, null, null], [12, null]]);
-  assert.equal((strip(rows(r)).match(/נסרקו 12 יח׳ מהמוצר, בכל התעודות יחד — סמן בכל שורה כמה הגיע/g) || []).length, 2, 'ההערה בשתי שורות אחיד פרוס');
-  assert.equal(progress(r), 'סומנו 1 מתוך 7 שורות');
+  assert.deepEqual(marks(r), ['ok,ok,,,', 'none,'], 'אחיד פרוס: 12 בנייר הראשון (מלא — "הגיע"), 0 בשני ("לא הגיע"); הקבוצה — 12 מתוך 17');
+  const html = rows(r);
+  assert.match(strip(html), /אחיד פרוס ברמן .* 17 יח׳ ב-2 תעודות 12 \+ 5 הגיע 17 אחרת לא הגיע כמה הגיע\? התקבלו 12 · חוסר 5/, 'הקבוצה פתוחה — "אחרת" עם 12, והחוסר מול העיניים');
+  assert.match(html, /data-line-got="0:0"[^>]*value="12"/);
+  assert.match(strip(html), /שורה 1 בתעודה אחיד פרוס ברמן · 5 יח׳ נספר יחד עם תעודה 1, שורה 1 · התקבלו 12 מתוך 17 הצג/, 'בנייר הקטן — שורת הפניה, לא כרטיס');
+  assert.doesNotMatch(strip(html), /נסרקו \d+ יח׳ מהמוצר/);
+  assert.equal(progress(r), 'סומנו 2 מתוך 5 שורות · חוסר 5 יח׳');
   // "הנייר הזה לא שלנו" על הנייר הקטן — אחיד פרוס נשאר בשורה אחת של 12, והסריקה (12) מתיישבת: "הגיע"
   click(r, { lineDrop: '1' }); click(r, { lineDropYes: '1' }); await settle();
   assert.equal(review(r).docs.length, 1);
   assert.deepEqual(marks(r), ['ok,ok,,,']);
-  assert.doesNotMatch(strip(rows(r)), /נסרקו \d+ יח׳ מהמוצר/);
+  assert.doesNotMatch(strip(rows(r)), /נספר יחד עם|data-line-show/);
 });
 
 test('3. מה שכבר סומן לא נדרס: חזרה לבדיקה ובדיקה חדשה אחרי שינוי בקליטה שומרות את הסימונים; רק שורות פתוחות מקבלות את הסריקה', async () => {
