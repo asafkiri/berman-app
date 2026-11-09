@@ -100,13 +100,13 @@ try {
   assert.equal(await page.locator('#receiptQuantityRows section').count(), 3, 'שתי תעודות ו"הגיע משהו נוסף"');
   assert.match(await page.locator('#receiptQuantityRows').innerText(), /תעודה 1 מתוך 2[\s\S]*תעודה נפרדת[\s\S]*תעודה 2 מתוך 2[\s\S]*הגיע משהו נוסף/);
   assert.equal(await page.locator('#receiptQuantityConfirm').getAttribute('aria-disabled'), 'true');
-  assert.equal(await page.locator('#receiptQuantityProgress').innerText(), 'סומנו 0 מתוך 7 שורות');
+  assert.equal(await page.locator('#receiptQuantityProgress').innerText(), 'סומנו 0 מתוך 5 שורות');
   // 4. סימון, כמות אחרת עם פוקוס, וסיכום בהקלדה
   await page.locator('[data-line-mark="0:0:ok"]').click();
   // v159: השורה שסומנה מתקפלת — "הגיע · 12 יח׳" ו"שנה"; "שנה" פותח אותה עם הסימון והפוקוס על "הגיע"; "הגיע" שוב — מקפל
   assert.equal(await page.locator('[data-line-mark="0:0:ok"]').count(), 0, 'מקופלת — בלי כפתורי סימון');
-  assert.match(await page.locator('#lineCheck_0_0').innerText(), /הגיע · 12 יח׳/);
-  assert.equal(await page.locator('#receiptQuantityProgress').innerText(), 'סומנו 1 מתוך 7 שורות');
+  assert.match(await page.locator('#lineCheck_0_0').innerText(), /הגיע · 17 יח׳ ב-2 תעודות/, 'v164: אחיד פרוס — קבוצה אחת לשתי התעודות');
+  assert.equal(await page.locator('#receiptQuantityProgress').innerText(), 'סומנו 1 מתוך 5 שורות');
   await page.locator('[data-line-open="0:0"]').click();
   assert.equal(await page.locator('[data-line-mark="0:0:ok"]').getAttribute('aria-pressed'), 'true');
   assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.dataset.lineMark), '0:0:ok', 'הפוקוס על "הגיע"');
@@ -116,7 +116,7 @@ try {
   assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.dataset.lineGot), '0:1', 'הפוקוס בשדה הכמות');
   await page.keyboard.type('4');
   assert.equal(await page.locator('#lineCheckSum_0_1').innerText(), 'התקבלו 4 · חוסר 2');
-  assert.equal(await page.locator('#receiptQuantityProgress').innerText(), 'סומנו 2 מתוך 7 שורות · חוסר 2 יח׳');
+  assert.equal(await page.locator('#receiptQuantityProgress').innerText(), 'סומנו 2 מתוך 5 שורות · חוסר 2 יח׳');
   assert.ok(await over() <= 1, 'בלי גלילה לצדדים');
   // 5. "הנייר הזה לא שלנו"
   await page.locator('[data-line-drop="1"]').click();
