@@ -75,7 +75,7 @@ test('1. הרשימה: 5 שורות ל-7 שורות בשני ניירות — מ
   assert.equal((html.match(/data-line-mark="\d+:\d+:ok"/g) || []).length, 5, 'חמישה כרטיסים');
   // הכרטיס של אחיד פרוס — בתעודה 1, עם הסך והחלוקה
   const a = row(r, 0, 0);
-  assert.equal(strip(a), 'שורה 1 בתעודה · גם בתעודה 2 (5 יח׳) אחיד פרוס ברמן אין מחיר קופה — בדוק בקופה ועדכן 497112 · קוד 101 17 יח׳ ב-2 תעודות 12 + 5 הגיע 17 אחרת לא הגיע');
+  assert.equal(strip(a), 'שורה 1 בתעודה · גם בתעודה 2 (5 יח׳) אחיד פרוס ברמן אין מחיר קופה — אפשר להשלים כאן כמה עובר בקופה (כולל מע״מ) ₪ 497112 · קוד 101 17 יח׳ ב-2 תעודות 12 + 5 הגיע 17 אחרת לא הגיע'); // v167: שדה מחיר הקופה בשורה
   assert.match(a, /data-line-mark="0:0:ok"/); assert.match(a, /data-line-mark="0:0:qty"/); assert.match(a, /data-line-mark="0:0:none"/);
   // בנייר הקטן — שורת הפניה, בלי כפתורים, עם "הצג" שמוביל לכרטיס
   const p = ref(r, 1, 0);
@@ -100,7 +100,7 @@ test('2. סימון הקבוצה: "הגיע 17" לשתי השורות; "אחרת
   r.run('startReceiptLineCheck()');
   click(r, { lineMark: '0:0:ok' });
   assert.deepEqual(marks(r), ['ok,,,,', 'ok,']);
-  assert.equal(strip(row(r, 0, 0)), 'אחיד פרוס ברמן הגיע · 17 יח׳ ב-2 תעודות שנה', 'מקופל, עם הסך');
+  assert.equal(strip(row(r, 0, 0)), 'אחיד פרוס ברמן הגיע · 17 יח׳ ב-2 תעודות אין מחיר קופה — אפשר להשלים כאן כמה עובר בקופה (כולל מע״מ) ₪ שנה', 'מקופל, עם הסך');
   assert.equal(strip(ref(r, 1, 0)), 'שורה 1 בתעודה אחיד פרוס ברמן · 5 יח׳ נספר יחד עם תעודה 1, שורה 1 · ✓ הגיע הצג');
   assert.equal(progress(r), 'סומנו 1 מתוך 5 שורות');
   // "אחרת" 15: תוך כדי הקלדה — 12 + 3 בנתונים (עדיין "אחרת" בשתיהן — v163), הסיכום על הסך, הכרטיס כתום
@@ -124,7 +124,7 @@ test('2. סימון הקבוצה: "הגיע 17" לשתי השורות; "אחרת
   // "לא הגיע" — שתי השורות
   click(r, { lineMark: '0:0:none' });
   assert.deepEqual(marks(r), ['none,ok,,,', 'none,']);
-  assert.equal(strip(row(r, 0, 0)), 'אחיד פרוס ברמן לא הגיע · 0 מתוך 17 שנה');
+  assert.equal(strip(row(r, 0, 0)), 'אחיד פרוס ברמן לא הגיע · 0 מתוך 17 אין מחיר קופה — אפשר להשלים כאן כמה עובר בקופה (כולל מע״מ) ₪ שנה');
   assert.equal(strip(ref(r, 1, 0)), 'שורה 1 בתעודה אחיד פרוס ברמן · 5 יח׳ נספר יחד עם תעודה 1, שורה 1 · ✗ לא הגיע הצג');
   // 20 — העודף (3) על האחרון
   click(r, { lineOpen: '0:0' }); click(r, { lineMark: '0:0:qty' }); type(r, { lineGot: '0:0' }, '20'); blur(r, '0:0');
@@ -186,7 +186,7 @@ test('5. המעבר מסריקה (162) עם מוצר בשני ניירות: כמ
   const a = row(r, 0, 0);
   assert.match(a, /data-line-got="0:0"[^>]*value="15"/); assert.match(a, /data-line-mark="0:0:qty" aria-pressed="true"/);
   assert.match(a, /id="lineCheckSum_0_0"[^>]*>התקבלו 15 · חוסר 2</);
-  assert.equal(strip(row(r, 0, 2)), 'ברמן אסלי 5 פיתות הגיע · 6 יח׳ ב-2 תעודות שנה');
+  assert.equal(strip(row(r, 0, 2)), 'ברמן אסלי 5 פיתות הגיע · 6 יח׳ ב-2 תעודות אין מחיר קופה — אפשר להשלים כאן כמה עובר בקופה (כולל מע״מ) ₪ שנה');
   assert.equal(progress(r), 'סומנו 2 מתוך 5 שורות · חוסר 2 יח׳');
   assert.doesNotMatch(strip(rows(r)), /נסרקו \d+ יח׳ מהמוצר/);
 });
@@ -215,7 +215,7 @@ test('7. "הנייר הזה לא שלנו": כל נייר שנשאר שומר א
   click(r, { lineMark: '0:0:qty' }); type(r, { lineGot: '0:0' }, '15'); blur(r, '0:0');
   click(r, { lineDrop: '1' }); click(r, { lineDropYes: '1' }); await settle();
   assert.deepEqual(marks(r), ['ok,,,,']);
-  assert.equal(strip(row(r, 0, 0)), 'אחיד פרוס ברמן הגיע · 12 יח׳ שנה');
+  assert.equal(strip(row(r, 0, 0)), 'אחיד פרוס ברמן הגיע · 12 יח׳ אין מחיר קופה — אפשר להשלים כאן כמה עובר בקופה (כולל מע״מ) ₪ שנה');
   // הנייר הגדול יוצא — נשארת שורת ה-5 עם חלקה (3)
   const q = await twoPapers();
   q.run('startReceiptLineCheck()');
