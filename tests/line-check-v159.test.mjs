@@ -60,10 +60,10 @@ test('1. השורה כמו במסך הסריקה: מחיר קופה, ברקוד 
   assert.match(pos, /fa-cash-register.*בקופה: ₪12\.90/);
   assert.ok(a.includes(pos), 'בבדיקה שורה-שורה');
   assert.ok(r.run(`buildReceiptRow({ productId: 'code_101', name: 'אחיד פרוס ברמן', barcode: '497112', qty: 1 })`).includes(pos), 'ובסריקה');
-  // בלי מחיר קופה — האזהרה, כמו בסריקה; וגודל ארגז: 6 יח׳ = 2 ארגזים × 3
+  // בלי מחיר קופה — שדה ההשלמה בשורה (v167, במקום האזהרה "בדוק בקופה ועדכן"; line-check-pos-price.test.mjs); וגודל ארגז: 6 יח׳ = 2 ארגזים × 3
   const b = row(r, 0, 1);
-  assert.match(strip(b), /^שורה 2 בתעודה לחמניות 10 בשקית אין מחיר קופה — בדוק בקופה ועדכן .*· קוד 1231 6 יח׳ בתעודה 2 ארגזים × 3 הגיע 6 אחרת לא הגיע$/);
-  assert.match(b, /fa-triangle-exclamation/);
+  assert.match(strip(b), /^שורה 2 בתעודה לחמניות 10 בשקית אין מחיר קופה — אפשר להשלים כאן כמה עובר בקופה \(כולל מע״מ\) ₪ .*· קוד 1231 6 יח׳ בתעודה 2 ארגזים × 3 הגיע 6 אחרת לא הגיע$/);
+  assert.match(b, /fa-triangle-exclamation/); assert.match(b, /data-line-pos="code_1231"/);
   assert.equal(r.run(`receiptLineBoxText({ boxSize: 3 }, 3)`), 'ארגז אחד של 3');
   assert.equal(r.run(`receiptLineBoxText({ boxSize: 4 }, 6)`), '', 'לא מתחלק — בלי ארגזים');
   assert.equal(r.run(`receiptLineBoxText({ boxSize: 0 }, 6)`), '');
@@ -100,7 +100,7 @@ test('2. שורה שסומנה "הגיע" או "לא הגיע" מתקפלת; "ש
   assert.doesNotMatch(row(r, 0, 0), /data-line-mark=/);
   click(r, { lineMark: '0:4:none' });
   const c = row(r, 0, 4);
-  assert.equal(strip(c), 'פיתות עננים 8 לא הגיע · 0 מתוך 3 שנה');
+  assert.equal(strip(c), 'פיתות עננים 8 לא הגיע · 0 מתוך 3 אין מחיר קופה — אפשר להשלים כאן כמה עובר בקופה (כולל מע״מ) ₪ שנה');
   assert.match(c, /border-rose-300 bg-rose-50/);
   // "אחרת" — פתוחה, עם השדה והסיכום
   click(r, { lineMark: '0:1:qty' }); type(r, { lineGot: '0:1' }, '4');

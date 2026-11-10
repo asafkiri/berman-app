@@ -122,7 +122,7 @@ test('1. "הגיע N" מהכרטיס: המצלמה נסגרת, הרשימה חו
   assert.equal(r.callbacks.length, ticks, 'המצלמה נסגרה — לא תוזמן טיק של סריקה');
   assert.deepEqual(marks(r), [',ok,,,', ',']);
   assert.deepEqual(draftMarks(r), [',ok,,,', ','], 'נשמר בטיוטה כמו סימון ביד');
-  assert.match(strip(row(r, 0, 1)), /^לחמניות 10 בשקית הגיע · 6 יח׳ שנה$/, 'מקופלת וירוקה, כמו "הגיע" ביד');
+  assert.match(strip(row(r, 0, 1)), /^לחמניות 10 בשקית הגיע · 6 יח׳ אין מחיר קופה — אפשר להשלים כאן כמה עובר בקופה \(כולל מע״מ\) ₪ שנה$/, 'מקופלת וירוקה, כמו "הגיע" ביד');
   assert.equal(progress(r), 'סומנו 1 מתוך 5 שורות');
   assert.equal(r.run(`$('receiptQuantityTitle').textContent`), 'בדיקה שורה-שורה');
   // שאר השורות — לא מודגשות
@@ -155,7 +155,7 @@ test('2. "אחרת" עם כמות (שמור / Enter) — חזרה לשורה פ�
   beep(r, BC.code_2387); cardClick(r, { scanMark: 'none' });
   returned(r, 'lineCheck_0_4');
   assert.deepEqual(marks(r), [',qty:4,,qty:1,none', ',']);
-  assert.match(strip(row(r, 0, 4)), /^פיתות עננים 8 לא הגיע · 0 מתוך 3 שנה$/, 'מקופלת');
+  assert.match(strip(row(r, 0, 4)), /^פיתות עננים 8 לא הגיע · 0 מתוך 3 אין מחיר קופה — אפשר להשלים כאן כמה עובר בקופה \(כולל מע״מ\) ₪ שנה$/, 'מקופלת');
   assert.match(row(r, 0, 4), /border-rose-300 bg-rose-50/, 'אדומה');
   assert.equal(progress(r), 'סומנו 3 מתוך 5 שורות · חוסר 9 יח׳');
   // "אחרת" עם הכמות שבתעודה בדיוק — "הגיע" (v163), וגם היא חוזרת לשורה (של הקבוצה: אחיד פרוס בשני הניירות)
@@ -178,7 +178,7 @@ test('3. סריקה חוזרת — "עוד כמה?" ו"הוסף" — חזרה ל
   cardClick(r, { scanSave: '' }); // "הוסף" 2 — 6: "הגיע"
   returned(r, 'lineCheck_0_1');
   assert.deepEqual(marks(r), [',ok,,,', ',']);
-  assert.match(strip(row(r, 0, 1)), /^לחמניות 10 בשקית הגיע · 6 יח׳ שנה$/);
+  assert.match(strip(row(r, 0, 1)), /^לחמניות 10 בשקית הגיע · 6 יח׳ אין מחיר קופה — אפשר להשלים כאן כמה עובר בקופה \(כולל מע״מ\) ₪ שנה$/);
   assert.equal(progress(r), 'סומנו 1 מתוך 5 שורות');
   // עוד אחת מעבר — עודף; גם זה חוזר לשורה
   await rescan(r); unring(r, 'lineCheck_0_1');
@@ -299,7 +299,7 @@ test('7. מוצר בשני ניירות (v164): "הגיע 17" מחזיר לכר�
   returned(r, 'lineCheck_0_0');
   assert.equal(ringed(r, 'lineCheckRef_1_0'), false, 'שורת ההפניה בנייר הקטן — לא היא המודגשת');
   assert.deepEqual(marks(r), ['ok,ok,ok,ok,ok', 'ok,ok'], '"הגיע 17" — שתי השורות');
-  assert.match(strip(row(r, 0, 0)), /אחיד פרוס ברמן הגיע · 17 יח׳ ב-2 תעודות שנה/);
+  assert.match(strip(row(r, 0, 0)), /אחיד פרוס ברמן הגיע · 17 יח׳ ב-2 תעודות אין מחיר קופה — אפשר להשלים כאן כמה עובר בקופה \(כולל מע״מ\) ₪ שנה/);
   assert.match(strip(rows(r)), /נספר יחד עם תעודה 1, שורה 1 · ✓ הגיע/);
   assert.equal(progress(r), 'כל 5 שורות סומנו — אפשר לסיים');
   assert.equal(r.run(`$('receiptQuantityConfirm').textContent`), 'סיום — שמור את הבדיקה');
