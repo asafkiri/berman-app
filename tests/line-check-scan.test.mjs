@@ -47,7 +47,7 @@ const fakeCamera = r => r.run(`window.BarcodeDetector = class { detect() { retur
 // קליטה פתוחה עם שתי התעודות (הקטנה מתווספת לבד, כמו ב-26.10)
 async function twoPapers(opts) {
   const r = app(delivery(BIG), opts);
-  await receive(r);
+  await receive(r, 1, 0, { count: false }); // v171: הניירות נקראו במסך הניירות (בלי "התחל לסרוק עכשיו") — התעודה כבר בקליטה כשהבדיקה נפתחת
   r.serve(small());
   await readPapers(r, 1, 1);
   assert.deepEqual(state(r).nums, [BIG, SMALL], 'שתי התעודות בקליטה');
@@ -57,7 +57,7 @@ async function twoPapers(opts) {
 }
 async function onePaper() {
   const r = app(delivery(BIG));
-  await receive(r);
+  await receive(r, 1, 0, { count: false }); // v171: הניירות נקראו במסך הניירות (בלי "התחל לסרוק עכשיו") — התעודה כבר בקליטה כשהבדיקה נפתחת
   r.run(`currentView = 'receiving'; mainMode = 'receiving';`);
   fakeCamera(r);
   return r;

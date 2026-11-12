@@ -54,7 +54,7 @@ const catalog = r => r.run(`(() => { const at = products.findIndex(p => p.id ===
 async function open(more) {
   const r = app(note(more));
   catalog(r);
-  await receive(r);
+  await receive(r, 1, 0, { count: false }); // v171: הניירות נקראו במסך הניירות (בלי "התחל לסרוק עכשיו") — התעודה כבר בקליטה כשהבדיקה נפתחת
   r.run(`currentView = 'receiving'; mainMode = 'receiving';`);
   fakeCamera(r);
   r.run('startReceiptLineCheck()');
@@ -348,7 +348,7 @@ test('11. שתי תעודות: מוצר שבשתיהן הוא שורה אחת ג
   // תעודת המשלוח: פרנה ×1 (שורה 6) וביס עננים ×3 (שורה 7); נייר "ת.משלוח" קטן שמתווסף לבד: פרנה ×2 ולבש ×4
   const r = app(note([[3604, 1, 'פרנה 4 בשקית'], [209, 3, 'ביס עננים']]));
   catalog(r);
-  await receive(r);
+  await receive(r, 1, 0, { count: false }); // v171: הניירות נקראו במסך הניירות (בלי "התחל לסרוק עכשיו") — התעודה כבר בקליטה כשהבדיקה נפתחת
   const small = delivery('290096103', { internalNumber: null, headerText: 'ת.משלוח', docDate: printed(now) });
   small.scan.documents[0].rows = [{ itemCode: '3604', description: 'פרנה 4 בשקית', barcode: SHARED, quantity: 2, unitPriceExVat: 12.9, sourcePage: 1, lineNumber: 1 },
     { itemCode: '3601', description: 'לבש', barcode: SHARED, quantity: 4, unitPriceExVat: 14.9, sourcePage: 1, lineNumber: 2 }];

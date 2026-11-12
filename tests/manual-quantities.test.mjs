@@ -226,16 +226,25 @@ function assertManualScreen(r) {
  assert.doesNotMatch(html,/data-role="rc-scan"|data-role="rc-crates"|id="rcDigits"|id="rcListEl"|id="rcTotals"|אפשר לסרוק מוצרים|סרוק את הסחורה|אין פריטים עדיין/);
  return html;
 }
-test(supplier+': the two photo buttons show distinct screens during and after the identical OCR request',async()=>{
+// v171 (ברמן): הבדיקה שורה-שורה היא הדרך היחידה — שני התפקידים של כרטיס הצילום עושים אותו דבר: מסך הבדיקה, וחלון הבדיקה
+// נפתח מיד (סורקים בזמן שהתעודה נקראת; המצלמה לא נפתחת לבד). הכפתור השני ירד מהכרטיס, והתפקיד שלו נשאר.
+const lineCheckOnly = supplier==='berman';
+test(supplier+': both photo roles open the line check — same screen during and after the identical OCR request',async()=>{
  const requests=[];
  for(const manual of [false,true]) {
   const r=create({data:plainData()});enterPhotoScreen(r);
+  if(lineCheckOnly){const card=r.node('app').innerHTML;assert.match(card,/data-role="rc-open-photo"/);assert.doesNotMatch(card,/data-role="rc-open-photo-quantity"/);assert.match(card,/התחל בדיקה שורה-שורה/);}
   let release;const pending=new Promise(resolve=>release=resolve),fetch=r.context.fetch;
   r.context.fetch=async(url,options)=>{if(String(url).endsWith('/scan'))await pending;return fetch(url,options);};
   r.click(photoRole(manual));await settleScan();
   assert.equal(r.run('receiptPaperScanState'),'running');
-  if(manual){assertManualScreen(r);assert.equal(r.run('cameraOpens'),0);}
+  if(manual||lineCheckOnly){assertManualScreen(r);assert.equal(r.run('cameraOpens'),0);}
   else{assert.doesNotMatch(r.node('app').innerHTML,/data-manual-receiving/);assert.match(r.node('app').innerHTML,/data-role="rc-scan"/);assert.equal(r.run('cameraOpens'),1);}
+  if(lineCheckOnly){
+   assert.equal(r.run('receiptCountingMode'),'manual');
+   assert.equal(r.run('!!(receiptQuantityReview&&receiptQuantityReview.mode==="lines"&&receiptQuantityReview.pending)'),true,'חלון הבדיקה פתוח בזמן הקריאה');
+   assert.equal(r.node('receiptQuantityModal').classList.contains('hidden'),false);
+  }
   if(manual) {
    const restored=create({data:plainData(),storage:r.storage});
    restored.run("currentView='receiving';mainMode='receiving';renderReceiving()");
@@ -246,8 +255,14 @@ test(supplier+': the two photo buttons show distinct screens during and after th
   }
   release();await settleScan();
   assert.equal(r.run('receiptPaperScanState'),'ok');assert.deepEqual(json(r,'receiptList'),[]);
-  if(manual){const html=assertManualScreen(r);assert.match(html,/data-role="rc-quantity-all"/);assert.match(html,/data-role="rc-quantity-differences"/);assert.match(html,/id="rcOcrReview"/);assert.doesNotMatch(html,/data-price-audit|data-quantity-picker/);}
+  if(manual||lineCheckOnly){const html=assertManualScreen(r);assert.match(html,/data-role="rc-quantity-all"/);assert.match(html,/data-role="rc-quantity-differences"/);assert.match(html,/id="rcOcrReview"/);assert.doesNotMatch(html,/data-price-audit|data-quantity-picker/);}
   else assert.match(r.node('app').innerHTML,/data-role="rc-scan"/);
+  if(lineCheckOnly){
+   // התעודה נקראה — הרשימה עולה לבד (בתור הבא של הדפדפן), באותו חלון
+   r.callbacks.splice(0).forEach(fn=>{try{fn();}catch(e){}});
+   assert.equal(r.run('!!(receiptQuantityReview&&receiptQuantityReview.mode==="lines"&&!receiptQuantityReview.pending)'),true,'הרשימה עלתה');
+   assert.equal(r.run('receiptQuantityReview.docs[0].lines.length'),2);
+  }
   requests.push(r.requests.filter(x=>x.url.endsWith('/scan')).map(x=>JSON.parse(x.body)));
  }
  assert.equal(requests[0].length,1);assert.deepEqual(requests[1],requests[0]);
@@ -267,21 +282,24 @@ test(supplier+': manual scan failure and an interrupted reload offer photo recov
  const data=plainData();data.paper={ok:false,error:'invalid_model_output'};
  const a=create({data});enterPhotoScreen(a);a.click(photoRole(true));await settleScan();
  assert.equal(a.run('receiptPaperScanState'),'failed');const html=assertManualScreen(a);
- assert.match(html,/צריך להשלים את פענוח התעודה/);assert.doesNotMatch(html,/data-role="rc-quantity-all"/);
+ // v171 (ברמן): כל קליטה עם נייר היא במסך הבדיקה, ולכן הכרטיס של נייר שלא אישר את עצמו הוא אותו כרטיס מלא (להקליד את שני המספרים, או לצלם שוב)
+ assert.match(html,lineCheckOnly?/הנייר לא אישר את עצמו — צריך את המספרים ממך/:/צריך להשלים את פענוח התעודה/);assert.doesNotMatch(html,/data-role="rc-quantity-all"/);
+ if(lineCheckOnly){assert.match(html,/data-role="rc-notes-edit"/);assert.match(html,/data-role="rc-quantity-lines"[^>]*>(?:<i[^>]*><\/i>)? ?סרוק מוצרים בינתיים/,'גם כשהנייר לא נקרא — אפשר לסרוק');}
  const repair=supplier==='berman'?'rc-paper-rescan':'rc-photo-repair';assert.ok(html.includes('data-role="'+repair+'"'));
  const b=create({data,storage:a.storage});b.run("currentView='receiving';mainMode='receiving';renderReceiving()");
  assertManualScreen(b);assert.ok(b.node('app').innerHTML.includes('data-role="'+repair+'"'));
  b.click(repair);
  // v126: שלב הצילום הוא כפתור הניירות; "עמוד אחרי עמוד" מחזיר את כרטיס הצילום של v125
  if(supplier==='berman'){assert.ok(b.node('app').innerHTML.includes('צלם נייר מהנהג'));assert.ok(!b.node('app').innerHTML.includes('type="file"'),'v126: מצלמה רק בפס העליון');b.click('rc-entry-photo-multi');}
- assert.ok(b.node('app').innerHTML.includes('data-role="'+photoRole(true)+'"'));
+ assert.ok(b.node('app').innerHTML.includes('data-role="'+photoRole(!lineCheckOnly)+'"'));
 });
-test(supplier+': switching back to scanning preserves the paper, entered differences and existing quantities',async()=>{
+// v171: "מעבר לקליטה בסריקת מוצרים" ירד — הסריקה היא חלק מהבדיקה שורה-שורה. הקישור אינו במסך, והתפקיד הישן אינו משנה דבר.
+test(supplier+': there is no way back to counting by scan; the paper and the entered differences stay',async()=>{
  const r=await scanned(plainData(),[]);r.click('rc-quantity-differences');
- r.run(`receiptQuantityReview.rows[0].kind='shortage';receiptQuantityReview.rows[0].difference='2';saveReceiptDraft();closeReceiptQuantityReview()`);
+ r.run(`receiptQuantityReview.rows[0].kind='shortage';receiptQuantityReview.rows[0].difference='2';saveReceiptDraft();closeReceiptQuantityReview();renderReceiving()`);
  const paper=json(r,'aiScanResponse'),before=r.requests.length;
- r.click('rc-count-by-scan');assert.equal(r.run('receiptCountingMode'),'scan');
- assert.doesNotMatch(r.node('app').innerHTML,/data-manual-receiving/);assert.match(r.node('app').innerHTML,/data-role="rc-scan"/);
+ assert.doesNotMatch(assertManualScreen(r),/rc-count-by-scan|מעבר לקליטה בסריקת מוצרים/);
+ r.click('rc-count-by-scan');assert.equal(r.run('receiptCountingMode'),'manual');assertManualScreen(r);
  assert.deepEqual(json(r,'aiScanResponse'),paper);assert.equal(r.run('receiptQuantityReview.rows[0].difference'),'2');assert.deepEqual(json(r,'receiptList'),[]);
  r.click('rc-quantity-differences');r.run('closeReceiptQuantityReview();renderReceiving()');assertManualScreen(r);
  assert.equal(r.run('receiptQuantityReview.rows[0].difference'),'2');assert.equal(r.requests.length,before);

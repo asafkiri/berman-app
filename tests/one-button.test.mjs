@@ -6,9 +6,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { TODAY, app, confirmLast, countAsPaper, credit, days, delivery, items, join, now, pad, page, plain, printed, readPapers, receive, startRound, state, tick, until } from './one-button-helpers.mjs';
+import { TODAY, app, confirmLast, countAsPaper, credit, days, delivery, items, join, lineListArrives, now, pad, page, plain, printed, readPapers, receive, startRound, state, tick, until } from './one-button-helpers.mjs';
 
-test('מקום אחד: "צלם נייר מהנהג" בפס העליון → "קרא" → "התחל לספור עכשיו" — בקשה אחת, הספירה נפתחת מיד, התעודה נכנסת כאילו הקליטה קראה אותה', async () => {
+// v171: "התחל לסרוק עכשיו" פותח את חלון הבדיקה שורה-שורה (ולא את המצלמה לבד); כשתעודת המשלוח נכנסת — הרשימה עולה בו לבד
+test('מקום אחד: "צלם נייר מהנהג" בפס העליון → "קרא" → "התחל לסרוק עכשיו" — בקשה אחת, חלון הבדיקה נפתח מיד, התעודה נכנסת כאילו הקליטה קראה אותה', async () => {
   const storage = new Map();
   const r = app(delivery(), { storage });
   r.run(`currentView = 'receiving'; mainMode = 'receiving'; renderReceiving(); refreshLedgerBar();`);
@@ -31,25 +32,35 @@ test('מקום אחד: "צלם נייר מהנהג" בפס העליון → "ק�
   assert.equal(s.per[0].source, 'paper'); assert.equal(s.per[0].paperId, 'paper_77001234'); assert.equal(s.per[0].docIndex, 0); assert.equal(s.per[0].pageCount, 1);
   assert.ok(s.basisOk); assert.deepEqual(s.snap, [1]);
   assert.equal(r.run('currentView'), 'receiving');
-  assert.equal(r.run('globalThis.__scanner'), 1, 'הסורק נפתח מיד');
-  assert.equal(r.run('receiptCountingMode'), 'scan');
+  assert.equal(r.run('globalThis.__scanner'), 0, 'המצלמה לא נפתחת לבד — "סרוק מוצר" בחלון הבדיקה');
+  assert.equal(r.run('receiptCountingMode'), 'manual', 'הקליטה היא של בדיקה שורה-שורה');
+  assert.equal(r.run(`!!receiptQuantityReview && receiptQuantityReview.mode === 'lines' && receiptQuantityReview.pending === true`), true, 'חלון הבדיקה נפתח מיד, עוד בלי רשימה');
+  assert.equal(r.run(`$('receiptQuantityModal').classList.contains('hidden')`), false);
   // אותה קריאה כמו שהקליטה הייתה קוראת בעצמה (אותה תשובה, אותו קטלוג)
   const o = app(delivery());
   await o.scan();
   const strip = d => { const x = plain(d); delete x.noteIndex; return x; };
   assert.deepEqual(strip(r.run('aiScanResponse.scan.documents[0]')), strip(o.run('aiScanResponse.scan.documents[0]')));
   assert.deepEqual(plain(r.run('receiptNotes')), plain(o.run('receiptNotes')));
-  // הספירה עיוורת: במסך הקליטה אין אף שורה מהנייר
+  // התעודה בקליטה — הרשימה עולה לבד, בחלון הבדיקה (5 השורות שלה); במסך הקליטה שמאחוריו אין אף שורה מהנייר
+  assert.equal(lineListArrives(r), 1, 'הרשימה התבקשה פעם אחת');
+  assert.equal(r.run(`receiptQuantityReview.mode === 'lines' && !receiptQuantityReview.pending`), true, 'הרשימה עלתה');
+  assert.equal(r.run('receiptQuantityReview.docs.length'), 1); assert.equal(r.run('receiptQuantityReview.docs[0].lines.length'), 5);
+  assert.equal(r.run(`$('receiptQuantityModal').classList.contains('hidden')`), false, 'באותו חלון');
+  assert.equal(r.run(`$('receiptQuantityProgress').textContent`), 'התעודה בקליטה — 5 שורות', 'בראש החלון: הרשימה עלתה');
   html = r.node('app').innerHTML;
   r.run('aiScanResponse.scan.documents[0].rows').forEach(row => assert.ok(!html.includes(row.description), row.description));
-  assert.match(html, /העוגנים נקראו מהתעודה/);
-  assert.doesNotMatch(html, /type="file"/, 'גם במסך הספירה — המצלמה רק בפס');
+  assert.match(html, /data-manual-receiving/); assert.match(html, /30 יח׳ · 5 שורות/);
+  assert.doesNotMatch(html, /data-role="rc-scan"|rc-count-by-scan/, 'אין מסך סריקה נפרד');
+  assert.doesNotMatch(html, /type="file"/, 'גם במסך הבדיקה — המצלמה רק בפס');
   r.run('refreshLedgerBar()');
   assert.match(r.node('ledgerBar').innerHTML, /צלם נייר מהנהג/);
-  // סיום: הקליטה נשמרת עם מספר הנייר ועם מקור הקריאה; המאזן רואה שהתעודה נקלטה
-  countAsPaper(r);
-  r.run('finishReceipt()');
-  assert.ok(r.run('!!pendingReceipt'), 'הספירה תואמת — סיכום');
+  // סיום: כל השורות "הגיע" → "סיום" → הסיכום. הקליטה נשמרת עם מספר הנייר ועם מקור הקריאה; המאזן רואה שהתעודה נקלטה
+  for (let i = 0; i < 5; i++) r.run(`receiptLineCheckClick({ target: { closest: () => ({ dataset: { lineMark: '0:${i}:ok' } }) } })`);
+  assert.equal(r.run('finishReceiptLineCheck()'), true);
+  if (r.run('currentView') === 'reconcile') r.run('aiApplyInvoiceResult()');
+  assert.ok(r.run('!!pendingReceipt'), 'כל השורות הגיעו — סיכום');
+  assert.deepEqual(plain(r.run('receiptList')).map(l => l.qty).reduce((a, b) => a + b, 0), 30, 'הספירה היא מה שסומן בשורות');
   await r.run('confirmReceipt()');
   const saved = r.writes.find(w => w.op === 'set' && w.path && w.path[w.path.length - 2] === 'receipts');
   assert.ok(saved, 'הקליטה נשמרה');
@@ -60,17 +71,27 @@ test('מקום אחד: "צלם נייר מהנהג" בפס העליון → "ק�
   assert.equal(r.run(`currentLedger().states.paper_77001234`), 'in-receipt');
 });
 
-test('סופרים בזמן שהניירות נקראים: ספינר, "בדוק וסיים" מחכה, והעוגנים נכנסים בלי לגעת בספירה', async () => {
+test('סורקים בזמן שהניירות נקראים: ספינר, "סיום" מחכה, והעוגנים נכנסים בלי לגעת במה שנסרק', async () => {
   const r = app(delivery());
   const release = r.hold();
   const round = startRound(r);
   await until(() => r.requests.length === 1);
   assert.equal(r.run('receiptOpened'), true); assert.equal(r.run('aiScanBusy'), true); assert.equal(r.run('receiptPaperScanState'), 'running');
-  assert.equal(r.run('globalThis.__scanner'), 1);
+  // v171: חלון הבדיקה פתוח (בדיקה ממתינה), והמצלמה לא נפתחה לבד
+  assert.equal(r.run('globalThis.__scanner'), 0);
+  assert.equal(r.run(`receiptQuantityReview.mode === 'lines' && receiptQuantityReview.pending === true`), true);
+  assert.match(r.node('receiptQuantityRows').innerHTML, /קורא את הניירות מהנהג/);
   r.run('renderReceiving()');
-  assert.match(r.node('app').innerHTML, /קורא את הניירות מהנהג/);
-  countAsPaper(r);
+  assert.match(r.node('app').innerHTML, /קורא את הניירות מהנהג|מפענח את התעודה/);
+  // סורקים בחלון: שני מוצרים, בדיוק כמו בתעודה
+  const rows = plain(r.run(`aiScanResponse ? [] : testData.paper.scan.documents[0].rows.slice(0, 2).map(row => { const p = products.find(x => x.code === row.itemCode); return { id: p.id, qty: Number(row.quantity) }; })`));
+  rows.forEach((x, k) => { r.run(`receiptLineCheckClick({ target: { closest: () => ({ dataset: { extraAdd: ${JSON.stringify(x.id)} } }) } })`);
+    r.run(`receiptLineCheckInput({ target: { dataset: { extraGot: '${k}' }, value: '${x.qty}' } })`); });
   const counted = plain(r.run('receiptList'));
+  assert.deepEqual(counted.map(l => [l.productId, l.qty]), rows.map(x => [x.id, x.qty]), 'מה שנסרק הוא הספירה');
+  // "סיום" בזמן שהנייר נקרא — אומר למה, ולא שומר
+  assert.equal(r.run('finishReceiptLinePending()'), false);
+  assert.match(r.run('receiptLineNotice.text'), /הנייר עוד נקרא — אפשר להמשיך לסרוק/);
   r.run('finishReceipt()');
   assert.ok(r.toasts.some(t => /עוד נייר מהנהג נקרא עכשיו/.test(t)));
   assert.equal(r.run('pendingReceipt'), null);
@@ -78,6 +99,12 @@ test('סופרים בזמן שהניירות נקראים: ספינר, "בדוק
   await round; await r.run('paperJoinChain');
   assert.equal(r.run('receiptPaperScanState'), 'ok'); assert.equal(r.run('aiScanBusy'), false);
   assert.deepEqual(plain(r.run('receiptList')), counted, 'הספירה לא השתנתה');
+  // הרשימה עולה לבד, ומה שנסרק בדיוק כמו בתעודה כבר מסומן "הגיע"
+  assert.equal(lineListArrives(r), 1);
+  assert.equal(r.run('receiptQuantityReview.pending'), undefined);
+  assert.deepEqual(plain(r.run('receiptQuantityReview.docs[0].lines.map(l => l.mark)')), ['ok', 'ok', '', '', '']);
+  assert.match(r.run('receiptLineNotice.text'), /^התעודה בקליטה — 5 שורות · 2 כבר סומנו ממה שנסרק$/);
+  assert.deepEqual(plain(r.run('receiptList')), counted, 'והספירה עדיין אותה ספירה, עד "סיום"');
 });
 
 test('תעודת משלוח וזיכוי באותו סבב (בשני הסדרים): שתי בקשות, הזיכוי למאזן, בקליטה תעודה אחת', async () => {
@@ -441,12 +468,27 @@ test('טלפון שני: רואה "קורא…" ולא יכול לסיים; אח
   assert.equal(merged.state.aiScanResponse.perDocument[0].paperId, 'paper_77001234');
 });
 
-test('ספירה עיוורת: מספר שהקריאה סימנה לא מוצג בזמן הספירה — רק כמה יש; ב"בדוק וסיים" הבדיקה נפתחת', async () => {
+test('ספירה עיוורת (קליטה שנספרת במסך הסריקה): מספר שהקריאה סימנה לא מוצג בזמן הספירה — רק כמה יש; ב"בדוק וסיים" הבדיקה נפתחת', async () => {
   const flagged = () => { const p = delivery(); p.verification = { ...p.verification, status: 'needs_review', escalationAttempted: true, issues: [{ noteIndex: 0, rowIndex: 1, field: 'quantity' }] }; return p; };
   const r = app(flagged());
   await receive(r);
   assert.equal(r.requests.length, 1, 'בלי קריאה שלישית');
   assert.equal(r.run('bermanOcrPendingDocs().length'), 1);
+  // v171: קליטה עם תעודת משלוח היא של בדיקה שורה-שורה — הרשימה אמורה לעלות, אבל מספר שסומן לבדיקה עוצר אותה: החלון נסגר,
+  // אימות הקריאה מוצג במסך הקליטה, ואומרים למה
+  assert.equal(r.run('receiptCountingMode'), 'manual');
+  assert.equal(r.run('receiptQuantityReview.pending'), true);
+  assert.equal(lineListArrives(r), 1);
+  assert.equal(r.run(`$('receiptQuantityModal').classList.contains('hidden')`), true, 'החלון לא נשאר מעל אימות הקריאה');
+  assert.equal(r.run('receiptQuantityReview.pending'), true, 'הבדיקה מחכה, עם מה שנסרק');
+  assert.match(r.toasts[r.toasts.length - 1], /קודם בדוק מול הנייר את המספרים המסומנים באימות הקריאה/);
+  assert.match(r.node('app').innerHTML, /data-ocr-key/);
+  const said = r.toasts.length;
+  r.run('renderReceiving()'); lineListArrives(r);
+  assert.equal(r.toasts.length, said, 'לא מנסים שוב לבד על אותו מצב של הנייר');
+  assert.equal(r.run(`$('receiptQuantityModal').classList.contains('hidden')`), true);
+  // קליטה שנספרת במסך הסריקה (טיוטה שהתחילה בגרסה קודמת) — הספירה עיוורת, כמו קודם
+  r.run(`closeReceiptQuantityReview(); receiptQuantityReview = null; receiptCountingMode = 'scan'; rcOcrReviewRevealed = false; saveReceiptDraft();`);
   r.run('renderReceiving()');
   let html = r.node('app').innerHTML;
   assert.match(html, /data-ocr-deferred/); assert.match(html, /הקריאה סימנה מספר אחד לבדיקה מול הנייר/);
@@ -458,10 +500,11 @@ test('ספירה עיוורת: מספר שהקריאה סימנה לא מוצג 
   assert.match(r.node('rcOcrReview').innerHTML, /data-ocr-key/, 'ב"בדוק וסיים" — המספר לבדיקה');
   r.run('renderReceiving()');
   assert.match(r.node('app').innerHTML, /data-ocr-key/);
-  // ספירה ידנית מול הנייר — הבדיקה מוצגת כמו תמיד
+  // במסך הבדיקה (שורה-שורה) — אימות הקריאה מוצג כמו תמיד, עוד לפני שמנסים להעלות את הרשימה
   const m = app(flagged());
   await receive(m);
-  m.run(`receiptCountingMode = 'manual'; renderReceiving();`);
+  m.run(`renderReceiving();`);
+  assert.equal(m.run('receiptCountingMode'), 'manual');
   assert.match(m.node('app').innerHTML, /data-ocr-key/);
 });
 

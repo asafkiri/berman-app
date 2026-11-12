@@ -30,7 +30,7 @@ function small(number = SMALL) {
 // קליטה פתוחה עם שתי התעודות (הקטנה מתווספת לבד, כמו ב-26.10)
 async function twoPapers(opts) {
   const r = app(delivery(BIG), opts);
-  await receive(r);
+  await receive(r, 1, 0, { count: false }); // v171: הניירות נקראו במסך הניירות (בלי "התחל לסרוק עכשיו") — התעודה כבר בקליטה כשהבדיקה נפתחת
   r.serve(small());
   await readPapers(r, 1, 1);
   assert.deepEqual(state(r).nums, [BIG, SMALL], 'שתי התעודות בקליטה');
@@ -56,13 +56,16 @@ const items = rc => rc.items.map(l => [l.productId, l.qty, l.noteQty == null ? n
 
 test('1. הכפתור החדש בכל מקום שיש בו בדיקה ידנית — והכפתורים הקיימים כמו שהיו', async () => {
   const r = await twoPapers();
-  const open = r.run('receiptQuantityButtonsHtml()');
-  assert.deepEqual([...open.matchAll(/data-role="(rc-quantity-[a-z]+)"/g)].map(m => m[1]), ['rc-quantity-lines', 'rc-quantity-all', 'rc-quantity-differences', 'rc-quantity-none'], 'החדש ראשון, ואחריו שלושת הקיימים');
-  assert.match(strip(open), /בדקת ידנית את הכמויות מול התעודה\? בדוק שורה-שורה בטלפון כל הכמויות תואמות יש חוסרים או עודפים לא הגיע כלום — הכל חסר/);
-  // מסך הבדיקה הידנית (אחרי שבחרו בה)
-  r.run(`receiptCountingMode = 'manual'`);
+  // v171: קליטה שיש בה תעודת משלוח היא של בדיקה שורה-שורה — מסך הבדיקה, מיד (בלי לבחור בו קודם)
+  assert.equal(r.run('receiptCountingMode'), 'manual');
   const manual = r.run('receiptQuantityButtonsHtml()');
+  assert.deepEqual([...manual.matchAll(/data-role="(rc-quantity-[a-z]+)"/g)].map(m => m[1]), ['rc-quantity-lines', 'rc-quantity-all', 'rc-quantity-differences', 'rc-quantity-none'], 'החדש ראשון, ואחריו שלושת הקיימים');
   assert.match(strip(manual), /^בדוק שורה-שורה בטלפון בדקתי ידנית — כל הכמויות תואמות, המשך לקליטה בדקתי ידנית — יש חוסרים או עודפים לא הגיע כלום — הכל חסר$/);
+  // מסך הסריקה (טיוטה שהתחילה בגרסה קודמת) — לפני שנספר משהו הבחירות פתוחות, כמו קודם
+  r.run(`receiptCountingMode = 'scan'`);
+  const open = r.run('receiptQuantityButtonsHtml()');
+  assert.deepEqual([...open.matchAll(/data-role="(rc-quantity-[a-z]+)"/g)].map(m => m[1]), ['rc-quantity-lines', 'rc-quantity-all', 'rc-quantity-differences', 'rc-quantity-none']);
+  assert.match(strip(open), /בדקת ידנית את הכמויות מול התעודה\? בדוק שורה-שורה בטלפון כל הכמויות תואמות יש חוסרים או עודפים לא הגיע כלום — הכל חסר/);
   // אחרי שהתחילו לספור — בתוך "בדקת ידנית את הכמויות מול התעודה?"
   r.run(`receiptCountingMode = 'scan'; receiptList = [{ productId: 'code_101', name: 'אחיד פרוס ברמן', barcode: '', qty: 3 }];`);
   const folded = r.run('receiptQuantityButtonsHtml()');
@@ -189,7 +192,7 @@ test('4ב. "לא שלנו" שנכשל — הקליטה בדיוק כמו שהי�
   assert.deepEqual(state(r), before, 'בלי שינוי');
   // נייר אחד
   const one = app(delivery(BIG));
-  await receive(one);
+  await receive(one, 1, 0, { count: false }); // v171: הניירות נקראו במסך הניירות (בלי "התחל לסרוק עכשיו") — התעודה כבר בקליטה כשהבדיקה נפתחת
   one.run(`currentView = 'receiving'; mainMode = 'receiving'; startReceiptLineCheck()`);
   assert.equal(review(one).docs.length, 1);
   assert.doesNotMatch(one.run(`$('receiptQuantityRows').innerHTML`), /data-line-drop=|לא שלנו|תעודה נפרדת/);

@@ -70,7 +70,7 @@ test('"ביטול" בשאלה — כלום לא נשמר ולא השתנה', asy
   await settle();
   assert.deepEqual(savedReceipts(r), []);
   assert.deepEqual(json(r, 'receiptList'), []);
-  assert.equal(r.run('receiptCountingMode'), 'scan');
+  assert.equal(r.run('receiptCountingMode'), 'manual', 'v171: בדיקה שורה-שורה, כמו מהרגע שהתעודה נכנסה — לא השתנה');
   assert.equal(r.run('receiptQuantityReview'), null);
 });
 

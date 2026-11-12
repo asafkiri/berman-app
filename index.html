@@ -849,7 +849,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '170'; // בדיקה שורה-שורה: "בטל סימון", ומה שהגיע ומחיר הקופה בכתב גדול ועבה יותר (כמו יטבתה 416 ותנובה 162)
+const APP_VERSION = '171'; // בדיקה שורה-שורה היא הדרך היחידה: נפתחת לפני שתעודת המשלוח נכנסה (סורקים בינתיים) וגם בלי נייר (כמו יטבתה 417 ותנובה 163)
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -4844,8 +4844,10 @@ async function openScanner() {
   const lineScan = scanPurpose === 'linecheck'; // v160: סריקה בתוך הבדיקה שורה-שורה — רציפה, עם כרטיס מעל הווידאו
   const continuous = (scanPurpose === 'receiving' || scanPurpose === 'returns' || scanPurpose === 'promo' || scanPurpose === 'signprod' || lineScan);
   const ov = $('scanOverlay'); if (ov) ov.classList.toggle('hidden', !continuous);
-  const title = $('scanTitle'); if (title) title.textContent = lineScan ? 'בדיקה שורה-שורה — סריקה' : 'סריקת ברקוד';
-  const label = $('scanOverlayLabel'); if (label) label.textContent = lineScan ? 'סומנו' : 'פריטים:';
+  // v171: בדיקה ממתינה (הנייר עוד נקרא, או אין נייר) — "נסרקו" במקום "סומנו": עוד אין שורות לסמן
+  const linePending = lineScan && !!(receiptQuantityReview && receiptQuantityReview.pending);
+  const title = $('scanTitle'); if (title) title.textContent = lineScan ? (linePending && receiptLinePendingKind() === 'nodoc' ? 'בדיקה בלי נייר — סריקה' : 'בדיקה שורה-שורה — סריקה') : 'סריקת ברקוד';
+  const label = $('scanOverlayLabel'); if (label) label.textContent = lineScan ? (linePending ? 'נסרקו:' : 'סומנו') : 'פריטים:';
   const readyHint = lineScan ? 'סרוק מוצר מהסחורה — ✕ חוזר לרשימה' : continuous ? 'סרוק פריטים — לחץ ✕ לסיום' : 'כוון את הברקוד אל תוך המסגרת';
   setScanHint(continuous ? readyHint : 'מבקש גישה למצלמה...');
   try {
@@ -6161,9 +6163,12 @@ function receivingPhotoCardHtml() {
   return cards +
     '<button data-role="rc-photo-doc-add" class="btn-tap w-full bg-white border-2 border-dashed border-slate-300 text-slate-500 rounded-xl py-2 font-black text-xs mb-1"><i class="fa-solid fa-plus"></i> עוד תעודת משלוח (חיוב) מאותו משלוח</button>' +
     (aiScanError ? '<div class="rounded-xl bg-rose-50 border border-rose-300 p-2.5 text-xs font-black text-rose-700 mb-2">' + htmlEscape(aiScanError) + '</div>' : '') +
-    '<button data-role="rc-open-photo-quantity" ' + (ready ? '' : 'disabled') + ' class="btn-tap w-full py-3 mb-2 bg-white border-2 border-emerald-300 text-emerald-800 rounded-xl font-black text-base">פענח תעודה — הכמויות נבדקות ידנית</button>' +
-    '<button data-role="rc-open-photo" ' + (ready ? '' : 'disabled') + ' class="btn-tap w-full rounded-2xl py-4 font-black text-lg flex items-center justify-center gap-2 mt-1 ' + (ready ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-400') + '"><i class="fa-solid fa-arrow-left"></i> התחל קליטה</button>' +
-    '<div class="text-[11px] text-slate-500 font-bold text-center mt-1.5">הקריאה מהנייר תרוץ ברקע בזמן שאתה סורק את הסחורה. הכמויות שבתעודה לא יוצגו לך תוך כדי — הספירה נשארת עיוורת, וזה מה שתופס חוסר.</div>' +
+    // v171: הבדיקה שורה-שורה היא הדרך — כפתור אחד, והחלון נפתח מיד (סורקים בזמן שהתעודה נקראת). "התחל קליטה" (סריקה בלי
+    // רשימה) ו"פענח תעודה — הכמויות נבדקות ידנית" ירדו. בצירוף נייר לקליטה שמורה הספירה כבר בפנים — רק קוראים את הנייר.
+    (receiptAttachTarget
+      ? '<button data-role="rc-open-photo" ' + (ready ? '' : 'disabled') + ' class="btn-tap w-full rounded-2xl py-4 font-black text-lg flex items-center justify-center gap-2 mt-1 ' + (ready ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-400') + '"><i class="fa-solid fa-arrow-left"></i> קרא את התעודה — הבדיקה תרוץ מול הספירה</button>'
+      : '<button data-role="rc-open-photo" ' + (ready ? '' : 'disabled') + ' class="btn-tap w-full rounded-2xl py-4 font-black text-lg flex items-center justify-center gap-2 mt-1 ' + (ready ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-400') + '"><i class="fa-solid fa-list-check" aria-hidden="true"></i> התחל בדיקה שורה-שורה</button>' +
+        '<div class="text-[11px] text-slate-500 font-bold text-center mt-1.5">אפשר לסרוק מוצרים מיד — הרשימה תעלה לבד כשהתעודה תיקרא.</div>') +
     '<button data-role="rc-entry-manual" class="btn-tap w-full text-slate-400 py-2.5 font-black text-xs underline mt-1">אין רשת או שהנייר לא קריא — הקלד את המספרים מתחתית התעודה</button>';
 }
 // v126: כל נייר מהנהג עולה ממקום אחד — "📷 צלם נייר מהנהג" בפס שמתחת לכותרת, באותו מקום בכל
@@ -6181,7 +6186,7 @@ function receivingReadingHtml() {
   const it = paperIntake;
   if (!it || !it.busy) return '';
   return '<div class="rounded-xl bg-violet-50 border border-violet-200 p-2.5 mb-3" role="status"><div class="text-[11px] font-black text-violet-800 flex items-center gap-2"><i class="fa-solid fa-circle-notch fa-spin"></i><span>' + htmlEscape(it.progress || 'קורא את הניירות מהנהג…') + '</span></div>' +
-    (receivingDraftEmpty() ? '<button data-role="paper-count-now" class="btn-tap w-full min-h-[44px] mt-2 bg-blue-600 text-white rounded-xl py-2.5 font-black text-sm">התחל לספור עכשיו — תעודת המשלוח תיכנס לבד</button>' : '') + '</div>';
+    (receivingDraftEmpty() ? '<button data-role="paper-count-now" class="btn-tap w-full min-h-[44px] mt-2 bg-indigo-600 text-white rounded-xl py-2.5 font-black text-sm">התחל לסרוק עכשיו — הרשימה תעלה כשתעודת המשלוח תיקרא</button>' : '') + '</div>';
 }
 // אין קליטה פתוחה: משפט אחד — לאן ללחוץ. מה שכבר נקרא מוצג רק כשיש; כל השאר מקופל ב"עוד אפשרויות"
 function receivingOneButtonCardHtml() {
@@ -6315,22 +6320,31 @@ function receiptQuantityPaperRows() {
 }
 // The chosen counting method is independent of how the paper anchors were entered.
 function receiptUsesManualQuantities() {
-  return receiptCountingMode === 'manual' && !receiptNoDoc && !receiptAttachTarget;
+  // v171: מספרים שהוקלדו ביד (הנייר לא אישר את עצמו, אין רשת) — אין רשימה לבדוק מולה, ולכן מסך הסריקה, כמו קודם
+  return receiptCountingMode === 'manual' && !receiptNoDoc && !receiptAttachTarget && !receiptAnchorsTyped();
 }
 function receiptManualReceivingHtml() {
   const running = aiScanBusy || receiptPaperScanState === 'running';
   const ready = !running && receiptPaperScanState === 'ok' && !!aiScanResponse;
   const problems = receiptPaperScanProblems.length ? receiptPaperScanProblems : [aiScanError || 'הפענוח לא הושלם. בדוק את צילומי התעודה כדי להמשיך.'];
+  // v171: בזמן שהנייר נקרא אפשר כבר לסרוק — "התחל לסרוק בינתיים" פותח את חלון הבדיקה; לא מוצע כשכבר יש בדיקה שסומנו בה שורות
+  // ועוד נייר נקרא (receiptLinePendingAllowed)
+  const scanNow = (text, cls) => receiptLinePendingAllowed() ? '<button data-role="rc-quantity-lines" class="btn-tap w-full min-h-[52px] ' + cls + ' rounded-2xl bg-indigo-600 text-white font-black text-base flex items-center justify-center gap-2"><i class="fa-solid fa-barcode" aria-hidden="true"></i> ' + text + '</button>' : '';
+  // הנייר לא אישר את עצמו — אותו כרטיס כמו במסך הסריקה (להקליד את שני המספרים, או לצלם שוב); הסבב נגמר בלי תעודת משלוח —
+  // הכרטיס שמעל (receivingNoDeliveryBoxHtml)
+  const failed = receivingNoDeliveryYet() ? '' : (paperScanStatusHtml() ||
+    '<div role="status" class="rounded-xl bg-amber-50 border border-amber-300 p-4 mb-3 text-base font-bold text-amber-900">צריך להשלים את פענוח התעודה<div class="mt-2 text-sm">' + problems.map(htmlEscape).join('<br>') + '</div><button data-role="rc-paper-rescan" class="btn-tap w-full bg-white border border-amber-300 rounded-xl py-3 mt-3">בדוק את צילומי התעודה</button></div>');
   const status = running
-    ? '<div role="status" class="rounded-xl bg-blue-50 border border-blue-200 p-4 mb-3 text-base font-bold text-blue-800"><i class="fa-solid fa-circle-notch fa-spin"></i> ' + htmlEscape(aiScanProgressText || 'מפענח את התעודה…') + '<div class="mt-2 text-sm">בסיום הפענוח אפשר לאשר את הכמויות או לדווח על חוסרים ועודפים.</div></div>'
+    ? '<div role="status" class="rounded-xl bg-blue-50 border border-blue-200 p-4 mb-3 text-base font-bold text-blue-800"><i class="fa-solid fa-circle-notch fa-spin"></i> ' + htmlEscape(aiScanProgressText || 'מפענח את התעודה…') + '<div class="mt-2 text-sm">כשתעודת המשלוח תיכנס לקליטה אפשר לבדוק שורה-שורה, לאשר שהכל הגיע או לדווח על חוסרים ועודפים. אפשר כבר לסרוק מוצרים.</div>' +
+      scanNow(receiptList.length ? 'המשך לסרוק בינתיים' : 'התחל לסרוק בינתיים — בדיקה שורה-שורה', 'mt-3') + '</div>'
     : ready ? ''
-    : '<div role="status" class="rounded-xl bg-amber-50 border border-amber-300 p-4 mb-3 text-base font-bold text-amber-900">צריך להשלים את פענוח התעודה<div class="mt-2 text-sm">' + problems.map(htmlEscape).join('<br>') + '</div><button data-role="rc-paper-rescan" class="btn-tap w-full bg-white border border-amber-300 rounded-xl py-3 mt-3">בדוק את צילומי התעודה</button></div>';
+    : failed + scanNow(receiptList.length ? 'המשך לסרוק בינתיים' : 'סרוק מוצרים בינתיים', 'mb-3');
+  // v171: "מעבר לקליטה בסריקת מוצרים" ירד — הסריקה היא חלק מהבדיקה שורה-שורה ("סרוק מוצר" בתחתית החלון)
   return '<section data-manual-receiving dir="rtl" class="mb-4">' +
-    '<h2 class="font-black text-xl text-slate-800 mb-3">בדיקת כמויות ידנית</h2>' +
+    '<h2 class="font-black text-xl text-slate-800 mb-3">בדיקת הקליטה</h2>' +
     '<div id="rcPaperStatus">' + status + '</div>' +
     '<div id="rcQuantityOptions">' + receiptQuantityButtonsHtml() + '</div>' +
-    (!running ? '<div id="rcOcrReview">' + ocrReviewPanelHtml() + '</div>' : '') +
-    '<button data-role="rc-count-by-scan" class="btn-tap w-full py-3 text-sm font-bold text-slate-600 underline">מעבר לקליטה בסריקת מוצרים</button></section>';
+    (!running ? '<div id="rcOcrReview">' + ocrReviewPanelHtml() + '</div>' : '') + '</section>';
 }
 function receiptQuantityButtonsHtml() {
   if (receiptNoDoc || receiptAttachTarget || receiptPaperScanState !== 'ok' || !aiScanResponse) return '';
@@ -6482,6 +6496,12 @@ function renderReceiptQuantityRows(term) {
 function closeReceiptQuantityReview() {
   const m = $('receiptQuantityModal'); m.classList.add('hidden'); m.classList.remove('flex');
 }
+// v171: "חזרה" (או Escape) מחלון של בדיקה ממתינה — המסך שמאחוריו אומר כמה נסרק ("המשך לסרוק"), ולכן מצויר מחדש כשחוזרים אליו
+function closeReceiptQuantityReviewByUser() {
+  const r = receiptQuantityReview, pending = !!(r && r.mode === 'lines' && r.pending);
+  closeReceiptQuantityReview();
+  if (pending && currentView === 'receiving') renderReceiving();
+}
 function receiptQuantityCheckAudit() {
   const r = receiptQuantityReview;
   if (!r || !r.confirmedAt || r.key !== receiptQuantityPaperKey() || r.itemsKey !== JSON.stringify(receiptList)) return null;
@@ -6606,6 +6626,29 @@ function receiptLineCarryScanned(docs) {
     else receiptLineGroupSet({ lines: lines.map(l => ({ l })) }, 'qty', String(q));
   });
 }
+// v171: מה שנסרק לפני שתעודת המשלוח נכנסה ואינו בה, אבל הקרוב שלו כן — יחידה בודדת מול מארז החיוב שלה (billingPackId), או להפך.
+// כשהכמות מתחלקת בדיוק, הספירה עוברת למוצר שבתעודה: 12 בודדים הם 2 מארזים של 6, ו-2 מארזים הם 12 בודדים. (אחרי שהרשימה עלתה,
+// סריקה כזאת מגיעה ממילא לשורה של הקרוב — receiptLineScanProductTarget.) כשאינה מתחלקת — המוצר נשאר ב"הגיע משהו נוסף".
+function receiptLineCarryKin(onPaper) {
+  let changed = false;
+  receiptList.slice().forEach(l => {
+    const q = Number(l && l.qty) || 0, p = l ? products.find(x => x.id === l.productId) : null;
+    if (!p || !(q > 0) || onPaper.has(p.id)) return;
+    let target = null, qty = 0;
+    const size = parseInt(p.billingPackSize, 10) || 0;
+    if (p.billingPackId && onPaper.has(p.billingPackId) && size >= 2 && q % size === 0) { target = products.find(x => x.id === p.billingPackId) || null; qty = q / size; }
+    else {
+      const unit = products.find(x => x && x.billingPackId === p.id && onPaper.has(x.id) && (parseInt(x.billingPackSize, 10) || 0) >= 2);
+      if (unit) { target = unit; qty = q * parseInt(unit.billingPackSize, 10); }
+    }
+    if (!target || !(qty > 0)) return;
+    receiptList = receiptList.filter(x => x !== l);
+    const ex = receiptList.find(x => x && x.productId === target.id);
+    if (ex) ex.qty = (Number(ex.qty) || 0) + qty; else receiptList.push({ productId: target.id, name: target.name, barcode: target.barcode || '', qty });
+    changed = true;
+  });
+  return changed;
+}
 // בדיקה חדשה; מה שכבר סומן (prev) נשאר בשורות שעדיין קיימות — אחרי שנייר יצא מהקליטה, או כשחוזרים לבדיקה; מה שנסרק
 // עובר לשורות שלא סומנו (v162)
 function receiptLineCheckFresh(found, prev) {
@@ -6613,16 +6656,216 @@ function receiptLineCheckFresh(found, prev) {
   const old = new Map();
   if (prev && prev.mode === 'lines') (prev.docs || []).forEach(d => (d.lines || []).forEach(l => old.set(keyOf(d, l), l)));
   const docs = found.docs.map(d => ({ ...d, lines: d.lines.map(l => { const o = old.get(keyOf(d, l)); return o && o.paperQty === l.paperQty ? { ...l, mark: o.mark || '', got: o.got || '' } : l; }) }));
+  const onPaper = new Set(found.paperRows.map(r => r.productId));
+  // v171: הרשימה עולה אחרי שכבר סרקו (בדיקה ממתינה) — יחידה בודדת שנסרקה כשבתעודה מארז החיוב שלה, או להפך, עוברת לשורה שבתעודה
+  const fromPending = !!(prev && prev.mode === 'lines' && prev.pending);
+  if (fromPending) receiptLineCarryKin(onPaper);
   receiptLineCarryScanned(docs); // v162
   receiptLineGroupsNormalize({ docs }); // v164
-  const onPaper = new Set(found.paperRows.map(r => r.productId));
   // מה שנספר ואינו בתעודות — "הגיע משהו נוסף" (כמו העודפים שנספרו ב"יש חוסרים או עודפים"); מה שכבר הוסף שם — נשאר
-  const extras = (prev && prev.mode === 'lines' ? (prev.extras || []) : []).filter(x => x && !onPaper.has(x.productId));
+  const extras = (prev && prev.mode === 'lines' ? (prev.extras || []) : []).filter(x => x && !onPaper.has(x.productId)
+    && (!fromPending || receiptLineExtraGot(x) == null || receiptList.some(l => l && l.productId === x.productId))); // v171: מה שעבר לשורה של הקרוב שלו — לא נשאר כאן
   receiptList.forEach(l => { if (l && !onPaper.has(l.productId) && Number(l.qty) > 0 && !extras.some(x => x.productId === l.productId)) extras.push({ productId: l.productId, name: l.name, barcode: l.barcode || '', got: String(l.qty) }); });
   const r = { mode: 'lines', key: receiptQuantityPaperKey(), itemsKey: JSON.stringify(receiptList), paperRows: receiptQuantityRowsSignature(found.paperRows), rows: [], confirmedAt: null,
     products: found.paperRows.map(p => ({ productId: p.productId, name: p.name, barcode: p.barcode, paperQty: p.paperQty })), docs, extras };
   r.rows = receiptLineRows(r);
   return r;
+}
+// ===== v171: הבדיקה נפתחת לפני שתעודת המשלוח נכנסה לקליטה — וגם בלי נייר =====
+// בעל העסק, 12.11.2026: (1) "שהבדיקה שורה-שורה תהיה האופציה היחידה, כלומר לא תהיה האופציה סריקת מוצרים ('הגיע הכל' ו'לא הגיע
+// כלום' עדיין יהיו אופציה)"; (2) "כאשר אני בוחר בדיקה שורה-שורה תהיה אופציה להתחיל לסרוק עוד לפני שהאפליקציה מסיימת לקרוא את התעודה —
+// המשתמש מתחיל לסרוק, וכשסריקת התעודה נגמרת עולה כל הרשימה והמשתמש מבחינתו ממשיך את הבדיקה"; (3) "עדיין לתת אופציה להתחיל לסרוק
+// ללא תעודה כלל, וגם אפשר לסגור אותה ככה — אבל אם הוא מצרף תעודה באמצע הבדיקה, הבדיקה הופכת להיות שורה-שורה". ובשאלה: הסריקה
+// שלפני הרשימה היא באותו חלון של הבדיקה. (כמו ביטבתה 417 ותנובה 163.)
+// - בחלון זו בדיקה "ממתינה": receiptQuantityReview.mode = 'lines' עם pending = true ובלי תעודות (docs ריק). מה שנסרק מוצג ב-extras —
+//   אותם כרטיסים, אותו שדה כמות, אותו חיפוש ואותו כרטיס מעל המצלמה כמו "הגיע משהו נוסף" — תחת הכותרת "נסרקו עד עכשיו".
+// - מה שנסרק נשמר במקום שבו הקליטה שומרת מאז ומעולם את מה שנספר, receiptList (receiptLinePendingSync, בכל שינוי). לכן: כשתעודת
+//   המשלוח נכנסת לקליטה, receiptLineCheckFresh מעביר אותו לשורות לפי הכלל של 162 (receiptLineCarryScanned) — בלי שאלה, כי המשתמש
+//   כבר בתוך הבדיקה; "סיום" בלי נייר עובר ב-finishReceipt הקיים של קבלת סחורה בלי נייר (נשמרת פתוחה עד שהנייר מגיע); והקלדת
+//   המספרים ביד, ביטול וטלפון בגרסה קודמת רואים את אותה ספירה.
+// - מה חסר כדי שהרשימה תעלה (receiptLinePendingKind): 'reading' — נייר מהנהג נקרא או נכנס עכשיו (בטלפון הזה או באחר); 'failed' —
+//   אין עדיין תעודת משלוח שאישרה את עצמה (מה לעשות — במסך הקליטה שמאחורי החלון); 'nodoc' — בלי נייר: "סיום" שומר בלי נייר,
+//   ו"צלם נייר מהנהג" פותח את המצלמה של הניירות. 'ready' — התעודה בקליטה, והרשימה נבנית (startReceiptLineCheck). null — קליטה
+//   שאין בה בדיקה כזאת: צירוף נייר לקליטה שמורה, או מספרים שהוקלדו ביד (receiptAnchorsTyped) — שם סופרים במסך הסריקה, כמו קודם.
+// - בברמן אין "בחירה שמחכה" כמו ביטבתה ובתנובה: הרשימה עולה לבד (receiptLineAutoStart) כשיש בדיקה ממתינה, תעודת המשלוח בקליטה,
+//   ושום נייר לא נקרא עוד — מהציור של מסך הקליטה ומסגירת המצלמה.
+function receiptLineScannerOpen() { return scanPurpose === 'linecheck'; }
+// בדיקה ממתינה שמול העיניים עכשיו — החלון שלה פתוח, או המצלמה שנפתחה ממנו
+function receiptLinePendingShown() {
+  const r = receiptQuantityReview, m = $('receiptQuantityModal');
+  return !!(r && r.mode === 'lines' && r.pending && (receiptLineScannerOpen() || (m && !m.classList.contains('hidden'))));
+}
+// מספרים שהוקלדו ביד (הנייר לא אישר את עצמו, או אין רשת) — אין רשימה לבדוק מולה: סופרים במסך הסריקה מול שני המספרים, כמו קודם
+function receiptAnchorsTyped() { return receiptNotes.length > 0 && receiptAnchorSource !== 'paper'; }
+// עוד נייר מהנהג נקרא או מחכה להיכנס לקליטה הזאת — אותה בדיקה כמו ב"יש חוסרים או עודפים" וב"סיום"
+function receiptLinePaperStillReading() {
+  return !!(receivingPaperReadRunning() || Array.from(paperJoinPending.values()).some(j => !j.item || !j.item.forDraftId || j.item.forDraftId === receiptDraftId));
+}
+function receiptLinePendingKind() {
+  if (receiptAttachTarget) return null;
+  // בלי נייר — עד שמצלמים אחד: בזמן שהוא נקרא (או מחכה להיכנס) הבדיקה כבר מחכה לרשימה שלו
+  if (receiptNoDoc) return receiptNotes.length ? null : receiptLinePaperStillReading() ? 'reading' : 'nodoc';
+  if (receiptEntryMode !== 'photo' || receiptAnchorsTyped() || receiptPaperScanState === 'summary-only') return null;
+  if (aiScanBusy || receiptPaperScanState === 'running' || receiptLinePaperStillReading()) return 'reading';
+  return receiptPaperScanState === 'ok' && aiScanResponse ? 'ready' : 'failed';
+}
+// בדיקה שכבר סומנו בה שורות (תעודה כבר בקליטה) אינה מוחלפת בבדיקה ממתינה כשעוד נייר נקרא: מה שסומן נשאר בה וחוזר לשורות
+// שנשארו כשהנייר נכנס (receiptLineCheckFresh), כמו עד היום. עד אז מחכים, בלי לסרוק.
+function receiptLinePendingAllowed() {
+  const kind = receiptLinePendingKind(), r = receiptQuantityReview;
+  if (!kind || kind === 'ready') return false;
+  return !(r && r.mode === 'lines' && !r.pending && (r.docs || []).some(d => (d.lines || []).some(l => l.mark)));
+}
+function receiptLineProductsText(n) { n = Number(n) || 0; return n === 1 ? 'מוצר אחד' : n + ' מוצרים'; }
+// הספירה (receiptList) היא מה שנסרק עד עכשיו — נכתבת מהרשימה שבחלון. שדה ריק או לא תקין אינו נספר עד שיתוקן.
+function receiptLinePendingSync(r) {
+  if (!r || !r.pending) return;
+  receiptList = (r.extras || []).filter(x => x && receiptLineExtraGot(x) != null).map(x => ({ productId: x.productId, name: x.name, barcode: x.barcode || '', qty: receiptLineExtraGot(x) }));
+  r.itemsKey = JSON.stringify(receiptList);
+  updateCart();
+}
+// הבדיקה הממתינה נבנית מהספירה (receiptList): הסדר של מה שכבר בחלון נשמר; מה שנספר מאז במקום אחר מצטרף בסוף; שדה שנמצא באמצע
+// הקלדה, ומה שנוסף ל"הגיע משהו נוסף" בבדיקה קודמת שלא סומן בה דבר — נשארים.
+function receiptLinePendingReview(prev) {
+  const counted = new Map();
+  receiptList.forEach(l => { if (l && Number(l.qty) > 0 && !counted.has(l.productId)) counted.set(l.productId, l); });
+  const extras = [], has = id => extras.some(e => e.productId === id);
+  if (prev && prev.mode === 'lines') (prev.extras || []).forEach(x => {
+    if (!x || has(x.productId)) return;
+    const l = counted.get(x.productId);
+    if (l) extras.push({ productId: l.productId, name: l.name, barcode: l.barcode || '', got: String(l.qty) });
+    else if (!prev.pending || receiptLineExtraGot(x) == null) extras.push({ productId: x.productId, name: x.name, barcode: x.barcode || '', got: x.got == null ? '' : String(x.got) });
+  });
+  counted.forEach(l => { if (!has(l.productId)) extras.push({ productId: l.productId, name: l.name, barcode: l.barcode || '', got: String(l.qty) }); });
+  const r = { mode: 'lines', pending: true, key: receiptQuantityPaperKey(), itemsKey: '', paperRows: receiptQuantityRowsSignature([]), rows: [], confirmedAt: null, products: [], docs: [], extras };
+  receiptLinePendingSync(r);
+  r.rows = receiptLineRows(r);
+  return r;
+}
+// החלון נפתח בלי רשימה. כשיש נייר שעוד נקרא (או שעוד לא אישר את עצמו) הקליטה היא של בדיקה שורה-שורה, והרשימה תעלה לבד
+// כשתעודת המשלוח תיכנס (receiptLineAutoStart).
+function openReceiptLinePending() {
+  if (!canEditSharedReceipt()) { sharedReceiptReadOnlyNotice(); return false; }
+  if (!receiptLinePendingAllowed()) return false;
+  if (!receiptNoDoc) receiptCountingMode = 'manual';
+  const prev = receiptQuantityReview;
+  receiptQuantityReview = receiptLinePendingReview(prev && prev.mode === 'lines' ? prev : null);
+  receiptLineDropAsk = null; receiptLineSearchTerm = ''; receiptLineNotice = null; receiptLineOpen.clear();
+  saveReceiptDraft();
+  if (currentView === 'receiving') renderReceiving();
+  renderReceiptQuantityReview();
+  receiptLineScrollTop();
+  return true;
+}
+// הרשימה מתחילה מלמעלה — כשהחלון נפתח בלי רשימה, וכשהרשימה של התעודה עולה במקום מה שנסרק
+function receiptLineScrollTop() { const b = $('receiptQuantityBody'); if (b) b.scrollTop = 0; }
+// הרשימה עולה לבד: יש בדיקה ממתינה, תעודת המשלוח כבר בקליטה ואישרה את עצמה, ושום נייר לא נקרא עוד. ניסיון אחד לכל מצב של
+// הנייר (autoKey): מה שעוצר את הרשימה — אימות קריאה שממתין, או זיהוי מוצרים שצריך להשלים — נפתר במסך שלו, ואחריו "בדוק
+// שורה-שורה". כשהמצלמה של הבדיקה פתוחה, מה שעוצר מחכה עד שהיא נסגרת; הרשימה עצמה נבנית גם מאחוריה.
+function receiptLineAutoStart() {
+  const r = receiptQuantityReview;
+  if (!r || r.mode !== 'lines' || !r.pending || receiptLinePendingKind() !== 'ready') return false;
+  if (currentView !== 'receiving' || !canEditSharedReceipt() || pendingReceipt || reconcileData || sharedReceiptFinalizing) return false;
+  const ready = !bermanOcrPendingDocs().length && !!receiptLineCheckDocs(), key = receiptQuantityPaperKey();
+  if (!ready && (receiptLineScannerOpen() || r.autoKey === key)) return false;
+  r.autoKey = key;
+  buzz([60, 40, 60]);
+  startReceiptLineCheck();
+  return true;
+}
+function receiptLineAutoStartSoon() {
+  const r = receiptQuantityReview;
+  if (r && r.mode === 'lines' && r.pending && receiptLinePendingKind() === 'ready') setTimeout(receiptLineAutoStart, 0);
+}
+// כרטיס המצב שבראש החלון — מה קורה עם הנייר, ומה אפשר לעשות
+const RECEIPT_LINE_PAPER_TONE = { reading: 'bg-blue-50 border-blue-200', ready: 'bg-emerald-50 border-emerald-200', failed: 'bg-amber-50 border-amber-300', nodoc: 'bg-amber-50 border-amber-300' };
+function receiptLinePaperStatusClass(kind) { return 'rounded-2xl border-2 p-3 mb-2.5 ' + (RECEIPT_LINE_PAPER_TONE[kind] || RECEIPT_LINE_PAPER_TONE.failed); }
+function receiptLinePaperStatusInner(kind) {
+  const btn = (what, icon, text) => '<button type="button" data-line-paper="' + what + '" class="btn-tap w-full min-h-[48px] mt-2 rounded-xl bg-white border-2 border-amber-400 text-amber-900 font-black text-sm flex items-center justify-center gap-2"><i class="fa-solid ' + icon + '" aria-hidden="true"></i> ' + text + '</button>';
+  if (kind === 'reading') return '<div class="font-black text-base text-blue-900"><i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i> ' + htmlEscape(aiScanProgressText || (paperIntake && paperIntake.busy && paperIntake.progress) || 'קורא את הניירות מהנהג…') + '</div>' +
+    '<div class="text-sm font-bold text-blue-800 mt-1">אפשר לסרוק בינתיים. כשתעודת המשלוח תיכנס לקליטה הטלפון ירטוט, והרשימה תעלה כאן עם מה שכבר נסרק.</div>';
+  if (kind === 'nodoc') return '<div class="font-black text-base text-amber-900"><i class="fa-solid fa-file-circle-xmark" aria-hidden="true"></i> אין נייר — קולטים לפי מה שנסרק</div>' +
+    '<div class="text-sm font-bold text-amber-800 mt-1">"סיום" שומר את הקליטה פתוחה עד שהנייר יגיע. הנייר הגיע? צלם אותו, והבדיקה תהפוך לשורה-שורה עם מה שכבר נסרק.</div>' + btn('photo', 'fa-camera', 'צלם נייר מהנהג');
+  if (kind === 'ready') return '<div class="font-black text-base text-emerald-800"><i class="fa-solid fa-file-circle-check" aria-hidden="true"></i> תעודת המשלוח בקליטה — הרשימה עולה…</div>';
+  const why = receiptPaperScanProblems.length ? receiptPaperScanProblems[0] : (aiScanError || '');
+  return '<div class="font-black text-base text-amber-900"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> עוד אין תעודת משלוח שאפשר לבדוק מולה</div>' +
+    '<div class="text-sm font-bold text-amber-800 mt-1">' + (why ? htmlEscape(why) + '. ' : '') + 'מה שנסרק נשמר, ואפשר להמשיך לסרוק — הרשימה תעלה כשתעודת המשלוח תיכנס לקליטה.</div>' + btn('repair', 'fa-arrow-right', 'מה אפשר לעשות — במסך הקליטה');
+}
+// לחם בתפזורת (אין עליו ברקוד) — כפתור לכל מוצר שעוד אינו ברשימה, כמו "הוסף לחם בתפזורת" במסך הסריקה. כשיש תעודה הוא שורה רגילה בה.
+function receiptLineCrateButtonsHtml(r) {
+  const taken = new Set((r.extras || []).map(x => x.productId));
+  const crates = (products || []).filter(p => p && isQuickCrate(p) && !taken.has(p.id)).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'he'));
+  if (!crates.length) return '';
+  return '<div class="mt-2" data-line-crates><div class="text-[11px] font-black text-slate-500 mb-1"><i class="fa-solid fa-basket-shopping" aria-hidden="true"></i> לחם בתפזורת — אין עליו ברקוד, מוסיפים מכאן</div><div class="flex flex-wrap gap-1.5">' +
+    crates.map(p => '<button type="button" data-extra-add="' + htmlEscape(p.id) + '" class="btn-tap min-h-[44px] px-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-sm font-black">+ ' + htmlEscape(p.name) + '</button>').join('') + '</div></div>';
+}
+// גוף החלון בבדיקה ממתינה: כרטיס המצב, ומתחתיו מה שנסרק עד עכשיו
+function receiptLinePendingHtml(r) {
+  const kind = receiptLinePendingKind() || 'failed';
+  const rows = (r.extras || []).map((x, k) => {
+    const p = products.find(y => y.id === x.productId) || null;
+    return '<div id="lineExtra_' + k + '" class="' + RECEIPT_LINE_CARD + ' border-slate-200 bg-white">' +
+      '<div class="flex items-start justify-between gap-2"><div class="min-w-0 flex-1"><div class="font-black text-lg text-slate-800 leading-tight">' + htmlEscape(x.name) + '</div>' + posPriceLineHtml(p, true) +
+        '<div class="text-[11px] text-slate-400 mt-0.5"><i class="fa-solid fa-barcode" aria-hidden="true"></i> ' + htmlEscape(x.barcode || 'ללא ברקוד') + '</div></div>' +
+        '<button type="button" data-extra-remove="' + k + '" class="btn-tap shrink-0 min-h-[44px] px-3 text-rose-700 font-black text-sm" aria-label="הסר: ' + htmlEscape(x.name) + '">הסר</button></div>' +
+      '<label class="flex items-center gap-2 mt-2 text-sm font-bold text-slate-700">כמה הגיע?<input data-extra-got="' + k + '" type="text" inputmode="numeric" autocomplete="off" value="' + htmlEscape(x.got) + '" aria-label="כמה הגיע: ' + htmlEscape(x.name) + '" class="w-24 border-2 border-slate-300 rounded-xl p-2 text-xl text-center font-black bg-white tabular-nums"></label></div>';
+  }).join('');
+  return '<div id="receiptLinePaperStatus" data-paper-kind="' + kind + '" role="status" class="' + receiptLinePaperStatusClass(kind) + '">' + receiptLinePaperStatusInner(kind) + '</div>' +
+    '<section class="mt-3" aria-label="נסרקו עד עכשיו">' +
+    '<div class="font-black text-base text-slate-800">נסרקו עד עכשיו</div>' +
+    '<div class="text-sm font-bold text-slate-600 mb-2">' + ((r.extras || []).length ? 'אפשר לתקן כמות, או להסיר.' : 'עוד לא נסרק כלום — "סרוק מוצר" למטה, או חפש מוצר כאן.') + '</div>' + rows +
+    '<input data-line-search type="search" value="' + htmlEscape(receiptLineSearchTerm) + '" placeholder="חפש מוצר לפי שם או ברקוד" aria-label="חיפוש מוצר שהגיע" class="w-full border-2 border-slate-200 rounded-xl p-3 text-base bg-white">' +
+    '<div id="receiptLineSearchResults" class="mt-2">' + receiptLineSearchResultsHtml(receiptLineSearchTerm) + '</div>' + receiptLineCrateButtonsHtml(r) + '</section>';
+}
+// מה קורה עם הנייר בזמן שהחלון פתוח (התקדמות הקריאה, נייר שלא אישר את עצמו) — רק הכותרת, כרטיס המצב ו"סיום". הרשימה אינה
+// מצוירת מחדש, כדי ששדה כמות שמקלידים בו לא יאבד את הפוקוס ואת המקלדת. כשהמצלמה פתוחה — גם השורה שמעל המונה שלה.
+function refreshReceiptLinePending() {
+  const r = receiptQuantityReview;
+  if (!r || r.mode !== 'lines' || !r.pending) return;
+  const kind = receiptLinePendingKind() || 'failed';
+  if (receiptLineScannerOpen()) { const n = $('scanOverlayName'); if (n) n.textContent = kind === 'failed' ? 'עוד אין תעודת משלוח בקליטה — ✕ למסך הקליטה' : ''; }
+  const m = $('receiptQuantityModal'); if (!m || m.classList.contains('hidden')) return;
+  receiptQuantityModalMode(true);
+  const box = $('receiptLinePaperStatus');
+  if (box) { box.className = receiptLinePaperStatusClass(kind); box.innerHTML = receiptLinePaperStatusInner(kind); }
+}
+// כפתורי כרטיס המצב: "צלם נייר מהנהג" (בלי נייר) — המצלמה של הניירות, אותה אחת של כל האפליקציה; הנייר שנקרא נכנס לקליטה
+// הזאת, והספירה נשמרת. "מה אפשר לעשות" — מסך הקליטה שמאחורי החלון: לצלם שוב, להקליד את המספרים, או להמשיך בלי נייר.
+function receiptLinePaperAction(what) {
+  const r = receiptQuantityReview;
+  if (!r || r.mode !== 'lines' || !r.pending) return;
+  if (!canEditSharedReceipt()) { sharedReceiptReadOnlyNotice(); return; }
+  receiptLineSettle(r); receiptLineCheckChanged();
+  closeReceiptQuantityReview();
+  renderReceiving();
+  if (what === 'photo') paperOpenCamera(false);
+}
+// "סיום" בבדיקה ממתינה: בלי נייר — הקליטה נסגרת כמו קבלת סחורה בלי נייר מאז ומעולם (finishReceipt: סיכום, ונשמרת פתוחה עד שהנייר
+// מגיע); כשיש נייר שעוד לא בקליטה — אי אפשר לסיים בלי הרשימה, והחלון אומר למה.
+function finishReceiptLinePending() {
+  const r = receiptQuantityReview, kind = receiptLinePendingKind();
+  if (!r || !r.pending) return false;
+  if (kind !== 'nodoc') {
+    receiptLineNotice = { tone: 'warn', text: kind === 'reading' ? 'הנייר עוד נקרא — אפשר להמשיך לסרוק. הרשימה תעלה כאן לבד, ואז אפשר לסיים.'
+      : kind === 'ready' ? 'תעודת המשלוח בקליטה — הרשימה עולה.' : 'עוד אין תעודת משלוח בקליטה — מה אפשר לעשות: במסך הקליטה. מה שנסרק נשמר.' };
+    refreshReceiptLineProgress(); return false;
+  }
+  const open = (r.extras || []).findIndex(x => receiptLineExtraGot(x) == null);
+  if (open >= 0 || !(r.extras || []).length) {
+    receiptLineNotice = { tone: 'warn', text: open >= 0 ? 'הקלד כמה הגיע מכל מוצר, או הסר אותו' : 'עוד לא נסרק כלום — סרוק מוצר, או חפש אותו והקלד כמה הגיע' };
+    renderReceiptLineRows();
+    const el = open >= 0 ? $('lineExtra_' + open) : null;
+    if (el) {
+      el.classList.add('ring-4', 'ring-rose-300');
+      try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (err) {}
+      const b = el.querySelector('input'); if (b) { try { b.focus({ preventScroll: true }); } catch (err) { b.focus(); } }
+    }
+    return false;
+  }
+  receiptLinePendingSync(r); saveReceiptDraft();
+  closeReceiptQuantityReview(); renderReceiving();
+  finishReceipt();
+  return true;
 }
 // השורות לכל מוצר — אותו מבנה כמו "יש חוסרים או עודפים". מתעדכנות עם כל סימון, ושורה שעוד לא סומנה נחשבת "הגיע" (כמו
 // בבדיקה הקיימת): טלפון בגרסה 153 שממשיך את הקליטה רואה את הבדיקה הרגילה עם מה שכבר סומן, ולא רשימה ריקה. בסיום כל
@@ -6754,7 +6997,8 @@ function receiptLineCheckTotal(r) { return receiptLineGroups(r).length; }
 function receiptQuantityModalMode(lines) {
   const title = $('receiptQuantityTitle'), intro = $('receiptQuantityIntro'), progress = $('receiptQuantityProgress'), search = $('receiptQuantitySearch'), ok = $('receiptQuantityConfirm');
   // v159: בבדיקה שורה-שורה גוף החלון אפור (כמו מסך הקליטה), והכרטיסים הלבנים נפרדים זה מזה; הבדיקה הקיימת — לבן כמו קודם
-  const body = $('receiptQuantityBody'); if (body) body.classList[lines ? 'add' : 'remove']('bg-slate-50');
+  // v171: וגם ממלא את הגובה שנשאר (flex-1) — "סרוק מוצר" ו"סיום" צמודים לתחתית המסך גם כשהרשימה קצרה, או כשעוד אין רשימה
+  const body = $('receiptQuantityBody'); if (body) body.classList[lines ? 'add' : 'remove']('bg-slate-50', 'flex-1');
   // v160: "סרוק מוצר" ליד "סיום" בתחתית הקבועה — רק בבדיקה שורה-שורה; בבדיקה הקיימת הכפתור היחיד כמו קודם
   const footer = $('receiptQuantityFooter'); if (footer) footer.classList[lines ? 'add' : 'remove']('grid-cols-[1.15fr_1fr]');
   const scan = $('receiptLineScan'); if (scan) scan.classList[lines ? 'remove' : 'add']('hidden');
@@ -6766,13 +7010,19 @@ function receiptQuantityModalMode(lines) {
     ok.className = 'btn-tap w-full bg-blue-600 text-white rounded-xl py-3 font-black text-base'; ok.textContent = 'אשר הפרשים — שאר הכמויות תואמות'; ok.removeAttribute('aria-disabled');
     return;
   }
-  title.textContent = 'בדיקה שורה-שורה';
-  intro.textContent = 'סרוק מוצר מהסחורה, או סמן ביד בכל שורה: הגיע, כמות אחרת או לא הגיע.'; // v160
+  // v171: בדיקה ממתינה (הנייר עוד נקרא, או אין נייר) — אותו חלון, ומה שכתוב בו אומר מה חסר כדי שהרשימה תעלה
+  const pendingKind = receiptQuantityReview && receiptQuantityReview.pending ? (receiptLinePendingKind() || 'failed') : null;
+  title.textContent = pendingKind === 'nodoc' ? 'בדיקה בלי נייר' : 'בדיקה שורה-שורה';
+  intro.textContent = pendingKind === 'nodoc' ? 'סרוק את מה שהגיע, או חפש מוצר והקלד כמה הגיע. אין רשימה להשוות אליה.'
+    : pendingKind === 'failed' ? 'אפשר להמשיך לסרוק. הרשימה תעלה כאן כשתעודת המשלוח תיכנס לקליטה.'
+    : pendingKind ? 'הנייר עוד נקרא — אפשר כבר לסרוק מוצרים. הרשימה תעלה כאן לבד, ומה שנסרק יסומן בה.'
+    : 'סרוק מוצר מהסחורה, או סמן ביד בכל שורה: הגיע, כמות אחרת או לא הגיע.'; // v160
   search.classList.add('hidden');
   refreshReceiptLineProgress();
 }
 function refreshReceiptLineProgress() {
   const r = receiptQuantityReview; if (!r || r.mode !== 'lines') return;
+  if (r.pending) { refreshReceiptLinePendingProgress(r); return; } // v171
   const total = receiptLineCheckTotal(r), open = receiptLineCheckOpen(r), openLines = open.filter(x => x.extra == null).length;
   const progress = $('receiptQuantityProgress'), ok = $('receiptQuantityConfirm');
   if (progress) {
@@ -6785,6 +7035,25 @@ function refreshReceiptLineProgress() {
     ok.className = 'btn-tap w-full rounded-xl py-3 font-black text-base text-white ' + (open.length ? 'bg-slate-400' : 'bg-blue-600');
     ok.textContent = open.length ? 'סיום (נשארו ' + open.length + ')' : 'סיום — שמור את הבדיקה';
     ok.setAttribute('aria-disabled', open.length ? 'true' : 'false');
+  }
+}
+// v171: המונה ו"סיום" בבדיקה ממתינה — כמה נסרק עד עכשיו. "סיום" כחול רק בלי נייר (שם הוא שומר את הקליטה); כשמחכים לנייר הוא
+// אפור, ולחיצה עליו אומרת למה (finishReceiptLinePending).
+function refreshReceiptLinePendingProgress(r) {
+  const kind = receiptLinePendingKind() || 'failed';
+  const items = (r.extras || []).filter(x => receiptLineExtraGot(x) != null), units = items.reduce((a, x) => a + receiptLineExtraGot(x), 0);
+  const progress = $('receiptQuantityProgress'), ok = $('receiptQuantityConfirm');
+  if (progress) {
+    const n = receiptLineNotice;
+    progress.className = 'text-sm font-black mt-2 ' + (n ? (n.tone === 'warn' ? 'text-rose-700' : 'text-emerald-700') : 'text-slate-700');
+    progress.textContent = n ? n.text : items.length ? 'נסרקו ' + receiptLineProductsText(items.length) + ' · ' + mtxQty(units) + ' יח׳' : 'עוד לא נסרק כלום';
+  }
+  if (ok) {
+    const can = kind === 'nodoc' && items.length > 0 && items.length === (r.extras || []).length;
+    // px-2 leading-tight: הכיתוב כאן ארוך ("סיום — כש…") — שוליים בצדדים, ושתי שורות צפופות כשהוא נשבר
+    ok.className = 'btn-tap w-full rounded-xl py-3 px-2 leading-tight font-black text-base text-white ' + (can ? 'bg-blue-600' : 'bg-slate-400');
+    ok.textContent = kind === 'nodoc' ? 'סיום — שמור בלי נייר' : kind === 'reading' ? 'סיום — כשהנייר ייקרא' : kind === 'ready' ? 'סיום — הרשימה עולה' : 'סיום — כשתהיה תעודה';
+    ok.setAttribute('aria-disabled', can ? 'false' : 'true');
   }
 }
 function receiptLineDocName(d) { return (d.header || 'תעודה') + (d.number ? ' ' + d.number : ''); }
@@ -6940,6 +7209,7 @@ function receiptLineExtrasHtml(r) {
     '<div id="receiptLineSearchResults" class="mt-2">' + receiptLineSearchResultsHtml(receiptLineSearchTerm) + '</div></section>';
 }
 function receiptLineCheckHtml(r) {
+  if (r.pending) return receiptLinePendingHtml(r); // v171: עוד אין רשימה — מה קורה עם הנייר, ומה שנסרק עד עכשיו
   const multi = r.docs.length > 1;
   // "לא שלנו" — רק כשיש עוד תעודה בקליטה, וכל התעודות באו מהניירות (נייר יחיד שאינו שלנו: מבטלים את הקליטה)
   const canDrop = multi && r.docs.every(d => d.paperId);
@@ -6981,19 +7251,51 @@ function renderReceiptLineRows(focus) {
 }
 function receiptLineCheckChanged() {
   const r = receiptQuantityReview;
-  if (r) { r.confirmedAt = null; if (r.mode === 'lines') r.rows = receiptLineRows(r); }
+  if (r) { r.confirmedAt = null; if (r.mode === 'lines') { r.rows = receiptLineRows(r); receiptLinePendingSync(r); } } // v171: בבדיקה ממתינה — גם הספירה
   saveReceiptDraft();
+}
+// v171: מה שנאמר בראש החלון כשהרשימה עולה אחרי שכבר סרקו — כמה שורות, כמה מהן כבר סומנו ממה שנסרק, וכמה מוצרים אינם בתעודה
+function receiptLineArrivedNotice(r) {
+  const total = receiptLineCheckTotal(r), open = receiptLineCheckOpen(r).filter(x => x.extra == null).length, extra = (r.extras || []).length;
+  return { tone: 'ok', text: 'התעודה בקליטה — ' + ledgerRowsText(total) + (total - open ? ' · ' + (total - open === 1 ? 'אחת כבר סומנה' : (total - open) + ' כבר סומנו') + ' ממה שנסרק' : '') + (extra ? ' · ' + (extra === 1 ? 'מוצר אחד שאינו בתעודה' : extra + ' מוצרים שאינם בתעודה') : '') };
+}
+// v171: הרשימה עלתה בזמן שהמצלמה של הבדיקה פתוחה — לא סוגרים אותה: המונה שמעליה עובר ל"סומנו X מתוך Y", ומכאן כל סריקה כבר
+// מגיעה לשורה שלה. כרטיס שפתוח ברגע הזה (מוצר שנסרק לפני שהרשימה עלתה) נבנה מחדש מול הרשימה — עם הכמות בתעודה — ומה שכבר
+// הוקלד בו נשאר; "לאיזה מוצר הכוונה?" מצויר מחדש, עם מה שהתעודה יודעת. החלון עצמו יוצג כשהמצלמה תיסגר (receiptLineScanClosed).
+function receiptLineArrivedInScanner() {
+  receiptLineArrivedBehind = true;
+  const label = $('scanOverlayLabel'); if (label) label.textContent = 'סומנו';
+  refreshReceiptLineScanOverlay();
+  const n = $('scanOverlayName'); if (n) n.textContent = 'התעודה בקליטה ✓ הרשימה מוכנה';
+  const c = receiptLineScanCard, r = receiptQuantityReview;
+  if (!c) return;
+  if (c.kind === 'choose' || !c.scanned) { renderReceiptLineScanCard(); return; }
+  const typed = c.touched && receiptLineScanGotNumber(c) != null ? Number(String(c.got).trim()) : null; // מה שהוקלד בכרטיס לפני שהרשימה עלתה
+  const next = receiptLineScanCardFor(receiptLineScanProductTarget(c.scanned), c.choices);
+  receiptLineScanCard = next;
+  if (typed != null) {
+    if (next.kind === 'line') { if (!next.addQty) next.askQty = true; next.got = String(typed); }
+    // לא בתעודה: בכרטיס של "הגיע משהו נוסף" השדה הוא הסה״כ, ולכן תוספת ("עוד כמה?") מתחברת למה שכבר נסרק
+    else next.got = String(typed + (c.addQty && next.k >= 0 ? (receiptLineExtraGot(r.extras[next.k]) || 0) : 0));
+    next.touched = true;
+  }
+  renderReceiptLineScanCard();
 }
 function startReceiptLineCheck() {
   // אותן בדיקות כמו startReceiptQuantityReview: נייר שעוד נקרא או נכנס, ואימות קריאה שממתין
   sharedReceiptLastAction = { id: '', dataset: { role: 'rc-quantity-lines' } };
   if (paperJoinPending.size) paperJoinRetry();
+  // v171: תעודת המשלוח עוד לא בקליטה (נקראת, לא אישרה את עצמה, או שאין נייר) — החלון נפתח בכל זאת, וסורקים; השורות יעלו בו
+  // כשהתעודה תיכנס. בדיקה שכבר סומנו בה שורות אינה מוחלפת (receiptLinePendingAllowed) — שם מחכים לנייר, כמו קודם.
+  const pendingKind = receiptLinePendingKind();
+  if (pendingKind && pendingKind !== 'ready' && receiptLinePendingAllowed()) { openReceiptLinePending(); return; }
   const paperReading = receivingPaperReadRunning() || (Array.from(paperJoinPending.values()).some(j => !j.item || !j.item.forDraftId || j.item.forDraftId === receiptDraftId) ? 'here' : '');
   if (paperReading) {
     showToast(paperReading === 'other' ? 'נייר מהנהג נקרא עכשיו בטלפון אחר — עוד רגע ואפשר לבחור.' : 'עוד נייר מהנהג נקרא עכשיו — עוד רגע הוא ייכנס לבד, ואז אפשר לבחור.', null, null, 3500);
     return;
   }
   if (bermanOcrPendingDocs().length) {
+    closeReceiptQuantityReview(); // v171: חלון של בדיקה ממתינה לא נשאר פתוח מעל אימות הקריאה
     rcOcrReviewRevealed = true; rcOcrRevealDraft = receiptDraftId;
     saveReceiptDraft(); refreshOcrReviewViews();
     showToast('קודם בדוק מול הנייר את המספרים המסומנים באימות הקריאה — ואז בחר שוב.', null, null, 5000);
@@ -7001,6 +7303,7 @@ function startReceiptLineCheck() {
   }
   const found = receiptLineCheckDocs();
   if (!found) {
+    closeReceiptQuantityReview(); // v171: וגם לא מעל מסך ההשוואה
     if (!receiptQuantityPaperRows()) {
       showToast('צריך להשלים את זיהוי המוצרים ובדיקת הפענוח לפני אישור הכמויות', null, null, 4500);
       if (aiScanResponse && !aiScanBusy && receiptPaperScanState === 'ok') openReconcile();
@@ -7008,26 +7311,32 @@ function startReceiptLineCheck() {
     return;
   }
   const r = receiptQuantityReview;
-  const resume = !!r && r.mode === 'lines' && r.key === receiptQuantityPaperKey() && r.itemsKey === JSON.stringify(receiptList) && r.paperRows === receiptQuantityRowsSignature(found.paperRows);
+  const fromPending = !!r && r.mode === 'lines' && !!r.pending; // v171: כבר סרקו בחלון הזה, לפני שהרשימה עלתה
+  const resume = !!r && r.mode === 'lines' && !r.pending && r.key === receiptQuantityPaperKey() && r.itemsKey === JSON.stringify(receiptList) && r.paperRows === receiptQuantityRowsSignature(found.paperRows);
   const begin = () => {
     receiptCountingMode = 'manual';
     // הקליטה השתנתה מאז (נייר נוסף נכנס, למשל) — בדיקה חדשה, ומה שכבר סומן בשורות שנשארו כמו שהן — נשאר
     if (!resume) { receiptQuantityReview = receiptLineCheckFresh(found, r && r.mode === 'lines' ? r : null); receiptLineDropAsk = null; receiptLineSearchTerm = ''; }
     else receiptLineGroupsNormalize(receiptQuantityReview); // v164: טיוטה מגרסה קודמת — הקבוצות מיושרות גם בהמשך מאותו מקום
-    receiptLineNotice = null; receiptLineOpen.clear(); // v159: בפתיחה, מה שכבר סומן — מקופל
+    receiptLineNotice = fromPending ? receiptLineArrivedNotice(receiptQuantityReview) : null; receiptLineOpen.clear(); // v159: בפתיחה, מה שכבר סומן — מקופל
     saveReceiptDraft(); renderReceiving();
+    if (receiptLineScannerOpen()) { receiptLineArrivedInScanner(); return; } // v171: המצלמה פתוחה — הרשימה מחכה מאחוריה
     renderReceiptQuantityReview();
+    if (fromPending) receiptLineScrollTop(); // v171: הרשימה שעלתה — מהשורה הראשונה
   };
   const counted = receiptList.reduce((a, l) => a + (Number(l && l.qty) || 0), 0);
   // v162: מה שנסרק עובר לרשימה (receiptLineCarryScanned), והספירה הסופית היא מה שסומן בשורות
-  if (counted > 0 && !resume) showConfirm('בדיקה שורה-שורה', 'כבר נספרו ' + mtxQty(counted) + ' יח׳ — הם עוברים לרשימה: מוצר שנסרק בדיוק כמו בתעודה מסומן "הגיע", כמות אחרת מסומנת "אחרת" עם המספר, והשאר ממתינים לסימון. מה שנספר ואינו בתעודות יופיע ב"הגיע משהו נוסף". בסיום, הספירה היא מה שסומן בשורות.', 'התחל בדיקה', begin);
+  // v171: בלי השאלה כשהסריקה נעשתה בחלון הבדיקה עצמו (בדיקה ממתינה) — המשתמש כבר בתוך הבדיקה, והיא פשוט ממשיכה
+  if (counted > 0 && !resume && !fromPending) showConfirm('בדיקה שורה-שורה', 'כבר נספרו ' + mtxQty(counted) + ' יח׳ — הם עוברים לרשימה: מוצר שנסרק בדיוק כמו בתעודה מסומן "הגיע", כמות אחרת מסומנת "אחרת" עם המספר, והשאר ממתינים לסימון. מה שנספר ואינו בתעודות יופיע ב"הגיע משהו נוסף". בסיום, הספירה היא מה שסומן בשורות.', 'התחל בדיקה', begin);
   else begin();
 }
 function receiptLineCheckClick(e) {
   const r = receiptQuantityReview; if (!r || r.mode !== 'lines') return;
   if (receiptLineSettle(r)) receiptLineCheckChanged(); // v163: "אחרת" עם הכמות שבתעודה — "הגיע" (מתקפלת בציור שהלחיצה מביאה)
-  const t = e.target.closest('[data-line-mark], [data-line-clear], [data-line-open], [data-line-show], [data-line-drop], [data-line-drop-yes], [data-line-drop-no], [data-extra-add], [data-extra-remove]');
+  const t = e.target.closest('[data-line-mark], [data-line-clear], [data-line-open], [data-line-show], [data-line-drop], [data-line-drop-yes], [data-line-drop-no], [data-extra-add], [data-extra-remove], [data-line-paper]');
   if (!t) return;
+  // v171: כרטיס המצב של בדיקה ממתינה — "צלם נייר מהנהג" (בלי נייר) / "מה אפשר לעשות — במסך הקליטה"
+  if (t.dataset.linePaper) { receiptLinePaperAction(t.dataset.linePaper); return; }
   // v170 (בעל העסק, 12.11.2026: "קורה לי שאני לוחץ בטעות 'הגיע', ואז צריך ללחוץ 'לא הגיע' בינתיים עד שאני אגיע למוצר — וזה סתם
   // עושה לי בלאגן בראש"): "בטל סימון" — הסימון של המוצר נמחק בכל שורותיו (הקבוצה), והשורה חוזרת להיות פתוחה ולבנה, כמו שורה
   // שעוד לא נבדקה: היא שוב נספרת ב"נשארו", ו"סיום" מחכה לה. אותו נתיב שמירה כמו סימון (receiptLineCheckChanged).
@@ -7099,6 +7408,7 @@ function receiptLineCheckBlur(e) {
 function finishReceiptLineCheck() {
   if (!canEditSharedReceipt()) { sharedReceiptReadOnlyNotice(); return false; }
   const r = receiptQuantityReview; if (!r || r.mode !== 'lines') return false;
+  if (r.pending) return finishReceiptLinePending(); // v171: עוד אין רשימה — בלי נייר נשמר כך; כשמחכים לנייר, אומר למה אי אפשר
   if (receiptLineSettle(r)) receiptLineCheckChanged(); // v163
   const open = receiptLineCheckOpen(r);
   if (open.length) {
@@ -7183,6 +7493,7 @@ function receiptLineCheckDrop(di) {
 //   מתווסף למה שסומן (receiptLineScanAdd), ומה שחסר עד הכמות בתעודה כבר בשדה — "הוסף" אחד משלים את השורה. "לא נכון? תקן את
 //   הסה״כ" מחזיר את הכרטיס הקודם (הגיע N / אחרת / לא הגיע — הסה״כ). הכמות בתעודה נשארת בצד, כמו תמיד. (בעל העסק, 9.11.2026.)
 let receiptLineScanCard = null, receiptLineScanLast = null;
+let receiptLineArrivedBehind = false; // v171: הרשימה עלתה בזמן שהמצלמה פתוחה — כשהיא נסגרת בלי סימון, הרשימה מוצגת מההתחלה
 // גלילה לשורה שכבר ברשימה והדגשה שלה (כמו "סיום" שמביא לשורה שנשארה); ההדגשה נעלמת בציור הבא. (ביטבתה — מגרסה 407.)
 function receiptLineReveal(id) {
   const el = $(id); if (!el) return;
@@ -7223,7 +7534,9 @@ function openReceiptLineScanner() {
 function refreshReceiptLineScanOverlay() {
   const r = receiptQuantityReview; if (!r || r.mode !== 'lines') return;
   const total = receiptLineCheckTotal(r), openLines = receiptLineCheckOpen(r).filter(x => x.extra == null).length;
-  const c = $('scanOverlayCount'); if (c) c.textContent = (total - openLines) + ' מתוך ' + total;
+  const c = $('scanOverlayCount');
+  // v171: בדיקה ממתינה — "נסרקו: 3 מוצרים" (עוד אין שורות לסמן)
+  if (c) c.textContent = r.pending ? receiptLineProductsText((r.extras || []).filter(x => receiptLineExtraGot(x) != null).length) : (total - openLines) + ' מתוך ' + total;
   const n = $('scanOverlayName'); if (n) n.textContent = '';
 }
 // היעד של מוצר מסוים (אחרי שידוע מה נסרק). line — { di, li, scanned, related (המוצר בשורה כשאינו מה שנסרק) };
@@ -7268,9 +7581,12 @@ function receiptLineScanTarget(code) {
 function receiptLineScanCardFor(t, choices) {
   const r = receiptQuantityReview;
   const g = t.kind === 'line' ? receiptLineGroupOf(r, t.di, t.li) : null, got = g ? receiptLineGroupGot(g) : null;
+  // v171: לפני שהרשימה עלתה (בדיקה ממתינה), סריקה חוזרת של מוצר שכבר נסרק שואלת "עוד כמה?" — כמו סריקה חוזרת של שורה שסומנה (163):
+  // סורקים מגש אחרי מגש, והכמויות מצטברות. (אחרי שהרשימה עלתה, מוצר שאינו בתעודה — "כבר ברשימה" ו"עדכן", כמו קודם.)
+  const more = t.kind === 'extra' && !!r.pending && t.k >= 0 && receiptLineExtraGot(r.extras[t.k]) != null;
   const c = t.kind === 'line'
     ? { kind: 'line', di: t.di, li: t.li, scanned: t.scanned, related: t.related, askQty: false, addQty: got != null, got: got != null && got < g.paperQty ? String(g.paperQty - got) : '' }
-    : { kind: 'extra', k: t.k, scanned: t.scanned, got: t.k >= 0 ? String(r.extras[t.k].got == null ? '' : r.extras[t.k].got) : '1' };
+    : { kind: 'extra', k: t.k, scanned: t.scanned, addQty: more, got: more ? '1' : t.k >= 0 ? String(r.extras[t.k].got == null ? '' : r.extras[t.k].got) : '1' };
   if (choices && choices.length > 1) c.choices = choices.slice();
   return c;
 }
@@ -7311,7 +7627,12 @@ function receiptLineScanGotNumber(c) {
 function receiptLineScanSumText(c) {
   const n = receiptLineScanGotNumber(c);
   if (n == null) return c.invalid ? (c.addQty ? 'הקלד מספר — כמה עוד הגיעו' : 'הקלד מספר — כמה יחידות הגיעו') : (c.addQty ? 'הקלד כמה עוד הגיעו' : 'הקלד כמה יחידות הגיעו');
-  if (c.kind === 'extra') return 'התקבלו ' + n + ' · עודף ' + n;
+  if (c.kind === 'extra') {
+    // v171: לפני שהרשימה עלתה אין מול מה להשוות — רק כמה נסרק ("עוד כמה?": הסה״כ אחרי ההוספה)
+    const rv = receiptQuantityReview;
+    if (rv && rv.pending) return c.addQty ? 'סה״כ ' + ((c.k >= 0 ? receiptLineExtraGot(rv.extras[c.k]) || 0 : 0) + n) + ' יח׳' : 'נסרקו ' + n + ' יח׳';
+    return 'התקבלו ' + n + ' · עודף ' + n;
+  }
   const g = receiptLineGroupOf(receiptQuantityReview, c.di, c.li), qty = g.paperQty; // v164: מול הסך בכל התעודות
   const diff = t => t === qty ? 'כמו בתעודה' : t < qty ? 'חוסר ' + (qty - t) : 'עודף ' + (t - qty);
   // v163: "עוד כמה?" — הסה״כ אחרי ההוספה, מול התעודה
@@ -7359,10 +7680,16 @@ function receiptLineScanCardHtml(c) {
       receiptLineScanOtherHtml(c);
   }
   const p = c.scanned, inList = c.k >= 0;
-  return '<div class="pl-10"><div class="text-[11px] font-black text-amber-700">' + (inList ? 'כבר ברשימה ״הגיע משהו נוסף״' : 'לא בתעודה — הגיע בנוסף') + '</div>' +
+  // v171: לפני שהרשימה עלתה (בדיקה ממתינה) — הכרטיס אומר למה אין כאן כמות מהתעודה, ובסריקה חוזרת כמה נסרק עד עכשיו
+  const pendingKind = r.pending ? (receiptLinePendingKind() || 'failed') : null, cur = inList ? receiptLineExtraGot(r.extras[c.k]) : null;
+  const head = !pendingKind ? (inList ? 'כבר ברשימה ״הגיע משהו נוסף״' : 'לא בתעודה — הגיע בנוסף')
+    : cur != null ? (c.addQty ? 'סרקת עד עכשיו ' + cur + ' יח׳' : 'כבר נסרק: ' + cur + ' יח׳ — אפשר לשנות')
+    : pendingKind === 'nodoc' ? 'קבלת סחורה בלי נייר' : 'התעודה עוד לא בקליטה — המוצר יסומן ברשימה כשהיא תעלה';
+  return '<div class="pl-10"><div class="text-[11px] font-black ' + (pendingKind ? 'text-indigo-700' : 'text-amber-700') + '">' + head + '</div>' +
       '<div class="font-black text-lg text-slate-800 leading-tight">' + htmlEscape(p.name) + '</div>' + posPriceLineHtml(p) +
       '<div class="text-[11px] text-slate-400 mt-0.5"><i class="fa-solid fa-barcode"></i> ' + htmlEscape(p.barcode || 'ללא ברקוד') + '</div></div>' +
-    receiptLineScanQtyHtml(c, p.name, inList ? 'עדכן' : 'הוסף') + receiptLineScanOtherHtml(c);
+    receiptLineScanQtyHtml(c, p.name, c.addQty ? 'הוסף' : inList ? 'עדכן' : 'הוסף') +
+    (c.addQty ? '<button type="button" data-scan-mark="fix" class="btn-tap min-h-[44px] w-full mt-1 text-xs font-black text-slate-500">לא נכון? <span class="underline">תקן את הסה״כ</span></button>' : '') + receiptLineScanOtherHtml(c);
 }
 // v168: הכרטיס של מוצר שנבחר מ"לאיזה מוצר הכוונה?" — הדרך חזרה לבחירה, למי שטעה (בלי לסמן דבר)
 function receiptLineScanOtherHtml(c) {
@@ -7374,13 +7701,17 @@ function receiptLineScanOtherHtml(c) {
 function receiptLineScanChooseHtml(list) {
   const r = receiptQuantityReview, multi = r.docs.length > 1;
   const rows = list.map(({ p, t }) => {
-    let where = 'לא בתעודה', tone = 'bg-slate-50 border-slate-200', whereCls = 'text-slate-500';
+    // v171: לפני שהרשימה עלתה (בדיקה ממתינה) אין עדיין תעודה לומר עליה דבר — רק מה כבר נסרק
+    let where = r.pending ? 'עוד לא נסרק' : 'לא בתעודה', tone = 'bg-slate-50 border-slate-200', whereCls = 'text-slate-500';
     if (t.kind === 'line') {
       const g = receiptLineGroupOf(r, t.di, t.li), l = r.docs[t.di].lines[t.li], got = receiptLineGroupGot(g);
       where = 'בתעודה' + (multi ? ' ' + (t.di + 1) : '') + (t.related ? ' — ' + (p.billingPackId === t.related.id ? 'מארז החיוב שלו' : 'היחידה הבודדת שלו') : '') +
         ' · שורה ' + l.line + ' · ' + mtxQty(g.paperQty) + ' ' + (g.lines.length > 1 ? receiptLineGroupUnitsLabel(g) : 'יח׳') + (got == null ? '' : ' · כבר סומן (' + mtxQty(got) + ')');
       tone = 'bg-emerald-50 border-emerald-300'; whereCls = 'text-emerald-700';
-    } else if (t.k >= 0) { where = 'כבר ב״הגיע משהו נוסף״'; tone = 'bg-amber-50 border-amber-300'; whereCls = 'text-amber-700'; }
+    } else if (t.k >= 0) {
+      const got = r.pending ? receiptLineExtraGot(r.extras[t.k]) : null;
+      where = r.pending ? 'כבר נסרק' + (got == null ? '' : ' · ' + mtxQty(got) + ' יח׳') : 'כבר ב״הגיע משהו נוסף״'; tone = 'bg-amber-50 border-amber-300'; whereCls = 'text-amber-700';
+    }
     return '<button type="button" data-scan-pick="' + htmlEscape(p.id) + '" class="btn-tap w-full min-h-[56px] flex items-center justify-between gap-2 border-2 rounded-xl px-3 py-2 mb-1.5 text-right ' + tone + '">' +
       '<span class="min-w-0"><span class="block font-black text-slate-800 leading-tight">' + htmlEscape(p.name || '') + '</span>' +
         '<span class="block text-[11px] font-black ' + whereCls + '">' + where + '</span></span>' +
@@ -7397,7 +7728,7 @@ function renderReceiptLineScanCard() {
   // v168: "לאיזה מוצר הכוונה?" — כשלא נשאר ממה לבחור (המוצרים נמחקו מהמאגר בינתיים), הכרטיס נסגר והסריקה ממשיכה
   const choose = c.kind === 'choose' ? receiptLineScanChoiceList(c.choices) : null;
   if (choose && !choose.length) { closeReceiptLineScanCard(); return; }
-  box.innerHTML = '<div class="relative bg-white rounded-2xl shadow-2xl p-3 max-w-lg mx-auto ' + (c.kind === 'extra' ? 'border-2 border-amber-300' : choose ? 'border-2 border-indigo-300' : '') + '">' +
+  box.innerHTML = '<div class="relative bg-white rounded-2xl shadow-2xl p-3 max-w-lg mx-auto ' + (c.kind === 'extra' && !r.pending ? 'border-2 border-amber-300' : choose ? 'border-2 border-indigo-300' : '') + '">' +
     '<button type="button" data-scan-dismiss class="btn-tap absolute top-2 left-2 w-10 h-10 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center" aria-label="סגור בלי לסמן"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>' +
     (choose ? receiptLineScanChooseHtml(choose) : receiptLineScanCardHtml(c)) + '</div>';
   box.classList.remove('hidden');
@@ -7458,7 +7789,8 @@ function receiptLineScanSave() {
   const c = receiptLineScanCard; if (!c || c.kind === 'choose') return false; // v168: ב"לאיזה מוצר הכוונה?" אין מה לשמור
   const n = receiptLineScanGotNumber(c);
   if (n == null) { c.invalid = true; renderReceiptLineScanCard(); return false; }
-  if (c.kind === 'extra') return receiptLineScanApplyExtra(n);
+  // v171: "עוד כמה?" למוצר שכבר נסרק לפני שהרשימה עלתה — מתווסף למה שנסרק
+  if (c.kind === 'extra') { const rv = receiptQuantityReview, cur = c.addQty && rv && c.k >= 0 && rv.extras[c.k] ? receiptLineExtraGot(rv.extras[c.k]) || 0 : 0; return receiptLineScanApplyExtra(cur + n); }
   if (c.addQty) return receiptLineScanAdd(n);
   // v163: "אחרת" עם הכמות שבתעודה בדיוק — "הגיע"; אפס — "לא הגיע" (receiptLineMarkFor), כמו ברשימה
   const g = receiptLineGroupOf(receiptQuantityReview, c.di, c.li);
@@ -7476,12 +7808,14 @@ function receiptLineScanCardClick(e) {
   const mark = t.dataset.scanMark;
   // v163: "לא נכון? תקן את הסה״כ" — מ"עוד כמה?" לכרטיס הקודם: "כבר סומנה: … — אפשר לשנות" ושלושת הכפתורים (הסה״כ, לא תוספת)
   if (mark === 'fix' && c.kind === 'line') { c.addQty = false; c.askQty = false; c.got = ''; c.invalid = false; renderReceiptLineScanCard(); return; }
+  // v171: אותו דבר למוצר שנסרק לפני שהרשימה עלתה — מ"עוד כמה?" לשדה של הסה״כ ("כבר נסרק: 6 יח׳ — אפשר לשנות", "עדכן")
+  if (mark === 'fix' && c.kind === 'extra' && c.addQty) { const rv = receiptQuantityReview, x = rv && rv.extras && rv.extras[c.k]; c.addQty = false; c.got = x && x.got != null ? String(x.got) : ''; c.invalid = false; c.touched = false; renderReceiptLineScanCard(); return; }
   if (mark === 'qty') { c.askQty = true; c.got = ''; c.invalid = false; renderReceiptLineScanCard(); return; }
   if ((mark === 'ok' || mark === 'none') && !c.addQty) receiptLineScanApply(mark, '');
 }
 function receiptLineScanCardInput(e) {
   const c = receiptLineScanCard, el = e.target; if (!c || !el || !el.dataset || el.dataset.scanGot == null) return;
-  c.got = el.value; c.invalid = false;
+  c.got = el.value; c.invalid = false; c.touched = true; // v171: touched — מה שהוקלד נשמר כשהכרטיס נבנה מחדש מול הרשימה שעלתה
   const s = $('scanLineSum'); if (s) { s.textContent = receiptLineScanSumText(c); s.className = 'text-sm font-bold mt-1 text-amber-800'; }
 }
 // ✕ במצלמה (או כשל מצלמה, או קריאה בלבד), ומ-165 גם כל סימון מהכרטיס (receiptLineScanReturn): חזרה לרשימה — מצוירת מחדש
@@ -7490,9 +7824,12 @@ function receiptLineScanClosed() {
   receiptLineScanCard = null; renderReceiptLineScanCard();
   const r = receiptQuantityReview, last = receiptLineScanLast;
   receiptLineScanLast = null;
+  const arrived = receiptLineArrivedBehind; receiptLineArrivedBehind = false;
   if (!r || r.mode !== 'lines') return;
   renderReceiptQuantityReview();
-  if (last) receiptLineReveal(last);
+  if (last) receiptLineReveal(last); else if (arrived) receiptLineScrollTop();
+  // v171: תעודת המשלוח נכנסה בזמן שהמצלמה הייתה פתוחה, ומשהו עוצר את הרשימה (אימות קריאה, זיהוי מוצרים) — עכשיו, כשהמצלמה נסגרה
+  receiptLineAutoStartSoon();
 }
 // תעודה שנכנסה לקליטה הפתוחה ואינה שלנו — יוצאת ממנה כאילו לא נכנסה. הבנייה כמו ב-receivingInstallDelivery, בלי
 // התעודה הזאת: התעודות והקריאות שלהן ממוספרות מחדש, ההערות של כל קריאה, ועוגני הנייר נקראים מחדש מהתעודות שנשארו.
@@ -7550,6 +7887,7 @@ function receivingDropDeliveryDoc(docIndex) {
 
 function renderReceiving() {
   renderReceivingScreen();
+  refreshReceiptLinePending(); // v171: חלון בדיקה שפתוח מעל המסך (בדיקה ממתינה) — תמיד באותו מצב של הנייר כמו המסך שמאחוריו
 }
 function renderReceivingScreen() {
   const t = receiptTotals();
@@ -7616,8 +7954,14 @@ function renderReceivingScreen() {
         '</div></div>' +
         '<div class="flex items-center gap-1.5 shrink-0"><button data-role="rc-notes-edit" class="btn-tap text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-2 rounded-lg"><i class="fa-solid fa-pen"></i> ערוך</button><button data-role="rc-cancel" class="btn-tap text-xs font-bold text-red-500 bg-red-50 px-2.5 py-2 rounded-lg"><i class="fa-solid fa-xmark"></i></button></div>' +
       '</div>';
+  // v171: קבלת סחורה בלי נייר — גם היא בחלון הבדיקה (בלי רשימה). מאחורי החלון מסך קצר: כמה נסרק ו"המשך לסרוק"
+  if (receiptNoDocCheck()) {
+    app.innerHTML = banner + pendingReturnsBannerBoxHtml() + noteBar + receivingMorePapersHtml() + receiptNoDocCheckHtml();
+    return;
+  }
   if (receiptUsesManualQuantities()) {
     app.innerHTML = banner + pendingReturnsBannerBoxHtml() + noteBar + (receivingNoDeliveryYet() ? receivingNoDeliveryBoxHtml() : receivingMorePapersHtml()) + receiptManualReceivingHtml();
+    receiptLineAutoStartSoon(); // v171: תעודת המשלוח נכנסה, ויש בדיקה שכבר סרקו בה — הרשימה עולה לבד, אחרי הציור
     return;
   }
   const progress = receivingProgressHtml(t);
@@ -7637,6 +7981,24 @@ function renderReceivingScreen() {
 }
 function emptyReceiptHtml() {
   return '<div class="text-center text-slate-400 py-10 bg-white rounded-2xl border border-dashed border-slate-200"><i class="fa-solid fa-barcode text-3xl mb-2 opacity-40"></i><div class="font-bold text-sm">אין פריטים עדיין</div><div class="text-xs mt-1">סרוק ברקוד כדי להתחיל תעודה</div></div>';
+}
+// v171: קבלת סחורה בלי נייר שעוד לא הוקלדו לה מספרים — הבדיקה שלה בחלון (openReceiptLinePending), וזה המסך שמאחוריו. מספרים
+// שהוקלדו ("מצאתי את התעודה — הזן את המספרים") מחזירים אותה למסלול של הקלדה ביד, כמו קודם. הנייר עצמו מצולם, כמו כל נייר,
+// בכפתור "צלם נייר מהנהג" שלמעלה — והוא נכנס לקליטה הזאת לבד.
+function receiptNoDocCheck() {
+  return receiptNoDoc && !receiptAttachTarget && !receiptNotes.length && !editingNotes;
+}
+function receiptNoDocCheckHtml() {
+  const n = receiptList.length, units = receiptList.reduce((a, l) => a + (Number(l && l.qty) || 0), 0);
+  // נייר מהנהג נקרא עכשיו (צולם באמצע הבדיקה) — עוד רגע תעודת המשלוח בקליטה, ואז הבדיקה היא שורה-שורה; עד אז לא סוגרים בלי נייר
+  const reading = receiptLinePendingKind() === 'reading';
+  return '<section data-nodoc-check dir="rtl" class="mb-24">' +
+    '<h2 class="font-black text-xl text-slate-800 mb-3">בדיקה בלי נייר</h2>' +
+    '<div class="rounded-2xl bg-white border border-slate-200 p-4 mb-3 shadow-sm"><div class="text-lg font-black text-slate-800">' + (n ? 'נסרקו ' + receiptLineProductsText(n) + ' · ' + mtxQty(units) + ' יח׳' : 'עוד לא נסרק כלום') + '</div>' +
+      '<div class="text-sm font-bold text-slate-600 mt-1">' + (reading ? 'הנייר מהנהג נקרא עכשיו. כשתעודת המשלוח תיכנס לקליטה, הבדיקה תהפוך לשורה-שורה עם מה שכבר נסרק — אפשר להמשיך לסרוק בינתיים.'
+        : 'סורקים את מה שהגיע וסוגרים. אם הנייר מגיע באמצע — מצלמים אותו בכפתור "צלם נייר מהנהג" למעלה, והבדיקה הופכת לשורה-שורה עם מה שכבר נסרק.') + '</div></div>' +
+    '<button data-role="rc-nodoc-check" class="btn-tap w-full min-h-[56px] rounded-2xl bg-indigo-600 text-white font-black text-lg flex items-center justify-center gap-3 shadow-lg"><i class="fa-solid fa-barcode text-2xl" aria-hidden="true"></i> ' + (n ? 'המשך לסרוק' : 'התחל לסרוק') + '</button>' +
+    (n && !reading ? '<div class="text-[11px] font-bold text-slate-500 text-center mt-2">לסיום בלי נייר — "סיום" בחלון הסריקה, או הכפתור הכחול למטה.</div>' : '') + '</section>';
 }
 function receiptTotalsHtml(t) {
   if (!receiptList.length) return '<div id="rcTotals"></div>';
@@ -7743,6 +8105,15 @@ function removeReceiptLine(productId) {
 }
 
 // --- סיכום ואישור תעודה ---
+// v171: הכפתור הכחול שבתחתית מסך הקליטה ("בדוק וסיים"). בקליטה של בדיקה שורה-שורה, מה שנסרק לפני שהרשימה עלתה כבר נמצא
+// בספירה (receiptList) — אבל הסיום שלה הוא "סיום" של הבדיקה, אחרי שכל שורה סומנה, ולא השוואה של ספירה חלקית מול תעודת המשלוח
+// (שהייתה רושמת כחוסר כל שורה שעוד לא נסרקה). לכן, עד שהבדיקה אושרה, הכפתור פותח אותה — בדיוק כמו "בדוק שורה-שורה בטלפון".
+// בדיקה של "יש חוסרים או עודפים" שנשארה פתוחה, קליטה בלי תעודה, צירוף תעודה וספירה במסך הסריקה — כמו קודם (finishReceipt).
+function receiptFinishFromBar() {
+  const r = receiptQuantityReview;
+  if (receiptUsesManualQuantities() && !receiptQuantityCheckAudit() && (!r || r.mode === 'lines')) { startReceiptLineCheck(); return; }
+  finishReceipt();
+}
 function finishReceipt() {
   if (!canEditSharedReceipt()) { sharedReceiptReadOnlyNotice(); return; }
   // v126: הסיום מחכה שכל הניירות של הסבב ייקראו (תעודה נוספת או זיכוי עוד בדרך)
@@ -7937,6 +8308,7 @@ function refreshReconcile() { if (currentView === 'reconcile') renderReconcile()
 // (כשהכמויות לא נסגרות). כל צעד בצנרת הצילום מרענן דרך כאן, כדי שלא יקרא בכוח
 // למסך שאינו מוצג ויימחק את מה שהמשתמש רואה.
 function refreshScanHost() {
+  refreshReceiptLinePending(); // v171: חלון הבדיקה שפתוח בזמן שהנייר נקרא — מה קורה עם הנייר, בלי לצייר מחדש את הרשימה
   // v137: קריאה בתשלום התחילה או נגמרה — הגיבוי מתעדכן מיד (בזמן קריאה, טלפון אחר לא מקבל "המשך")
   const scanFlag = !!(aiScanBusy || aiAnalyzeBusy || aiScanWaitingForPaper || receiptPaperScanState === 'running');
   if (scanFlag !== receivingScanFlagSent) { receivingScanFlagSent = scanFlag; scheduleReceivingHandoff(); }
@@ -17558,6 +17930,9 @@ function receivingInstallDelivery(scan, src, mode) {
   aiScanAttemptCount = Math.max(Number(aiScanAttemptCount) || 0, entry.attempts, 1);
   aiScanBusy = false; aiScanProgressText = ''; aiScanError = ''; aiScanEvaluation = null;
   receiptOpened = true; receiptEntryMode = 'photo'; receiptNoDoc = false; editingNotes = false;
+  // v171: מרגע שיש בקליטה תעודת משלוח — בודקים אותה שורה-שורה (גם קליטה שנספרה קודם בלי נייר, או מול מספרים שהוקלדו: מה שנספר
+  // עובר לרשימה). צירוף נייר לקליטה שמורה — הספירה כבר נעשתה, ונשארת.
+  if (!receiptAttachTarget) receiptCountingMode = 'manual';
   receiptDupConfirmed = false; receiptLinesConfirmed = false; receiptPaperScanState = ''; receiptPaperScanProblems = [];
   if (receiptAnchorSource !== 'paper') receiptAnchorSource = null;
   // הבסיס = החתימה של עכשיו, לפני האימוץ — כדי שגם כשל ישמור את הקריאה (ריענון בלי קריאה חדשה)
@@ -17697,7 +18072,7 @@ async function receivingJoinDeliveryNow({ paperId, cap, item, explicit, force, s
         if (receiptDraftId !== r.receipt.id) return queue(said('wait', { reason: 'busy' }), src);
         res = install(r, 'replace');
       } else {
-        if (r.action === 'new') { receiptOpened = true; receiptEntryMode = 'photo'; receiptCountingMode = 'scan'; receiptNoDoc = false; }
+        if (r.action === 'new') { receiptOpened = true; receiptEntryMode = 'photo'; receiptCountingMode = 'manual'; receiptNoDoc = false; } // v171
         if (r.action === 'replace-typed') { receiptNotes = []; recomputeNoteTotal(); receiptAnchorSource = null; }
         res = install(r, r.action === 'append' ? 'append' : 'replace');
       }
@@ -17747,12 +18122,12 @@ function paperJoinView(item, p) {
   // v147: בקליטה שמורה — גם כשהמאזן עוד לא רואה את הנייר (רשימת הניירות מהמאזין, לפני שהגיע אליה)
   if (paperInSavedReceipt(p)) return { text: '✓ נקלטה — לא נקלטת פעמיים.', tone: 'border-emerald-200 bg-emerald-50', cls: 'text-emerald-800', done: true };
   if (per.some(x => x && x.paperId === p.id)) return receiptPaperScanState === 'ok'
-    ? { text: '✓ נכנסה לקליטה' + nums + '. הכמויות לא מוצגות — סופרים כרגיל.', tone: 'border-emerald-200 bg-emerald-50', cls: 'text-emerald-800', inDraft: true }
+    ? { text: '✓ נכנסה לקליטה' + nums + '. בודקים אותה שורה-שורה.', tone: 'border-emerald-200 bg-emerald-50', cls: 'text-emerald-800', inDraft: true }
     : { text: 'נכנסה לקליטה, אבל לא אישרה את עצמה מול בלוק הסיכום — בקליטה מקלידים את שני המספרים מתחתית הנייר.', tone: 'border-amber-200 bg-amber-50', cls: 'text-amber-800', inDraft: true };
   // מה שנאמר כשניסינו להכניס אותה (ממתינה, שאלה, סירוב) — כל עוד היא לא בקליטה
   const j = item && item.join;
   if (j && j.text && j.state !== 'joined' && j.state !== 'joined-failed') return { text: j.text, tone: 'border-amber-200 bg-amber-50', cls: 'text-amber-800', waiting: j.state === 'wait' };
-  return { text: 'זו תעודת משלוח — היא כבר נקראה. "לקליטה" מכניס אותה לקליטה כפי שנקראה' + nums + ', בלי לצלם שוב ובלי להקליד. הכמויות לא מוצגות — סופרים כרגיל.', tone: 'border-amber-200 bg-amber-50', cls: 'text-amber-800' };
+  return { text: 'זו תעודת משלוח — היא כבר נקראה. "לקליטה" מכניס אותה לקליטה כפי שנקראה' + nums + ', בלי לצלם שוב ובלי להקליד, ושם בודקים אותה שורה-שורה.', tone: 'border-amber-200 bg-amber-50', cls: 'text-amber-800' };
 }
 // ===== v126: "התחל לספור עכשיו" — בזמן שהניירות נקראים =====
 // הספירה נפתחת מיד, ותעודת המשלוח נכנסת אליה כשנקראה. הטלפון שפותח מסמן את הקליטה "קוראת" (אותו
@@ -17771,7 +18146,7 @@ async function receivingCountNow() {
       try { await sharedFlush(); } catch (e) {}
       if (canOpen()) {
         receiptOpened = true; receiptEntryMode = 'photo'; receiptNoDoc = false; editingNotes = false; receiptDupConfirmed = false; receiptLinesConfirmed = false;
-        receiptCountingMode = 'scan';
+        receiptCountingMode = 'manual'; // v171: בדיקה שורה-שורה — החלון נפתח מיד, והרשימה עולה כשתעודת המשלוח נכנסת
         aiCloseOrientationReview(); aiScanSession++;
         receiptNotes = []; recomputeNoteTotal(); receiptAnchorSource = null;
         aiScanDocuments = []; aiScanResponse = null; aiScanEvaluation = null; aiScanError = ''; aiScanAttemptCount = 0; aiScanAutoRotationNote = '';
@@ -17796,7 +18171,7 @@ async function receivingCountNow() {
     } finally { it.starting = false; }
   }
   setView('receiving');
-  if (started && canEditSharedReceipt()) openReceivingScanner(); // ספירה שנפתחה עכשיו — הסורק מיד
+  if (started && canEditSharedReceipt()) openReceiptLinePending(); // v171: קליטה שנפתחה עכשיו — חלון הבדיקה מיד, וסורקים בו
 }
 // סוף הסבב: הקליטה כבר לא "קוראת". בלי תעודת משלוח — אומרים זאת ונותנים דרכים להמשיך.
 async function receivingEndPaperRound(bind) {
@@ -17840,6 +18215,7 @@ function receivingPaperReadRunning() {
 }
 // שורת המצב של הסבב במסך הקליטה — מתעדכנת במקום, בלי לבנות את המסך מחדש (לא מפילה הקלדה)
 function receivingRoundRefresh() {
+  refreshReceiptLinePending(); // v171
   if (currentView !== 'receiving') return;
   const el = document.getElementById('rcPaperRound'); if (el) el.innerHTML = receivingMorePapersInner();
 }
@@ -17915,7 +18291,7 @@ function paperIntakeItemHtml(item) {
       (item.status === 'dup' ? '<div class="text-[11px] text-slate-400 font-bold">הצילום הזה כבר נקרא — לא נשלח שוב, ולא שולם שוב.</div>' : '') +
       '<div class="text-[11px] font-bold mt-0.5 ' + j.cls + '">' + htmlEscape(j.text) + '</div>' + paperDayDefaultHtml(p); // v142
     tone = j.tone;
-    actions = j.inDraft ? btn('paper-goto-receiving', 'לספירה ←') : j.done || j.waiting ? '' : btn('ledger-start-receiving', 'לקליטה', ' data-paper="' + htmlEscape(p.id) + '"' + capAttr) +
+    actions = j.inDraft ? btn('paper-goto-receiving', 'לבדיקה ←') : j.done || j.waiting ? '' : btn('ledger-start-receiving', 'לקליטה', ' data-paper="' + htmlEscape(p.id) + '"' + capAttr) +
       (item.join && item.join.reason === 'bare' ? btn('ledger-start-receiving', 'קליטה חדשה לתעודה הזאת', ' data-paper="' + htmlEscape(p.id) + '" data-new="1"' + capAttr) : '') +
       btn('ledger-paper-delete', 'מחק את הצילום', ' data-paper="' + htmlEscape(p.id) + '"' + capAttr); // v132
   } else if (p && (item.status === 'saved' || item.status === 'review')) {
@@ -17979,8 +18355,10 @@ function renderPaperIntake() {
     '<button data-role="paper-all-in" class="btn-tap w-full min-h-[52px] bg-emerald-600 text-white rounded-2xl py-3 font-black text-base flex items-center justify-center gap-2"><i class="fa-solid fa-check" aria-hidden="true"></i> זה כל הניירות</button></div>' : '';
   // v126: אפשר לספור כבר בזמן הקריאה (תעודת המשלוח תיכנס לבד), או לחזור לקליטה שכבר פתוחה
   const open = !receivingDraftEmpty();
-  const count = photographing ? '' : open ? '<button data-role="paper-count-now" class="btn-tap w-full min-h-[48px] bg-blue-600 text-white rounded-2xl py-3 font-black mb-3"><i class="fa-solid fa-arrow-left"></i> לספירה</button>'
-    : it.busy ? '<button data-role="paper-count-now" class="btn-tap w-full min-h-[48px] bg-white border-2 border-blue-300 text-blue-800 rounded-2xl py-3 font-black text-sm mb-3"><i class="fa-solid fa-barcode"></i> יש סחורה לקלוט? התחל לספור עכשיו — תעודת המשלוח תיכנס לבד</button>' : '';
+  // v171: "לספירה" (למסך הסריקה) הוא עכשיו "לבדיקה" — מסך הקליטה, שבו בודקים שורה-שורה; ובזמן שהניירות נקראים אפשר כבר
+  // להתחיל לסרוק: חלון הבדיקה נפתח בלי רשימה, והיא עולה כשתעודת המשלוח נכנסת
+  const count = photographing ? '' : open ? '<button data-role="paper-count-now" class="btn-tap w-full min-h-[48px] bg-blue-600 text-white rounded-2xl py-3 font-black mb-3"><i class="fa-solid fa-arrow-left"></i> לבדיקה</button>'
+    : it.busy ? '<button data-role="paper-count-now" class="btn-tap w-full min-h-[48px] bg-white border-2 border-indigo-300 text-indigo-800 rounded-2xl py-3 font-black text-sm mb-3"><i class="fa-solid fa-barcode"></i> יש סחורה לקלוט? התחל לסרוק עכשיו — הרשימה תעלה כשתעודת המשלוח תיקרא</button>' : '';
   // v132/v134: בדיקה ידנית — כל הכמויות תואמות, חוסרים או עודפים, לא הגיע כלום — ישר מכאן, כשתעודת המשלוח כבר בקליטה
   // ושום נייר לא נקרא עכשיו (אותן בחירות כמו במסך הקליטה)
   paperIntakeChoiceShown = paperIntakeChoiceNow();
@@ -24297,7 +24675,7 @@ document.getElementById('app').addEventListener('change', (e) => {
 });
 
 $('backToOrder').addEventListener('click', () => setView(['trash', 'health', 'backup', 'actionLog', 'contacts'].includes(currentView) ? 'settings' : mainMode));
-$('cartBtn').addEventListener('click', () => { if (mainMode === 'returns') openReturnsSend(); else if (mainMode === 'receiving') finishReceipt(); else openSendCurrent(); });
+$('cartBtn').addEventListener('click', () => { if (mainMode === 'returns') openReturnsSend(); else if (mainMode === 'receiving') receiptFinishFromBar(); else openSendCurrent(); });
 $('promptCancel').addEventListener('click', hidePrompt);
 $('promptOk').addEventListener('click', savePrompt);
 $('promptInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); savePrompt(); } });
@@ -24306,11 +24684,11 @@ $('promptScan').addEventListener('click', () => { scanPurpose = 'field'; openSca
 $('piClose').addEventListener('click', hidePromoInfo);
 $('rs_cancel').addEventListener('click', hideReceiptSummary);
 $('rs_ok').addEventListener('click', confirmReceipt);
-$('receiptQuantityClose').addEventListener('click', closeReceiptQuantityReview);
+$('receiptQuantityClose').addEventListener('click', closeReceiptQuantityReviewByUser);
 // v154: בבדיקה שורה-שורה "סיום" בודק שכל השורות סומנו ומתרגם אותן לאותן שורות כמו "יש חוסרים או עודפים"
 $('receiptQuantityConfirm').addEventListener('click', e => { if (receiptQuantityReview && receiptQuantityReview.mode === 'lines') finishReceiptLineCheck(); else commitReceiptQuantityReview(e); });
 $('receiptQuantityModal').addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeReceiptQuantityReview(); return; }
+  if (e.key === 'Escape') { closeReceiptQuantityReviewByUser(); return; }
   // v167: Enter בשדה מחיר הקופה שבשורה — סוגר את המקלדת (המחיר כבר נשמר תוך כדי ההקלדה)
   if (e.key === 'Enter' && e.target && e.target.dataset && e.target.dataset.linePos) { e.preventDefault(); e.target.blur(); }
 });
@@ -24510,7 +24888,7 @@ app.addEventListener('click', (e) => {
   const role = t.dataset.role, id = t.dataset.id;
   if ((role.indexOf('paper-') === 0 || role.indexOf('ledger-') === 0 || role.indexOf('review-') === 0) && paperUiClick(t)) return; // v125
   if (role === 'berman-ocr-confirm') { bermanConfirmOcr(Number(id)); return; }
-  if (role === 'rc-count-by-scan') { receiptCountingMode = 'scan'; closeReceiptQuantityReview(); saveReceiptDraft(); renderReceiving(); return; }
+  // v171: "מעבר לקליטה בסריקת מוצרים" (rc-count-by-scan) ירד — הסריקה היא חלק מהבדיקה שורה-שורה
   if (role === 'rc-quantity-all' || role === 'rc-quantity-differences') { startReceiptQuantityReview(role === 'rc-quantity-all'); return; }
   if (role === 'rc-quantity-none') { startReceiptQuantityReview('none'); return; } // v130
   if (role === 'rc-quantity-lines') { startReceiptLineCheck(); return; } // v154
@@ -24647,13 +25025,14 @@ app.addEventListener('click', (e) => {
   else if (role === 'rc-open-photo' || role === 'rc-open-photo-quantity') {
     if (!aiAllPagesOrientationConfirmed()) { showToast('אשר שכל התמונות ישרות לפני שמתחילים', null, null, 3200); aiOpenNextUnconfirmedOrientation(); return; }
     receiptDocDate = (($('rcDocDate') || {}).value || '').trim() || null;
-    receiptCountingMode = role === 'rc-open-photo-quantity' && !receiptAttachTarget ? 'manual' : 'scan';
+    // v171: בדיקה שורה-שורה (שני התפקידים — אותו דבר); בצירוף נייר לקליטה שמורה הספירה כבר נעשתה, ונשארת
+    receiptCountingMode = !receiptAttachTarget ? 'manual' : 'scan';
     receiptOpened = true; receiptEntryMode = 'photo'; receiptAnchorSource = null;
     receiptDupConfirmed = false; receiptLinesConfirmed = false;
     saveReceiptDraft(); refreshReceipt();
-    // v63: בצירוף נייר הספירה כבר נעשתה — אין מה לפתוח את הסורק
-    if (!receiptAttachTarget && role !== 'rc-open-photo-quantity') openReceivingScanner();
     bermanRunPaperScanInBackground();
+    // v171: חלון הבדיקה נפתח מיד, וסורקים בזמן שהתעודה נקראת (בצירוף נייר — אין מה לסרוק)
+    if (!receiptAttachTarget) openReceiptLinePending();
   }
   // v63: פתיחת קליטה בלי תעודה. אין עוגנים, אין צילום ואין מה לקרוא —
   // רק סורקים את מה שהגיע. התעודה תיסגר פתוחה עד שיצורף לה נייר.
@@ -24665,8 +25044,10 @@ app.addEventListener('click', (e) => {
     receiptOpened = true; receiptEntryMode = 'manual'; receiptAnchorSource = null;
     receiptDupConfirmed = false; receiptLinesConfirmed = false; editingNotes = false;
     resetAiInvoiceScan(); aiScanDocuments = []; receiptPaperScanState = ''; receiptPaperScanProblems = [];
-    saveReceiptDraft(); refreshReceipt(); openReceivingScanner();
+    // v171: גם בלי נייר — אותו חלון בדיקה (בלי רשימה): סורקים בו, ו"סיום" שומר; נייר שמצלמים באמצע הופך אותה לשורה-שורה
+    saveReceiptDraft(); refreshReceipt(); openReceiptLinePending();
   }
+  else if (role === 'rc-nodoc-check') { openReceiptLinePending(); } // v171: "המשך לסרוק" במסך של קבלת סחורה בלי נייר
   // v63: הנייר נמצא באמצע הסריקה — פותחים את שדות העוגנים, ומרגע שיש בהם
   // מספר הקליטה חוזרת להיות רגילה לכל דבר.
   else if (role === 'rc-nodoc-found') { editingNotes = true; saveReceiptDraft(); refreshReceipt(); }
@@ -24687,7 +25068,7 @@ app.addEventListener('click', (e) => {
   else if (role === 'rc-entry-photo-multi') { rcMultiPhotoWanted = true; receiptEntryMode = 'photo'; bermanSeedPhotoFirstScan(1); renderReceiving(); }
   else if (role === 'rc-entry-photo-single') { rcMultiPhotoWanted = false; renderReceiving(); }
   // v126: הסבב נגמר בלי תעודת משלוח — ממשיכים כקליטה בלי נייר (v63), עם מה שכבר נספר
-  else if (role === 'rc-nodoc-switch') { receiptNoDoc = true; receiptEntryMode = 'manual'; receiptPaperScanState = ''; receiptPaperScanProblems = []; aiScanDocuments = []; editingNotes = false; saveReceiptDraft(); refreshReceipt(); }
+  else if (role === 'rc-nodoc-switch') { receiptNoDoc = true; receiptEntryMode = 'manual'; receiptPaperScanState = ''; receiptPaperScanProblems = []; aiScanDocuments = []; editingNotes = false; saveReceiptDraft(); refreshReceipt(); openReceiptLinePending(); } // v171: ממשיכים באותו חלון, עם מה שכבר נסרק
   else if (role === 'rc-entry-manual') { receiptEntryMode = 'manual'; if (receiptList.length && !receiptAttachTarget && !receiptOpened) { receiptOpened = true; editingNotes = true; saveReceiptDraft(); } renderReceiving(); }
   else if (role === 'rc-photo-doc-add') { bermanPhotoFirstAddDoc(); }
   else if (role === 'rc-photo-doc-remove') { bermanPhotoFirstRemoveDoc(parseInt(t.dataset.doc, 10) || 0); }

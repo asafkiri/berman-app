@@ -56,10 +56,12 @@ window.t={
  },
  go:view=>setView(view),
  state:()=>({view:currentView,count:currentLedger().count,items:structuredClone(receiptList)}),
+ // v171: קבלת סחורה בלי נייר נבדקת בחלון הבדיקה ("בדיקה בלי נייר") — שדה הכמות נמצא בו, ולא במסך הקליטה
  openDraft(){
    receiptOpened=true;receiptNoDoc=true;receiptEntryMode='manual';receiptDocDate='2026-10-06';
    receiptList=[{productId:'code_9101',code:'9101',name:'לחם בדיקה',qty:9,unitPrice:10}];
    setView('receiving');
+   openReceiptLinePending();
  }
 };
 startListeners();setView('receiving');window.t.loaded=true;
@@ -128,7 +130,9 @@ try {
   // עדכון זיכוי בזמן הקלדת כמות אינו מחליף את השדה ואינו גונב את המיקוד.
   await emit(page, 'papers', [], false);
   await page.evaluate(() => window.t.openDraft());
-  const qty = page.locator('#app input[data-role="rc-qty"]').first();
+  assert.equal(await page.locator('#app [data-nodoc-check]').count(), 1, 'מאחורי החלון — המסך של קבלת סחורה בלי נייר');
+  const qty = page.locator('#receiptQuantityRows input[data-extra-got]').first();
+  assert.equal(await qty.inputValue(), '9', 'מה שנספר מוצג בחלון הבדיקה');
   await qty.fill('4');
   await page.evaluate(() => { window.__focusedQty=document.activeElement; });
   assert.match(await page.locator('#openIssuesBanner').innerText(), /דבר אחד לטיפול מול ברמן/);

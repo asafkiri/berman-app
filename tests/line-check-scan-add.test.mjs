@@ -40,7 +40,7 @@ const fakeCamera = r => r.run(`window.BarcodeDetector = class { detect() { retur
   $('scanVideo').play = async () => {};`);
 async function twoPapers(opts) {
   const r = app(delivery(BIG), opts);
-  await receive(r);
+  await receive(r, 1, 0, { count: false }); // v171: הניירות נקראו במסך הניירות (בלי "התחל לסרוק עכשיו") — התעודה כבר בקליטה כשהבדיקה נפתחת
   r.serve(small());
   await readPapers(r, 1, 1);
   assert.deepEqual(state(r).nums, [BIG, SMALL], 'שתי התעודות בקליטה');
