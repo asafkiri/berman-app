@@ -80,14 +80,25 @@ test('שווי כרטיס התעודה בהיסטוריה — אותו כלל', 
   assert.match(r.node('app').innerHTML, /שווי לפי מחירי האפליקציה[^₪]*₪36\.00/);
 });
 
-test('אריחי החודש (הגיע/חזר החודש ₪, % מהכסף) — בלי כסף על השורות, לפי מחיר החשבונית', () => {
+// v169: התאריך מקובע. הבדיקה שמה קליטה והחזרה ב-1 בחודש של "היום" האמיתי — אבל תעודת חזרה שתאריכה יום ראשון נספרת ליום
+// שלפניה (הסגירה של מוצאי שבת שהוקלדה בבוקר; anBuild), ולכן בכל חודש שה-1 בו יוצא ביום ראשון (1.11.2026) ההחזרה נפלה מחוץ
+// לחודש והבדיקה נכשלה, בלי קשר לקוד — מ-1.11.2026 היא הייתה אדומה ב-main. עכשיו שני המקרים נבדקים במפורש.
+function monthTiles(today) {
   const r = setup();
-  const today = r.run('todayStr()'), first = today.slice(0, 8) + '01';
+  r.run(`todayStr = () => '${today}'`);
+  const first = today.slice(0, 8) + '01';
   r.context.rcs = [{ id: 'm1', schemaVersion: 2, timestamp: 1, date: first, docDate: first, items: [{ productId: 'pB', name: 'מוצר ב', qty: 10 }] }];
   r.context.rets = [{ id: 'm2', schemaVersion: 2, timestamp: 2, date: first, docDate: first, credited: true, items: [{ productId: 'pB', name: 'מוצר ב', qty: 2 }] }];
   r.run(`anBuild(rcs, rets, [anThisWeek()], [], null, 'test', false);`);
-  const m = json(r, '{ recvValue: anData.month.recvValue, retValue: anData.month.retValue, retPctMoney: anData.month.retPctMoney }');
-  assert.deepEqual(m, { recvValue: 50, retValue: 10, retPctMoney: 20 });
+  return json(r, '{ recvValue: anData.month.recvValue, retValue: anData.month.retValue, retPctMoney: anData.month.retPctMoney }');
+}
+test('אריחי החודש (הגיע/חזר החודש ₪, % מהכסף) — בלי כסף על השורות, לפי מחיר החשבונית', () => {
+  // 1.10.2026 — יום חמישי: הקליטה וההחזרה של ה-1 בחודש — שתיהן בחודש
+  assert.deepEqual(monthTiles('2026-10-15'), { recvValue: 50, retValue: 10, retPctMoney: 20 });
+});
+test('אריחי החודש: החזרה שתאריכה יום ראשון ה-1 בחודש שייכת לשבת שלפניה — לחודש הקודם', () => {
+  // 1.11.2026 — יום ראשון: הקליטה של ה-1 בחודש נספרת; ההחזרה היא הסגירה של שבת 31.10, ואינה ב"חזר החודש"
+  assert.deepEqual(monthTiles('2026-11-12'), { recvValue: 50, retValue: 0, retPctMoney: 0 });
 });
 
 test('עלות ברירת המחדל בניתוח: מחיר החשבונית שבתוקף היום (לא הבסיס)', () => {

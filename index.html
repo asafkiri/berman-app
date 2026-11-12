@@ -849,7 +849,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '168'; // בדיקה שורה-שורה: ברקוד שמודפס על כמה מוצרים — "לאיזה מוצר הכוונה?", לא הראשון במאגר
+const APP_VERSION = '169'; // סריקת מוצר לשלט ולסל מבצע: ברקוד שמודפס על כמה מוצרים — "לאיזה מוצר הכוונה?", לא הראשון במאגר (ההמשך של 168)
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -959,7 +959,8 @@ function productSearchMatch(p, q) {
   return (p.name || '').includes(t) || (p.barcode || '').includes(t) || productCode(p).indexOf(t) === 0;
 }
 // בורר כשברקוד סרוק מתאים ליותר ממוצר אחד — בברמן זה חוקי
-function openBarcodeChoicePicker(list, onPick) {
+// v169: hint — שורת ההסבר, למסכים שאין בהם תעודה (שלט, סל מבצע); בלעדיה — הנוסח של הקליטה, כמו קודם
+function openBarcodeChoicePicker(list, onPick, hint) {
   closeScanner();
   const old = document.getElementById('bcChoiceOverlay'); if (old) old.remove();
   const ov = document.createElement('div');
@@ -967,7 +968,7 @@ function openBarcodeChoicePicker(list, onPick) {
   ov.className = 'fixed inset-0 bg-black/50 z-[75] flex items-end justify-center p-3';
   ov.innerHTML = '<div class="bg-white w-full max-w-md rounded-3xl p-4 shadow-2xl">' +
     '<div class="flex items-center justify-between mb-1"><div class="font-black text-slate-800 text-lg"><i class="fa-solid fa-barcode text-amber-700"></i> לאיזה מוצר הכוונה?</div><button data-bc-close class="btn-tap w-9 h-9 rounded-lg bg-slate-100 text-slate-500"><i class="fa-solid fa-xmark"></i></button></div>' +
-    '<div class="text-[11px] text-slate-400 font-bold mb-2">אותו ברקוד מודפס על כמה מוצרים — בחר לפי קוד הפריט שבתעודה.</div>' +
+    '<div class="text-[11px] text-slate-400 font-bold mb-2">' + htmlEscape(hint || 'אותו ברקוד מודפס על כמה מוצרים — בחר לפי קוד הפריט שבתעודה.') + '</div>' +
     list.map(p => '<button data-bc-id="' + htmlEscape(p.id) + '" class="btn-tap w-full flex items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 mb-1.5"><span class="min-w-0 text-right"><span class="block font-black text-slate-800 truncate">' + htmlEscape(p.name || '') + '</span><span class="block text-[11px] text-slate-400 font-bold">קוד ' + htmlEscape(productCode(p) || '—') + '</span></span>' + (productListPrice(p) > 0 ? '<span class="font-black text-amber-800 shrink-0 text-xs">מחירון ₪' + fmt3(productListPrice(p)) + '</span>' : '') + '</button>').join('') +
   '</div>';
   ov.addEventListener('click', (e) => {
@@ -22161,12 +22162,23 @@ function toggleSignProduct(pid) {
   }
   signPickRefreshUi();
 }
+// v169: ברקוד שמודפס על כמה מוצרים (בברמן זה חוקי — 4033569: ביס עננים, לחמניות המבורגר, פרנה, לבש) — "לאיזה מוצר הכוונה?",
+// כמו בקליטה בסריקה, במקום להוסיף בשקט את הראשון במאגר (findProductByBarcode): מי שסרק פרנה קיבל "נוסף לשלט: ביס עננים", וכשביס
+// עננים כבר היה בשלט — "כבר בשלט", ואת הפרנה אי אפשר היה להוסיף בסריקה. (בעל העסק, 12.11.2026, אחרי 168: "תתקן גם אותו".)
+// הבורר סוגר את המצלמה (openBarcodeChoicePicker); אחרי הבחירה המוצר נוסף וחוזרים למסך השלט — להמשך סריקה, כפתור המצלמה.
+// סגירת הבורר בלי לבחור — כלום לא נוסף. מוצר אחד — בדיוק כמו קודם, והסריקה ממשיכה. אותו דבר בסל המבצע (handlePromoScan).
+const SCAN_CHOICE_HINT = 'אותו ברקוד מודפס על כמה מוצרים — בחר את המוצר שסרקת.';
 function handleSignProdScan(code) {
   const s = signInternalCurrent();
   if (!s) { closeScanner(); return; }
   const clean = (code || '').toString().trim();
-  const product = findProductByBarcode(clean);
-  if (!product) { showToast('❌ ברקוד לא נמצא במוצרים: ' + clean, null, null, 2200); return; }
+  const matches = findProductsByBarcode(clean);
+  if (!matches.length) { showToast('❌ ברקוד לא נמצא במוצרים: ' + clean, null, null, 2200); return; }
+  if (matches.length > 1) { openBarcodeChoicePicker(matches, p => signProdScanAdd(p, clean), SCAN_CHOICE_HINT); return; }
+  signProdScanAdd(matches[0], clean);
+}
+function signProdScanAdd(product, clean) {
+  const s = signInternalCurrent(); if (!s) return;
   if ((s.productIds || []).indexOf(product.id) !== -1) { showToast('כבר בשלט: ' + (product.name || clean), null, null, 1600); return; }
   toggleSignProduct(product.id);
   showToast('➕ נוסף לשלט: ' + (product.name || clean), null, null, 1600);
@@ -22735,8 +22747,14 @@ function handlePromoScan(code) {
   const clean = (code || '').toString().trim();
   // v163: תיקון — שימוש במאתר הקנוני שמנרמל רווחים/מקפים/תווים נסתרים,
   // בדיוק כמו בקליטה. ההשוואה הנאיבית הקודמת נכשלה על ברקודים כאלה.
-  const product = findProductByBarcode(clean);
-  if (!product) { showToast('❌ ברקוד לא נמצא במוצרים: ' + clean, null, null, 2200); return; }
+  // v169: ברקוד שמודפס על כמה מוצרים — "לאיזה מוצר הכוונה?" במקום הראשון במאגר (ההסבר ב-handleSignProdScan)
+  const matches = findProductsByBarcode(clean);
+  if (!matches.length) { showToast('❌ ברקוד לא נמצא במוצרים: ' + clean, null, null, 2200); return; }
+  if (matches.length > 1) { openBarcodeChoicePicker(matches, p => promoScanAdd(p, clean), SCAN_CHOICE_HINT); return; }
+  promoScanAdd(matches[0], clean);
+}
+function promoScanAdd(product, clean) {
+  if (!promoEdit) return;
   if ((promoEdit.productIds || []).indexOf(product.id) !== -1) { showToast('כבר בסל: ' + (product.name || clean), null, null, 1600); return; }
   togglePromoProduct(product.id);
   showToast('➕ נוסף לסל: ' + (product.name || clean), null, null, 1600);

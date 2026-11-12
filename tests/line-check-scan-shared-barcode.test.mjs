@@ -384,8 +384,9 @@ test('11. שתי תעודות: מוצר שבשתיהן הוא שורה אחת ג
   assert.deepEqual(marks(r), ['101:,1231:,238:,2381:,2387:,3604:ok,209:', '3604:ok,3601:none']);
 });
 
-test('12. הגרסה עלתה ל-168, כולל ההערה ב-service worker', () => {
+test('12. הגרסה (168 ומעלה), כולל ההערה ב-service worker', () => {
   const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-  assert.match(html, /const APP_VERSION = '168'/);
-  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), /גרסת אפליקציה 168/);
+  const v = html.match(/const APP_VERSION = '(\d+)'/)[1];
+  assert.ok(Number(v) >= 168, v);
+  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), new RegExp('גרסת אפליקציה ' + v));
 });
