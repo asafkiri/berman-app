@@ -178,8 +178,9 @@ test('5. שורה מקופלת בלי מחיר קופה — השדה גם בה; 
   assert.equal(r.run(`$('receiptQuantityModal').classList.contains('hidden')`), true, 'Escape סוגר');
 });
 
-test('6. הגרסה עלתה ל-167, כולל ההערה ב-service worker', () => {
+test('6. הגרסה (167 ומעלה), כולל ההערה ב-service worker', () => {
   const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-  assert.match(html, /const APP_VERSION = '167'/);
-  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), /גרסת אפליקציה 167/);
+  const v = html.match(/const APP_VERSION = '(\d+)'/)[1];
+  assert.ok(Number(v) >= 167, v);
+  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), new RegExp('גרסת אפליקציה ' + v));
 });

@@ -15,7 +15,8 @@
 // 7. ברקוד שאינו במאגר: ההודעה של הקליטה, הסריקה ממשיכה, כלום לא השתנה. אותו ברקוד פעמיים ברצף (אחרי ✕ בכרטיס) — נספר
 //    פעם אחת; אחרי סימון וחזרה לרשימה, "סרוק מוצר" פותח מצלמה נקייה — אותו ברקוד הוא סריקה חוזרת (v165).
 // 8. יחידה מול מארז חיוב: סורקים את המארז כשבתעודה היחידה — השורה של היחידה, לא "הגיע בנוסף".
-// 9. ברקוד שקיים בשני מוצרים במאגר — נפתר למוצר שבנייר.
+// 9. ברקוד שקיים בשני מוצרים במאגר — v168: שואלים "לאיזה מוצר הכוונה?", והמוצר שבנייר ראשון (עד 167: נפתר לבד למוצר שבנייר;
+//    המקרים המלאים — tests/line-check-scan-shared-barcode.test.mjs).
 // 10. שוויון: אותה תעודה מסומנת פעם בסריקה ופעם ביד — אותן שורות, אותו "סיום", אותה ספירה ואותה קליטה שמורה.
 // 11. קריאה בלבד (canEditSharedReceipt) — המצלמה נסגרת בלי לסמן, עם ההודעה; הכרטיס שמעל המצלמה נחשב עריכת קליטה.
 // 12. הגרסה.
@@ -386,12 +387,18 @@ test('8. יחידה מול מארז חיוב: סורקים את המארז כש�
   cardClick(r, { scanDismiss: '' });
 });
 
-test('9. ברקוד שקיים בשני מוצרים במאגר — נפתר למוצר שבנייר', async () => {
+test('9. ברקוד שקיים בשני מוצרים במאגר — שואלים, והמוצר שבנייר ראשון', async () => {
   const r = await scanning(await twoPapers());
   assert.equal(r.run(`findProductByBarcode('497112').id`), 'code_101');
   r.run(`products.push({ id: 'code_101_old', name: 'אחיד פרוס (פריט ישן)', code: '1010', barcode: '497112', price: 5 }); products.unshift(products.pop());`); // הפריט הישן ראשון במאגר
   assert.equal(r.run(`findProductByBarcode('497112').id`), 'code_101_old');
   beep(r, BC.code_101);
+  // v168: הברקוד אינו אומר איזה משני המוצרים ביד — שואלים (בעל העסק, 12.11.2026: "עדיף לשאול"), ומי שבנייר ראשון, עם השורה והסך שלו
+  assert.deepEqual(json(r, 'receiptLineScanCard'), { kind: 'choose', choices: ['code_101_old', 'code_101'] });
+  assert.equal(strip(card(r)), 'לאיזה מוצר הכוונה? אותו ברקוד מודפס על 2 מוצרים — בחר את המוצר שסרקת. ' +
+    'אחיד פרוס ברמן בתעודה 1 · שורה 1 · 17 יח׳ ב-2 תעודות קוד 101 אחיד פרוס (פריט ישן) לא בתעודה קוד 1010');
+  assert.deepEqual(marks(r), [',,,,', ','], 'הסריקה עצמה אינה מסמנת');
+  cardClick(r, { scanPick: 'code_101' });
   assert.deepEqual(json(r, '[receiptLineScanCard.kind, receiptLineScanCard.di, receiptLineScanCard.li, receiptLineScanCard.scanned.id]'), ['line', 0, 0, 'code_101']);
   cardClick(r, { scanMark: 'ok' });
   assert.deepEqual(marks(r), ['ok,,,,', 'ok,']); assert.deepEqual(review(r).extras, []);

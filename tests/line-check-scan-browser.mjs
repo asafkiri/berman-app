@@ -7,6 +7,8 @@
 //   "אחרת" — השדה בפוקוס, הסיכום מתעדכן בהקלדה, Enter שומר; מוצר שאינו בתעודה — "הוסף"; ברקוד לא מוכר — ההודעה.
 // - v165: כל סימון מהכרטיס סוגר את המצלמה וחוזר לרשימה — רק השורה שסומנה מודגשת, והיא נגללת לתוך המסך (גם הכרטיס הצהוב
 //   בתחתית); "סרוק מוצר" שוב למוצר הבא, עם המונה המעודכן. ✕ בכרטיס, "תקן את הסה״כ" וברקוד לא מוכר משאירים את המצלמה.
+// - v168: ברקוד שמודפס על כמה מוצרים — "לאיזה מוצר הכוונה?" בכרטיס שמעל המצלמה, בלחיצות אמיתיות: הבחירה פותחת את הכרטיס של
+//   המוצר שנבחר, "בחר מוצר אחר" מחזיר לבחירה, ✕ סוגר בלי לסמן והמצלמה נשארת.
 // - ✕ במצלמה מחזיר לרשימה כמו שהיא: השורות שסומנו בסריקה מקופלות, המונה נכון; בלי שגיאות דף ובלי גלילה לצדדים.
 // Run: node tests/line-check-scan-browser.mjs (Playwright + Chromium; BERMAN_CHROMIUM optional; BERMAN_SHOTS — תיקייה לצילומי מסך)
 import assert from 'node:assert/strict';
@@ -69,12 +71,14 @@ window.fetch = async url => { throw new Error('External network is forbidden in 
 window.t = { view: () => currentView, join: id => receivingJoinDelivery({ paperId: id, explicit: true }),
   nums: () => aiScanResponse ? aiScanResponse.scan.documents.map(d => d.docNumber) : [], mode: () => receiptQuantityReview && receiptQuantityReview.mode,
   marks: () => receiptQuantityReview.docs.map(d => d.lines.map(l => l.mark + (l.got ? ':' + l.got : '')).join(',')), extras: () => receiptQuantityReview.extras.map(x => [x.productId, x.got]),
-  stream: () => !!scanStream, beep: code => onScanned(code), purpose: () => scanPurpose, later: () => { lastScanTime = 0; }, card: () => receiptLineScanCard };
+  stream: () => !!scanStream, beep: code => onScanned(code), purpose: () => scanPurpose, later: () => { lastScanTime = 0; }, card: () => receiptLineScanCard,
+  // v168: עוד מוצר על הברקוד של הפרנה (4033569), לפניה במאגר — כמו בחנות
+  addShared: () => { products.splice(products.findIndex(p => p.id === 'code_3604'), 0, { id: 'code_209', code: '209', name: 'ביס עננים - 8 לחמניות בסגנון בריוש', barcode: '4033569', price: 15, listPrice: 15 }); } };
 setView('receiving'); window.t.loaded = true;
 `;
 const css = `.hidden{display:none!important}.flex{display:flex}.grid{display:grid}.grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.flex-1{flex:1}.min-w-0{min-width:0}.shrink-0{flex-shrink:0}.gap-2{gap:.5rem}.fixed{position:fixed}.inset-0{inset:0}.overflow-y-auto{overflow-y:auto}.min-h-0{min-height:0}.flex-col{flex-direction:column}.w-full{width:100%}.max-w-lg{max-width:32rem}.whitespace-nowrap{white-space:nowrap}body{margin:0;font:16px Arial}button,input{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}
 .absolute{position:absolute}.relative{position:relative}.inset-x-0{left:0;right:0}.bottom-0{bottom:0}.items-center{align-items:center}.items-start{align-items:flex-start}.gap-3{gap:.75rem}.p-3{padding:.75rem}.p-4{padding:1rem}.mt-3{margin-top:.75rem}
-.grid-cols-\\[1\\.15fr_1fr\\]{grid-template-columns:1.15fr 1fr}.grid-cols-\\[1fr_auto_auto\\]{grid-template-columns:1fr auto auto}.bg-white{background:#fff}.bg-black{background:#000}.rounded-2xl{border-radius:1rem}.text-3xl{font-size:1.875rem}.min-h-\\[52px\\]{min-height:52px}.min-h-\\[48px\\]{min-height:48px}.ring-4{box-shadow:0 0 0 4px #93c5fd}.pointer-events-none{pointer-events:none}.h-full{height:100%}.items-stretch{align-items:stretch}.top-0{top:0}.px-4{padding-left:1rem;padding-right:1rem}.pt-4{padding-top:1rem}.pb-4{padding-bottom:1rem}video{background:#222}`;
+.grid-cols-\\[1\\.15fr_1fr\\]{grid-template-columns:1.15fr 1fr}.grid-cols-\\[1fr_auto_auto\\]{grid-template-columns:1fr auto auto}.bg-white{background:#fff}.bg-black{background:#000}.rounded-2xl{border-radius:1rem}.text-3xl{font-size:1.875rem}.min-h-\\[56px\\]{min-height:56px}.min-h-\\[52px\\]{min-height:52px}.min-h-\\[48px\\]{min-height:48px}.min-h-\\[44px\\]{min-height:44px}.max-h-\\[50vh\\]{max-height:50vh}.block{display:block}.justify-between{justify-content:space-between}.ring-4{box-shadow:0 0 0 4px #93c5fd}.pointer-events-none{pointer-events:none}.h-full{height:100%}.items-stretch{align-items:stretch}.top-0{top:0}.px-4{padding-left:1rem;padding-right:1rem}.pt-4{padding-top:1rem}.pb-4{padding-bottom:1rem}video{background:#222}`;
 const pageHtml = html.replace(/<script\s+src="https:[^"]+"><\/script>/g, '').replace(/<link[^>]+(?:href="https:[^"]+"|rel="manifest")[^>]*>/g, '')
   .replace(/<script type="module">[\s\S]*?<\/script>/, () => '<script type="module">' + setup + moduleSource + replay + '</script>')
   .replace('</head>', '<style>' + css + '</style></head>');
@@ -242,6 +246,36 @@ try {
   assert.equal(await page.locator('#scanLineCard').isVisible(), false);
   assert.match(await page.locator('#toastMsg').textContent(), /ברקוד לא מזוהה/);
   assert.equal(await page.locator('#scanModal').isVisible(), true);
+  // 9b. v168: ברקוד שמודפס על כמה מוצרים (4033569 — ביס עננים ופרנה; אף אחד מהם אינו בתעודות), והמצלמה קוראת את הקוד המלא
+  //     מהאריזה — "לאיזה מוצר הכוונה?" בלחיצות אמיתיות: הבחירה פותחת "הגיע בנוסף" של המוצר שנבחר (לא של הראשון במאגר),
+  //     "בחר מוצר אחר" מחזיר לבחירה, ו-✕ סוגר בלי לסמן — המצלמה נשארת
+  const cardText = async () => (await page.locator('#scanLineCard').innerText()).replace(/\s+/g, ' ').trim();
+  await page.evaluate(() => { window.t.addShared(); window.t.later(); window.t.beep('7290004033569'); });
+  await page.waitForSelector('#scanLineCard [data-scan-pick]');
+  assert.equal((await page.evaluate(() => window.t.card())).kind, 'choose');
+  assert.match(await cardText(), /לאיזה מוצר הכוונה\? אותו ברקוד מודפס על 2 מוצרים — בחר את המוצר שסרקת\. ביס עננים - 8 לחמניות בסגנון בריוש לא בתעודה קוד 209 פרנה - 4 בשקית 400 גר לא בתעודה קוד 3604$/);
+  assert.equal(await page.locator('#scanLineCard [data-scan-pick]').count(), 2);
+  assert.equal(await page.locator('#scanLineGot').count(), 0, 'בבחירה אין שדה כמות — המקלדת לא קופצת');
+  for (const b of await page.locator('#scanLineCard [data-scan-pick]').all()) { const box = await b.boundingBox(); assert.ok(box.height >= 44 && box.x >= 0 && box.x + box.width <= 390, 'כפתור בחירה — יעד מגע מלא בתוך המסך: ' + JSON.stringify(box)); }
+  const sheet = await page.locator('#scanLineCard > div').boundingBox();
+  assert.ok(sheet.y >= 0 && sheet.y + sheet.height <= 860, 'הבחירה כולה בתוך המסך: ' + JSON.stringify(sheet));
+  await snap('3d-choose');
+  await page.locator('[data-scan-pick="code_3604"]').click();
+  await page.waitForSelector('#scanLineGot');
+  assert.match(await cardText(), /^לא בתעודה — הגיע בנוסף פרנה - 4 בשקית 400 גר .* כמה הגיע\? הוסף התקבלו 1 · עודף 1 לא המוצר הזה\? בחר מוצר אחר$/);
+  assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), 'scanLineGot', 'שדה הכמות בפוקוס');
+  assert.ok((await page.locator('[data-scan-choose]').boundingBox()).height >= 44, '"בחר מוצר אחר" — יעד מגע של 44px');
+  await snap('3e-picked');
+  await page.locator('[data-scan-choose]').click();
+  await page.waitForSelector('#scanLineCard [data-scan-pick]');
+  assert.equal(await page.locator('#scanLineGot').count(), 0);
+  assert.equal((await page.evaluate(() => window.t.card())).kind, 'choose', '"בחר מוצר אחר" — חזרה לבחירה');
+  await page.locator('#scanLineCard [data-scan-dismiss]').click();
+  await cardHidden();
+  assert.equal(await page.locator('#scanModal').isVisible(), true, '✕ בבחירה — המצלמה נשארת');
+  assert.equal(await page.evaluate(() => window.t.purpose()), 'linecheck');
+  assert.deepEqual(await page.evaluate(() => window.t.extras()), [['code_119', '1']], 'כלום לא נוסף ולא סומן');
+  assert.deepEqual(await page.evaluate(() => window.t.marks()), ['qty:10,ok,,ok,', 'none,']);
   // 10. ✕ במצלמה — חזרה לרשימה כמו שהיא, בלי שורה מודגשת (כלום לא סומן מאז)
   await page.locator('#scanClose').click();
   await page.waitForSelector('#receiptQuantityModal:not(.hidden)');
@@ -280,7 +314,7 @@ try {
   await snap('6-settled');
   assert.ok(await over() <= 1, 'בלי גלילה לצדדים');
   assert.deepEqual(errors, [], 'בלי שגיאות דף');
-  console.log('✓ v160–v165 בדפדפן: הסריקה בבדיקה שורה-שורה — התחתית הקבועה, המצלמה, הכרטיס בלחיצות אמיתיות, "אחרת", "עוד כמה?" (פוקוס, מסומן, Enter), "תקן את הסה״כ", "הגיע בנוסף", ברקוד לא מוכר, כל סימון חוזר לשורה שלו ברשימה (v165), והמספר שקובע את הסימון; בלי גלילה לצדדים ובלי שגיאות');
+  console.log('✓ v160–v168 בדפדפן: הסריקה בבדיקה שורה-שורה — התחתית הקבועה, המצלמה, הכרטיס בלחיצות אמיתיות, "אחרת", "עוד כמה?" (פוקוס, מסומן, Enter), "תקן את הסה״כ", "הגיע בנוסף", ברקוד לא מוכר, "לאיזה מוצר הכוונה?" לברקוד של כמה מוצרים (v168), כל סימון חוזר לשורה שלו ברשימה (v165), והמספר שקובע את הסימון; בלי גלילה לצדדים ובלי שגיאות');
 } finally {
   await browser.close();
   server.close();
