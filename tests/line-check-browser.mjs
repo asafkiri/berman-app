@@ -5,6 +5,7 @@
 // - לחיצה על "הגיע" מסמנת (aria-pressed) ומעדכנת את המונה; "כמות אחרת" פותח שדה עם פוקוס, והסיכום מתעדכן בהקלדה.
 // - "הנייר הזה לא שלנו" → "הוצא מהקליטה": תעודה אחת נשארת, ההודעה בראש החלון, והנייר בסל המחזור בענן.
 // - "סיום" לפני הזמן: ההודעה בראש החלון והשורה שנשארה מסומנת; אחרי שהכל סומן — החלון נסגר והקליטה ממשיכה.
+// - v170: "בטל סימון" בשורה שנפתחה ב"שנה" — בלחיצה אמיתית השורה חוזרת ל"עוד לא נבדקה", והפוקוס נשאר על "הגיע" שלה.
 // - v159: שורה שסומנה "הגיע" מתקפלת ("הגיע · 12 יח׳", בלי כפתורי סימון), "שנה" פותח אותה עם aria-pressed והפוקוס על "הגיע",
 //   ו"הגיע" שוב מקפל; המונה בראש החלון אומר גם את החוסר.
 // - בלי שגיאות דף ובלי גלילה לצדדים.
@@ -62,10 +63,11 @@ paperScanFromCloud = async id => { const x = D.read.find(y => y.paper.id === id)
 todayStr = () => '${TODAY}'; ledgerInvalidate();
 window.fetch = async url => { throw new Error('External network is forbidden in local replay: ' + url); };
 window.t = { view: () => currentView, join: id => receivingJoinDelivery({ paperId: id, explicit: true }),
-  nums: () => aiScanResponse ? aiScanResponse.scan.documents.map(d => d.docNumber) : [], mode: () => receiptQuantityReview && receiptQuantityReview.mode };
+  nums: () => aiScanResponse ? aiScanResponse.scan.documents.map(d => d.docNumber) : [], mode: () => receiptQuantityReview && receiptQuantityReview.mode,
+  marks: () => receiptQuantityReview.docs.map(d => d.lines.map(l => l.mark + (l.got ? ':' + l.got : '')).join(',')) };
 setView('receiving'); window.t.loaded = true;
 `;
-const css = `.hidden{display:none!important}.flex{display:flex}.grid{display:grid}.grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.flex-1{flex:1}.min-w-0{min-width:0}.shrink-0{flex-shrink:0}.gap-2{gap:.5rem}.fixed{position:fixed}.inset-0{inset:0}.overflow-y-auto{overflow-y:auto}.min-h-0{min-height:0}.flex-col{flex-direction:column}.w-full{width:100%}.max-w-lg{max-width:32rem}.whitespace-nowrap{white-space:nowrap}body{margin:0;font:16px Arial}button,input{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}`;
+const css = `.hidden{display:none!important}.flex{display:flex}.grid{display:grid}.grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.flex-1{flex:1}.min-w-0{min-width:0}.shrink-0{flex-shrink:0}.gap-2{gap:.5rem}.fixed{position:fixed}.inset-0{inset:0}.overflow-y-auto{overflow-y:auto}.min-h-0{min-height:0}.flex-col{flex-direction:column}.w-full{width:100%}.max-w-lg{max-width:32rem}.whitespace-nowrap{white-space:nowrap}body{margin:0;font:16px Arial}button,input{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}.min-h-\\[44px\\]{min-height:44px}.flex-wrap{flex-wrap:wrap}`;
 const pageHtml = html.replace(/<script\s+src="https:[^"]+"><\/script>/g, '').replace(/<link[^>]+(?:href="https:[^"]+"|rel="manifest")[^>]*>/g, '')
   .replace(/<script type="module">[\s\S]*?<\/script>/, () => '<script type="module">' + setup + moduleSource + replay + '</script>')
   .replace('</head>', '<style>' + css + '</style></head>');
@@ -110,8 +112,24 @@ try {
   await page.locator('[data-line-open="0:0"]').click();
   assert.equal(await page.locator('[data-line-mark="0:0:ok"]').getAttribute('aria-pressed'), 'true');
   assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.dataset.lineMark), '0:0:ok', 'הפוקוס על "הגיע"');
+  // v170: "בטל סימון" בלחיצה אמיתית — בשורה שנפתחה ב"שנה": השורה חוזרת ל"עוד לא נבדקה" בשתי התעודות (אף כפתור לא דולק, המונה
+  // יורד), והפוקוס נשאר על "הגיע" שלה; בשורה שלא סומנה ובשורה מקופלת הכפתור אינו קיים
+  const clear = page.locator('[data-line-clear="0:0"]');
+  assert.equal(await page.locator('[data-line-clear]').count(), 1, 'רק בשורה הפתוחה שסומנה');
+  assert.equal((await clear.innerText()).trim(), 'בטל סימון');
+  const clearBox = await clear.boundingBox(), rowBox = await page.locator('#lineCheck_0_0').boundingBox();
+  assert.ok(clearBox.height >= 44 && clearBox.x >= rowBox.x && clearBox.x + clearBox.width <= rowBox.x + rowBox.width + 1, '"בטל סימון" — יעד מגע של 44px, בתוך הכרטיס: ' + JSON.stringify(clearBox));
+  await clear.click();
+  assert.deepEqual(await page.evaluate(() => window.t.marks()), [',,,,', ','], 'בלי סימון, בשתי השורות של המוצר');
+  assert.equal(await page.locator('[data-line-clear]').count(), 0);
+  for (const m of ['ok', 'qty', 'none']) assert.equal(await page.locator('[data-line-mark="0:0:' + m + '"]').getAttribute('aria-pressed'), 'false');
+  assert.equal(await page.locator('#receiptQuantityProgress').innerText(), 'סומנו 0 מתוך 5 שורות');
+  assert.equal(await page.locator('#receiptQuantityConfirm').innerText(), 'סיום (נשארו 5)');
+  assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.dataset.lineMark), '0:0:ok', 'הפוקוס על "הגיע" של השורה שבוטלה');
   await page.locator('[data-line-mark="0:0:ok"]').click();
   assert.equal(await page.locator('[data-line-mark="0:0:ok"]').count(), 0, 'מתקפלת שוב');
+  // v170: בשורה המקופלת מה שהגיע ומחיר הקופה הם שני חלקים שאינם נשברים באמצע
+  assert.equal(await page.locator('#lineCheck_0_0 .whitespace-nowrap').count() >= 1, true);
   await page.locator('[data-line-mark="0:1:qty"]').click();
   assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.dataset.lineGot), '0:1', 'הפוקוס בשדה הכמות');
   await page.keyboard.type('4');
