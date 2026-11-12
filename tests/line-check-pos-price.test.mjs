@@ -30,7 +30,7 @@ function small(number = SMALL) {
 // שתי התעודות בקליטה והבדיקה שורה-שורה פתוחה; אחיד פרוס (code_101) עם מחיר קופה, לחמניות (code_1231) בלי — ועלות 7 (8.26 כולל מע״מ)
 async function open() {
   const r = app(delivery(BIG));
-  await receive(r);
+  await receive(r, 1, 0, { count: false }); // v171: הניירות נקראו במסך הניירות (בלי "התחל לסרוק עכשיו") — התעודה כבר בקליטה כשהבדיקה נפתחת
   r.serve(small());
   await readPapers(r, 1, 1);
   assert.deepEqual(state(r).nums, [BIG, SMALL], 'שתי התעודות בקליטה');

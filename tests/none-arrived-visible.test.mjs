@@ -5,11 +5,13 @@
 // - הכפתור לא מוצג כשאין עדיין תעודה בקליטה, כשעוד נייר נקרא, בקליטה בלי נייר, בזמן בדיקה/סיכום, ובטלפון שרק צופה.
 // - מסך הקליטה: לפני שנספר משהו — שלוש הבחירות פתוחות (לא מקופלות), ו"לא הגיע כלום" גדול מעל "סרוק פריט לתעודה".
 //   אחרי שנספרה שורה — מתקפל לשורה אחת, והבחירה עדיין שם.
+//   v171: קליטה שיש בה תעודת משלוח היא של בדיקה שורה-שורה — מסך הבדיקה: ארבע הבחירות תמיד פתוחות וברוחב מלא, בלי "סרוק פריט
+//   לתעודה". המסך הקודם (עם הקיפול) נשאר רק לקליטה שנספרת במסך הסריקה — טיוטה שהתחילה בגרסה קודמת.
 // - בזמן שעוד נייר מהנהג נקרא לקליטה (אולי עוד תעודת משלוח) — הבחירה מחכה לו, בשני המסכים.
 // הרצה: node --test tests/none-arrived-visible.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { app, days, delivery, printed, readPapers } from './one-button-helpers.mjs';
+import { app, days, delivery, lineListArrives, printed, readPapers } from './one-button-helpers.mjs';
 
 const small = (number = '290095141', d = days(0)) => delivery(number, { internalNumber: null, headerText: 'ת.משלוח', docDate: printed(d) });
 const json = (r, expr) => JSON.parse(r.run('JSON.stringify(' + expr + ')'));
@@ -85,9 +87,30 @@ test('מסך הניירות: בלי תעודה בקליטה, כשעוד נייר
   }
 });
 
-test('מסך הקליטה: לפני שנספר משהו — שלוש הבחירות פתוחות, ו"לא הגיע כלום" גדול מעל "סרוק פריט לתעודה"', async () => {
+test('v171 — מסך הקליטה (בדיקת הקליטה): הבחירות פתוחות וברוחב מלא, "לא הגיע כלום" בגודל של האחרות — אותה שאלה ואותה תוצאה', async () => {
   const r = await smallInReceiving();
   r.run(`setView('receiving')`);
+  assert.equal(r.run('receiptCountingMode'), 'manual', 'קליטה עם תעודת משלוח — בדיקה שורה-שורה');
+  const html = r.node('app').innerHTML;
+  assert.match(html, /data-manual-receiving/);
+  assert.doesNotMatch(html, /<details data-quantity-picker/, 'לא מקופל');
+  assert.doesNotMatch(html, /data-role="rc-scan"|data-role="rc-count-by-scan"/, 'אין "סרוק פריט לתעודה" — סורקים מתוך הבדיקה');
+  assert.deepEqual([...html.matchAll(/data-role="(rc-quantity-[a-z]+)"/g)].map(m => m[1]), ['rc-quantity-lines', 'rc-quantity-all', 'rc-quantity-differences', 'rc-quantity-none']);
+  const mine = btnClasses(html, 'rc-quantity-none'), all = btnClasses(html, 'rc-quantity-all');
+  for (const c of ['w-full', 'rounded-xl', 'py-4', 'font-black', 'text-base']) { assert.ok(all.includes(c), '"כל הכמויות תואמות": ' + c); assert.ok(mine.includes(c), '"לא הגיע כלום" כמו שאר הבחירות: ' + c); }
+  assert.match(html, /data-role="rc-quantity-none"[^>]*>(<i[^>]*><\/i> )?לא הגיע כלום — הכל חסר<\/button>/);
+  r.click('rc-quantity-none');
+  assert.equal(r.run('testConfirms.length'), 1);
+  assert.equal(r.run('testConfirms[0].title'), 'לא הגיע כלום?');
+  assert.deepEqual(json(r, 'receiptList'), []);
+  r.run('testConfirms[0].cb()');
+  assert.ok(json(r, 'receiptList').every(l => l.qty === 0));
+  assert.equal(r.run('receiptCountingMode'), 'manual');
+});
+
+test('מסך הסריקה (טיוטה מגרסה קודמת): לפני שנספר משהו — שלוש הבחירות פתוחות, ו"לא הגיע כלום" גדול מעל "סרוק פריט לתעודה"', async () => {
+  const r = await smallInReceiving();
+  r.run(`receiptCountingMode = 'scan'; saveReceiptDraft(); setView('receiving')`);
   assert.equal(r.run('receiptCountingMode'), 'scan');
   const html = r.node('app').innerHTML;
   assert.doesNotMatch(html, /<details data-quantity-picker/, 'לא מקופל');
@@ -112,9 +135,15 @@ test('מסך הקליטה: לפני שנספר משהו — שלוש הבחיר�
   assert.equal(r.run('receiptCountingMode'), 'manual');
 });
 
-test('מסך הקליטה: אחרי שנספרה שורה — מתקפל לשורה אחת, ו"לא הגיע כלום" עדיין בתוכו', async () => {
+test('מסך הסריקה (טיוטה מגרסה קודמת): אחרי שנספרה שורה — מתקפל לשורה אחת, ו"לא הגיע כלום" עדיין בתוכו; במסך הבדיקה — תמיד פתוח', async () => {
+  // v171: במסך הבדיקה (בדיקה שורה-שורה) הבחירות אינן מתקפלות גם כשכבר נסרק משהו
+  const m = await smallInReceiving();
+  m.run(`receiptList = [{ productId: products[0].id, name: products[0].name, barcode: products[0].barcode, qty: 1 }]; saveReceiptDraft(); setView('receiving')`);
+  assert.equal(m.run('receiptCountingMode'), 'manual');
+  assert.doesNotMatch(m.node('app').innerHTML, /<details data-quantity-picker/);
+  assert.match(m.node('app').innerHTML, /data-role="rc-quantity-none"/);
   const r = await smallInReceiving();
-  r.run(`receiptList = [{ productId: products[0].id, name: products[0].name, barcode: products[0].barcode, qty: 1 }]; saveReceiptDraft(); setView('receiving')`);
+  r.run(`receiptCountingMode = 'scan'; receiptList = [{ productId: products[0].id, name: products[0].name, barcode: products[0].barcode, qty: 1 }]; saveReceiptDraft(); setView('receiving')`);
   const html = r.node('app').innerHTML;
   assert.match(html, /<details data-quantity-picker class=/, 'מקופל (סגור)');
   assert.doesNotMatch(html, /data-quantity-first/);
@@ -133,14 +162,24 @@ test('עוד נייר מהנהג נקרא לקליטה — "לא הגיע כלו
     assert.equal(r.run('testConfirms.length'), 0, role + ': בלי שאלה');
     assert.equal(r.run('receiptQuantityReview'), null, role + ': בלי בדיקה');
     assert.deepEqual(json(r, 'receiptList'), [], role + ': בלי שינוי');
-    assert.equal(r.run('receiptCountingMode'), 'scan', role);
+    assert.equal(r.run('receiptCountingMode'), 'manual', role + ': v171 — בדיקה שורה-שורה, כמו קודם');
     assert.equal(r.toasts.length, toasts + 1, role + ': אומרים למה');
     assert.match(r.toasts[r.toasts.length - 1], /עוד נייר מהנהג נקרא עכשיו — עוד רגע הוא ייכנס לבד, ואז אפשר לבחור/);
     // הקריאה נגמרה
     r.run(`paperIntake.busy = false; paperIntake.items = paperIntake.items.filter(x => x.captureId !== 'capX')`);
     r.click(role);
-    assert.ok(r.run('testConfirms.length') + (r.run('!!receiptQuantityReview') ? 1 : 0) + (r.run('receiptCountingMode') === 'manual' ? 1 : 0) > 0, role + ': עכשיו אפשר');
+    assert.ok(r.run('testConfirms.length') + (r.run('!!receiptQuantityReview') ? 1 : 0) + (r.run('!!pendingReceipt') ? 1 : 0) > 0, role + ': עכשיו אפשר');
   }
+  // v171: "בדוק שורה-שורה" אינו מחכה — החלון נפתח בלי רשימה (סורקים בינתיים), והרשימה עולה כשהנייר נכנס
+  const l = await smallInReceiving();
+  l.run(`setView('receiving'); ${readingAnother}`);
+  l.click('rc-quantity-lines');
+  assert.equal(l.run(`!!receiptQuantityReview && receiptQuantityReview.mode === 'lines' && receiptQuantityReview.pending === true`), true);
+  assert.equal(l.run(`$('receiptQuantityModal').classList.contains('hidden')`), false);
+  assert.match(l.run(`$('receiptQuantityRows').innerHTML`), /אפשר לסרוק בינתיים/);
+  l.run(`paperIntake.busy = false; paperIntake.items = paperIntake.items.filter(x => x.captureId !== 'capX'); renderReceiving()`);
+  assert.equal(lineListArrives(l), 1);
+  assert.equal(l.run(`receiptQuantityReview.mode === 'lines' && !receiptQuantityReview.pending && receiptQuantityReview.docs[0].lines.length`), 5, 'הרשימה עלתה');
   // נייר שנקרא בטלפון אחר
   const o = await smallInReceiving();
   o.run(`setView('receiving'); scanLeaseOther = () => true`);

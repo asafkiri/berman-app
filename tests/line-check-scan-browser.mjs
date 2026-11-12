@@ -28,7 +28,7 @@ function small(number) {
   return p;
 }
 const h = app(delivery('244785003'));
-await receive(h);
+await receive(h, 1, 0, { count: false }); // v171: הניירות נקראו במסך הניירות (בלי "התחל לסרוק עכשיו") — התעודה כבר בקליטה כשהבדיקה נפתחת
 h.serve(small('290096103'));
 await readPapers(h, 1, 1);
 const read = JSON.parse(h.run(`JSON.stringify(Object.values(paperLocalResults()).map(x => ({ paper: x.paper, scan: x.scan })))`));

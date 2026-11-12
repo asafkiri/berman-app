@@ -60,6 +60,15 @@ export function app(paper, opts = {}) {
     showConfirm = (title, message, label, cb) => { testConfirms.push({ title, message, label, cb }); };`);
   return r;
 }
+// v171: הרשימה של הבדיקה שורה-שורה עולה לבד כשתעודת המשלוח נכנסת לקליטה — ב"תור הבא" של הדפדפן (setTimeout). כאן מריצים רק
+// את התור הזה, ומחזירים כמה פעמים הוא חיכה (0 — האפליקציה לא ביקשה להעלות את הרשימה).
+export function lineListArrives(r) {
+  const mine = r.callbacks.filter(fn => fn && fn.name === 'receiptLineAutoStart');
+  const rest = r.callbacks.filter(fn => !mine.includes(fn));
+  r.callbacks.splice(0, r.callbacks.length, ...rest);
+  mine.forEach(fn => fn());
+  return mine.length;
+}
 export const page = n => ({ dataUrl: 'data:image/jpeg;base64,cGFwZXI' + n, baseDataUrl: 'data:image/jpeg;base64,cGFwZXI' + n, rotation: 0, orientationConfirmed: true });
 export const items = (n, start, target) => JSON.stringify(Array.from({ length: n }, (x, i) => ({ captureId: 'cap' + (start + i), hash: 'h' + (start + i), page: page(start + i), status: 'photo', target, forDraftId: null })));
 // "צלם נייר" מהמאזן או מכרטיס החזרה (v125) → "קרא"

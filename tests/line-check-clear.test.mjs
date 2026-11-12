@@ -33,7 +33,7 @@ function small(number = SMALL) {
 }
 async function twoPapers() {
   const r = app(delivery(BIG));
-  await receive(r);
+  await receive(r, 1, 0, { count: false }); // v171: הניירות נקראו במסך הניירות (בלי "התחל לסרוק עכשיו") — התעודה כבר בקליטה כשהבדיקה נפתחת
   r.serve(small());
   await readPapers(r, 1, 1);
   assert.deepEqual(state(r).nums, [BIG, SMALL], 'שתי התעודות בקליטה');
@@ -42,7 +42,7 @@ async function twoPapers() {
 }
 async function onePaper() {
   const r = app(delivery(BIG));
-  await receive(r);
+  await receive(r, 1, 0, { count: false }); // v171: הניירות נקראו במסך הניירות (בלי "התחל לסרוק עכשיו") — התעודה כבר בקליטה כשהבדיקה נפתחת
   r.run(`currentView = 'receiving'; mainMode = 'receiving';`);
   return r;
 }
@@ -236,8 +236,9 @@ test('7. הכרטיס שמעל המצלמה — בלי "בטל סימון"; אח
   assert.doesNotMatch(card, /data-line-clear|בטל סימון/);
 });
 
-test('8. הגרסה עלתה ל-170, כולל ההערה ב-service worker', () => {
+test('8. הגרסה (170 ומעלה), כולל ההערה ב-service worker', () => {
   const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-  assert.match(html, /const APP_VERSION = '170'/);
-  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), /גרסת אפליקציה 170/);
+  const v = html.match(/const APP_VERSION = '(\d+)'/)[1];
+  assert.ok(Number(v) >= 170, v);
+  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), new RegExp('גרסת אפליקציה ' + v));
 });
