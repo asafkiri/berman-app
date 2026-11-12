@@ -85,7 +85,7 @@ test('2. שורה שסומנה "הגיע" או "לא הגיע" מתקפלת; "ש
   click(r, { lineMark: '0:0:ok' });
   let a = row(r, 0, 0);
   assert.doesNotMatch(a, /data-line-mark=/, 'מקופלת — בלי כפתורי סימון');
-  assert.equal(strip(a), 'אחיד פרוס ברמן הגיע · 17 יח׳ ב-2 תעודות · בקופה ₪12.90 שנה'); // v164: הקבוצה של שני הניירות
+  assert.equal(strip(a), 'אחיד פרוס ברמן הגיע · 17 יח׳ ב-2 תעודות בקופה ₪12.90 שנה'); // v164: הקבוצה של שני הניירות
   assert.match(a, /data-line-open="0:0"/); assert.match(a, /border-emerald-300 bg-emerald-50/);
   assert.equal(progress(r), 'סומנו 1 מתוך 5 שורות');
   assert.deepEqual(json(r, '[receiptQuantityReview.docs[0].lines[0].mark, receiptQuantityReview.docs[1].lines[0].mark]'), ['ok', 'ok'], 'הסימון נשמר כמו ב-v154 — בשתי השורות של המוצר');

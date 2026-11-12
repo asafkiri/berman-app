@@ -191,8 +191,9 @@ test('6. הבורר של הקליטה בסריקה ושל מסך המחירים 
   assert.match(strip(picker(r)), /^לאיזה מוצר הכוונה\? אותו ברקוד מודפס על כמה מוצרים — בחר לפי קוד הפריט שבתעודה\. ביס עננים/);
 });
 
-test('7. הגרסה עלתה ל-169, כולל ההערה ב-service worker', () => {
+test('7. הגרסה (169 ומעלה), כולל ההערה ב-service worker', () => {
   const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-  assert.match(html, /const APP_VERSION = '169'/);
-  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), /גרסת אפליקציה 169/);
+  const v = html.match(/const APP_VERSION = '(\d+)'/)[1];
+  assert.ok(Number(v) >= 169, v);
+  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), new RegExp('גרסת אפליקציה ' + v));
 });

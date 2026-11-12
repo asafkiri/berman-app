@@ -222,7 +222,7 @@ test('7. "הנייר הזה לא שלנו": כל נייר שנשאר שומר א
   click(q, { lineMark: '0:0:qty' }); type(q, { lineGot: '0:0' }, '15'); blur(q, '0:0');
   click(q, { lineDrop: '0' }); click(q, { lineDropYes: '0' }); await settle();
   assert.deepEqual(marks(q), ['qty:3,']);
-  assert.match(strip(row(q, 0, 0)), /^שורה 1 בתעודה אחיד פרוס ברמן .* 5 יח׳ בתעודה הגיע 5 אחרת לא הגיע כמה הגיע\? התקבלו 3 · חוסר 2$/);
+  assert.match(strip(row(q, 0, 0)), /^שורה 1 בתעודה אחיד פרוס ברמן .* 5 יח׳ בתעודה הגיע 5 אחרת לא הגיע כמה הגיע\? התקבלו 3 · חוסר 2 בטל סימון$/);
   assert.doesNotMatch(strip(rows(q)), /גם בתעודה|נספר יחד עם/);
 });
 

@@ -104,7 +104,7 @@ test('2. הקלדה: נשמר מיד דרך savePosPrice (posPrice, posPriceAt, 
   // הציור הבא — הסימון: השורה מקופלת עם המחיר, בלי שדה; "שנה" — הכרטיס הפתוח עם "בקופה: ₪10.50", בלי שדה
   click(r, { lineMark: '0:1:ok' });
   let b = row(r, 0, 1);
-  assert.equal(strip(b), 'לחמניות 10 בשקית הגיע · 6 יח׳ · בקופה ₪10.50 שנה'); assert.doesNotMatch(b, /data-line-pos|flex-1/);
+  assert.equal(strip(b), 'לחמניות 10 בשקית הגיע · 6 יח׳ בקופה ₪10.50 שנה'); assert.doesNotMatch(b, /data-line-pos|flex-1/);
   click(r, { lineOpen: '0:1' });
   b = row(r, 0, 1);
   assert.match(b, /בקופה: ₪10\.50/); assert.doesNotMatch(b, /data-line-pos|אין מחיר קופה/);
@@ -161,7 +161,7 @@ test('5. שורה מקופלת בלי מחיר קופה — השדה גם בה; 
   assert.match(c, /בקופה: ₪9\.50/); assert.doesNotMatch(c, /data-line-pos/);
   click(r, { lineMark: '0:1:ok' });
   c = row(r, 0, 1);
-  assert.equal(strip(c), 'לחמניות 10 בשקית הגיע · 6 יח׳ · בקופה ₪9.50 שנה'); assert.match(c, /<div class="min-w-0">/, 'עם מחיר — כמו קודם');
+  assert.equal(strip(c), 'לחמניות 10 בשקית הגיע · 6 יח׳ בקופה ₪9.50 שנה'); assert.match(c, /<div class="min-w-0">/, 'עם מחיר — כמו קודם');
   // "לא הגיע" — גם מקופלת עם השדה
   click(r, { lineMark: '0:4:none' }); // פיתות עננים — בלי מחיר קופה
   const d = row(r, 0, 4);
