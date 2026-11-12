@@ -849,7 +849,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '167'; // בדיקה שורה-שורה: מוצר בלי מחיר קופה — השדה להשלמת המחיר בשורה עצמה (כמו יטבתה 415 ותנובה 161)
+const APP_VERSION = '168'; // בדיקה שורה-שורה: ברקוד שמודפס על כמה מוצרים — "לאיזה מוצר הכוונה?", לא הראשון במאגר
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -7151,6 +7151,8 @@ function receiptLineCheckDrop(di) {
 //   "אחרי שאני מסמן מוצר ומאשר, הוא נשאר במצלמה וכביכול ממשיך למוצר הבא — ואני רוצה שיצא מהמוצר וילך לשורה של המוצר".
 //   כמו ביטבתה 413.) רק ✕ בכרטיס (בלי לסמן), ברקוד לא מוכר וכמות לא תקינה משאירים את המצלמה דולקת.
 // - איזו שורה: הברקוד נבדק קודם מול שורות התעודות (ברקוד שקיים בשני מוצרים במאגר נפתר למוצר שבנייר), ואחריו מול המאגר.
+//   v168: ההתאמה לפי המאגר כמו בקליטה בסריקה (findProductsByBarcode — גם הקוד המלא מהאריזה מול הקטע השמור); ברקוד של כמה
+//   מוצרים — תמיד "לאיזה מוצר הכוונה?" בכרטיס (מי שבתעודה ראשון), לא הראשון במאגר ולא ניחוש לפי הנייר.
 //   v164: אותו מוצר בכמה שורות (שתי תעודות) — קבוצה אחת (receiptLineGroups): הכרטיס של הקבוצה, עם הסך, והחלוקה אוטומטית.
 //   יחידה שסרקו כשבתעודה מארז החיוב שלה (billingPackId), או להפך — השורה של הקרוב, והכרטיס אומר זאת במקום להוסיף "הגיע בנוסף".
 // - מוצר שאינו באף תעודה → כרטיס "לא בתעודה — הגיע בנוסף" עם כמות (1), ונכנס ל"הגיע משהו נוסף" (extras) כמו מהחיפוש; מוצר
@@ -7206,16 +7208,12 @@ function refreshReceiptLineScanOverlay() {
   const c = $('scanOverlayCount'); if (c) c.textContent = (total - openLines) + ' מתוך ' + total;
   const n = $('scanOverlayName'); if (n) n.textContent = '';
 }
-// מה נסרק ואיזו שורה זו. line — { di, li, scanned, related (המוצר בשורה כשאינו מה שנסרק), others (עוד שורות של אותו מוצר) };
-// extra — { k (המקום ב"הגיע משהו נוסף", או -1), scanned }; unknown — הברקוד אינו במאגר
-function receiptLineScanTarget(code) {
-  const r = receiptQuantityReview, key = normalizeBarcode(code);
-  if (!r || r.mode !== 'lines' || !key) return { kind: 'unknown' };
+// היעד של מוצר מסוים (אחרי שידוע מה נסרק). line — { di, li, scanned, related (המוצר בשורה כשאינו מה שנסרק) };
+// extra — { k (המקום ב"הגיע משהו נוסף", או -1), scanned }
+function receiptLineScanProductTarget(scanned) {
+  const r = receiptQuantityReview;
   // v164: היעד הוא קבוצה — המוצר בכל התעודות יחד (receiptLineGroups); הכרטיס הוא של העוגן שלה (השורה הראשונה)
   const groups = receiptLineGroups(r);
-  const onPaper = groups.find(g => g.lines.some(x => normalizeBarcode(x.l.barcode) === key));
-  const scanned = onPaper ? (products.find(p => p.id === onPaper.productId) || null) : findProductByBarcode(code);
-  if (!scanned) return { kind: 'unknown' };
   const pick = ids => {
     const hits = groups.filter(g => ids.has(g.productId));
     if (!hits.length) return null;
@@ -7231,19 +7229,59 @@ function receiptLineScanTarget(code) {
   if (near) return { kind: 'line', ...near, scanned, related: products.find(p => p.id === r.docs[near.di].lines[near.li].productId) || null };
   return { kind: 'extra', k: (r.extras || []).findIndex(x => x && x.productId === scanned.id), scanned };
 }
+// מה נסרק ואיזו שורה זו: line / extra (receiptLineScanProductTarget); unknown — הברקוד אינו במאגר; choose — "לאיזה מוצר הכוונה?".
+// v168: בברמן אותו ברקוד מודפס על כמה מוצרים (4033569: ביס עננים, לבש, פרנה, לחמניות המבורגר), והמצלמה קוראת את הקוד המלא
+// מהאריזה (7290004033569) בעוד שבמאגר שמור הקטע שבמחירון — לכן המועמדים הם כל המוצרים שהברקוד מתאים להם
+// (findProductsByBarcode, כמו בקליטה בסריקה), לא הראשון במאגר. מוצר אחד — כמו תמיד. כמה מוצרים — תמיד שואלים (choose), גם
+// כשרק אחד מהם בתעודה: הברקוד אינו אומר איזה מהם ביד, ואם הגיע דווקא מוצר אחר מזה שבתעודה — רק העובד רואה את זה (בעל העסק,
+// 12.11.2026: "עדיף לשאול, כי אם הגיע מוצר אחר מהבחירה ולא מה שבתעודה אז נתקעים"). מי שבתעודה מופיע ראשון בבחירה.
+// עד 167 ההשוואה מול שורות התעודה הייתה שוויון מלא לקטע השמור — סריקה אמיתית לא התאימה לעולם, והמוצר הראשון במאגר הוצג
+// כ"לא בתעודה — הגיע בנוסף" (בעל העסק, 12.11.2026: "אני סורק פרנות ויוצא לי לחמניות ביס עננים").
+function receiptLineScanTarget(code) {
+  const r = receiptQuantityReview, key = normalizeBarcode(code);
+  if (!r || r.mode !== 'lines' || !key) return { kind: 'unknown' };
+  const matches = findProductsByBarcode(code);
+  if (!matches.length) return { kind: 'unknown' };
+  if (matches.length === 1) return receiptLineScanProductTarget(matches[0]);
+  return { kind: 'choose', choices: matches.map(p => p.id) };
+}
+// הכרטיס של יעד. v163: שורה שכבר סומנה — "עוד כמה?" (addQty), ומה שחסר עד הכמות בתעודה כבר בשדה (כלום — כשהכול כבר
+// הגיע). v164: הכמות והסימון — של הקבוצה (המוצר בכל התעודות יחד). v168: choices — כל המוצרים שעל אותו ברקוד, כשהכרטיס נפתח מהבחירה
+function receiptLineScanCardFor(t, choices) {
+  const r = receiptQuantityReview;
+  const g = t.kind === 'line' ? receiptLineGroupOf(r, t.di, t.li) : null, got = g ? receiptLineGroupGot(g) : null;
+  const c = t.kind === 'line'
+    ? { kind: 'line', di: t.di, li: t.li, scanned: t.scanned, related: t.related, askQty: false, addQty: got != null, got: got != null && got < g.paperQty ? String(g.paperQty - got) : '' }
+    : { kind: 'extra', k: t.k, scanned: t.scanned, got: t.k >= 0 ? String(r.extras[t.k].got == null ? '' : r.extras[t.k].got) : '1' };
+  if (choices && choices.length > 1) c.choices = choices.slice();
+  return c;
+}
 function handleLineCheckScan(code) {
   const r = receiptQuantityReview;
   if (!r || r.mode !== 'lines') { closeScanner(); return; }
   if (!canEditSharedReceipt()) { sharedReceiptReadOnlyNotice(); closeScanner(); return; }
   const t = receiptLineScanTarget(code);
   if (t.kind === 'unknown') { rejectUnknownReceivingBarcode(code); return; }
-  // v163: שורה שכבר סומנה — "עוד כמה?" (addQty), ומה שחסר עד הכמות בתעודה כבר בשדה (כלום — כשהכול כבר הגיע). v164: הכמות
-  // והסימון — של הקבוצה (המוצר בכל התעודות יחד)
-  const g = t.kind === 'line' ? receiptLineGroupOf(r, t.di, t.li) : null, got = g ? receiptLineGroupGot(g) : null;
-  receiptLineScanCard = t.kind === 'line'
-    ? { kind: 'line', di: t.di, li: t.li, scanned: t.scanned, related: t.related, askQty: false, addQty: got != null, got: got != null && got < g.paperQty ? String(g.paperQty - got) : '' }
-    : { kind: 'extra', k: t.k, scanned: t.scanned, got: t.k >= 0 ? String(r.extras[t.k].got == null ? '' : r.extras[t.k].got) : '1' };
+  receiptLineScanCard = t.kind === 'choose' ? { kind: 'choose', choices: t.choices } : receiptLineScanCardFor(t, t.choices);
   renderReceiptLineScanCard();
+}
+// v168: המועמדים של ברקוד משותף, כל אחד עם היעד שלו — מי שבתעודה ראשון (לפי סדר התעודה), אחריו מי שכבר ב"הגיע משהו
+// נוסף", והשאר לפי הסדר במאגר. מוצר שנמחק מהמאגר בינתיים — אינו מוצע
+function receiptLineScanChoiceList(ids) {
+  const list = [];
+  (ids || []).forEach((id, i) => { const p = products.find(x => x && x.id === id); if (p) list.push({ p, i, t: receiptLineScanProductTarget(p) }); });
+  const rank = x => x.t.kind === 'line' ? 0 : x.t.k >= 0 ? 1 : 2;
+  return list.sort((a, b) => rank(a) - rank(b) || (rank(a) === 0 ? (a.t.di - b.t.di || a.t.li - b.t.li) : 0) || a.i - b.i);
+}
+// הבחירה מ"לאיזה מוצר הכוונה?" — הכרטיס של המוצר שנבחר (שורת התעודה שלו, או "הגיע בנוסף"), עם הדרך חזרה לבחירה
+function receiptLineScanPick(id) {
+  const c = receiptLineScanCard, r = receiptQuantityReview;
+  if (!c || c.kind !== 'choose' || !r || r.mode !== 'lines') return false;
+  const p = c.choices.indexOf(id) === -1 ? null : products.find(x => x && x.id === id);
+  if (!p) { renderReceiptLineScanCard(); return false; }
+  receiptLineScanCard = receiptLineScanCardFor(receiptLineScanProductTarget(p), c.choices);
+  renderReceiptLineScanCard();
+  return true;
 }
 // הכמות שהוקלדה בכרטיס — מספר שלם (0 ומעלה; ב"נוסף" — 1 ומעלה), או null
 function receiptLineScanGotNumber(c) {
@@ -7299,21 +7337,51 @@ function receiptLineScanCardHtml(c) {
         : '<div class="grid grid-cols-[1fr_auto_auto] gap-1.5 mt-3" role="group" aria-label="' + htmlEscape(l.name) + ' — מה הגיע">' +
           btn('ok', 'fa-check', 'הגיע ' + qty, 'bg-emerald-600 text-white', 'text-base px-1 min-w-0') +
           btn('qty', 'fa-pen', 'אחרת', 'bg-white border border-slate-300 text-slate-700', 'text-sm px-2 whitespace-nowrap') +
-          btn('none', 'fa-xmark', 'לא הגיע', 'bg-white border border-slate-300 text-slate-700', 'text-sm px-2 whitespace-nowrap') + '</div>');
+          btn('none', 'fa-xmark', 'לא הגיע', 'bg-white border border-slate-300 text-slate-700', 'text-sm px-2 whitespace-nowrap') + '</div>') +
+      receiptLineScanOtherHtml(c);
   }
   const p = c.scanned, inList = c.k >= 0;
   return '<div class="pl-10"><div class="text-[11px] font-black text-amber-700">' + (inList ? 'כבר ברשימה ״הגיע משהו נוסף״' : 'לא בתעודה — הגיע בנוסף') + '</div>' +
       '<div class="font-black text-lg text-slate-800 leading-tight">' + htmlEscape(p.name) + '</div>' + posPriceLineHtml(p) +
       '<div class="text-[11px] text-slate-400 mt-0.5"><i class="fa-solid fa-barcode"></i> ' + htmlEscape(p.barcode || 'ללא ברקוד') + '</div></div>' +
-    receiptLineScanQtyHtml(c, p.name, inList ? 'עדכן' : 'הוסף');
+    receiptLineScanQtyHtml(c, p.name, inList ? 'עדכן' : 'הוסף') + receiptLineScanOtherHtml(c);
+}
+// v168: הכרטיס של מוצר שנבחר מ"לאיזה מוצר הכוונה?" — הדרך חזרה לבחירה, למי שטעה (בלי לסמן דבר)
+function receiptLineScanOtherHtml(c) {
+  return c.choices && c.choices.length > 1 ? '<button type="button" data-scan-choose class="btn-tap min-h-[44px] w-full mt-1 text-xs font-black text-slate-500">לא המוצר הזה? <span class="underline">בחר מוצר אחר</span></button>' : '';
+}
+// v168: "לאיזה מוצר הכוונה?" — כמו הבורר של הקליטה בסריקה (openBarcodeChoicePicker), אבל בכרטיס שמעל המצלמה ועם מה
+// שהתעודות יודעות: לכל מועמד השם, קוד הפריט, ואיפה הוא — "בתעודה · שורה 15 · 1 יח׳" (ירוק, ראשון), "כבר ב״הגיע משהו
+// נוסף״", או "לא בתעודה". הבחירה פותחת את הכרטיס הרגיל של המוצר (receiptLineScanPick); ✕ סוגר בלי לסמן, והסריקה ממשיכה
+function receiptLineScanChooseHtml(list) {
+  const r = receiptQuantityReview, multi = r.docs.length > 1;
+  const rows = list.map(({ p, t }) => {
+    let where = 'לא בתעודה', tone = 'bg-slate-50 border-slate-200', whereCls = 'text-slate-500';
+    if (t.kind === 'line') {
+      const g = receiptLineGroupOf(r, t.di, t.li), l = r.docs[t.di].lines[t.li], got = receiptLineGroupGot(g);
+      where = 'בתעודה' + (multi ? ' ' + (t.di + 1) : '') + (t.related ? ' — ' + (p.billingPackId === t.related.id ? 'מארז החיוב שלו' : 'היחידה הבודדת שלו') : '') +
+        ' · שורה ' + l.line + ' · ' + mtxQty(g.paperQty) + ' ' + (g.lines.length > 1 ? receiptLineGroupUnitsLabel(g) : 'יח׳') + (got == null ? '' : ' · כבר סומן (' + mtxQty(got) + ')');
+      tone = 'bg-emerald-50 border-emerald-300'; whereCls = 'text-emerald-700';
+    } else if (t.k >= 0) { where = 'כבר ב״הגיע משהו נוסף״'; tone = 'bg-amber-50 border-amber-300'; whereCls = 'text-amber-700'; }
+    return '<button type="button" data-scan-pick="' + htmlEscape(p.id) + '" class="btn-tap w-full min-h-[56px] flex items-center justify-between gap-2 border-2 rounded-xl px-3 py-2 mb-1.5 text-right ' + tone + '">' +
+      '<span class="min-w-0"><span class="block font-black text-slate-800 leading-tight">' + htmlEscape(p.name || '') + '</span>' +
+        '<span class="block text-[11px] font-black ' + whereCls + '">' + where + '</span></span>' +
+      '<span class="shrink-0 text-[11px] font-bold text-slate-400">קוד ' + htmlEscape(productCode(p) || '—') + '</span></button>';
+  }).join('');
+  return '<div class="pl-10"><div class="font-black text-lg text-slate-800 leading-tight"><i class="fa-solid fa-barcode text-amber-700" aria-hidden="true"></i> לאיזה מוצר הכוונה?</div>' +
+      '<div class="text-[11px] font-bold text-slate-500 mt-0.5">אותו ברקוד מודפס על ' + list.length + ' מוצרים — בחר את המוצר שסרקת.</div></div>' +
+    '<div class="mt-2 max-h-[50vh] overflow-y-auto" role="group" aria-label="המוצרים שעל הברקוד הזה">' + rows + '</div>';
 }
 function renderReceiptLineScanCard() {
   const box = $('scanLineCard'); if (!box) return;
   const c = receiptLineScanCard, r = receiptQuantityReview;
   if (!c || !r || r.mode !== 'lines') { box.innerHTML = ''; box.classList.add('hidden'); return; }
-  box.innerHTML = '<div class="relative bg-white rounded-2xl shadow-2xl p-3 max-w-lg mx-auto ' + (c.kind === 'extra' ? 'border-2 border-amber-300' : '') + '">' +
+  // v168: "לאיזה מוצר הכוונה?" — כשלא נשאר ממה לבחור (המוצרים נמחקו מהמאגר בינתיים), הכרטיס נסגר והסריקה ממשיכה
+  const choose = c.kind === 'choose' ? receiptLineScanChoiceList(c.choices) : null;
+  if (choose && !choose.length) { closeReceiptLineScanCard(); return; }
+  box.innerHTML = '<div class="relative bg-white rounded-2xl shadow-2xl p-3 max-w-lg mx-auto ' + (c.kind === 'extra' ? 'border-2 border-amber-300' : choose ? 'border-2 border-indigo-300' : '') + '">' +
     '<button type="button" data-scan-dismiss class="btn-tap absolute top-2 left-2 w-10 h-10 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center" aria-label="סגור בלי לסמן"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>' +
-    receiptLineScanCardHtml(c) + '</div>';
+    (choose ? receiptLineScanChooseHtml(choose) : receiptLineScanCardHtml(c)) + '</div>';
   box.classList.remove('hidden');
   if (c.askQty || c.addQty || c.kind === 'extra') { const i = $('scanLineGot'); if (i && i.focus) { try { i.focus(); i.select && i.select(); } catch (e) {} } }
 }
@@ -7369,7 +7437,7 @@ function receiptLineScanApplyExtra(got) {
   return true;
 }
 function receiptLineScanSave() {
-  const c = receiptLineScanCard; if (!c) return false;
+  const c = receiptLineScanCard; if (!c || c.kind === 'choose') return false; // v168: ב"לאיזה מוצר הכוונה?" אין מה לשמור
   const n = receiptLineScanGotNumber(c);
   if (n == null) { c.invalid = true; renderReceiptLineScanCard(); return false; }
   if (c.kind === 'extra') return receiptLineScanApplyExtra(n);
@@ -7380,8 +7448,12 @@ function receiptLineScanSave() {
 }
 function receiptLineScanCardClick(e) {
   const c = receiptLineScanCard; if (!c) return;
-  const t = e.target.closest('[data-scan-mark], [data-scan-save], [data-scan-dismiss]'); if (!t) return;
+  const t = e.target.closest('[data-scan-mark], [data-scan-save], [data-scan-dismiss], [data-scan-pick], [data-scan-choose]'); if (!t) return;
   if (t.dataset.scanDismiss != null) { closeReceiptLineScanCard(); return; }
+  // v168: ברקוד שמודפס על כמה מוצרים — הבחירה מ"לאיזה מוצר הכוונה?", ו"בחר מוצר אחר" מהכרטיס של מוצר (חזרה לבחירה, בלי לסמן)
+  if (t.dataset.scanPick != null) { receiptLineScanPick(t.dataset.scanPick); return; }
+  if (t.dataset.scanChoose != null) { if (c.choices && c.kind !== 'choose') { receiptLineScanCard = { kind: 'choose', choices: c.choices }; renderReceiptLineScanCard(); } return; }
+  if (c.kind === 'choose') return;
   if (t.dataset.scanSave != null) { receiptLineScanSave(); return; }
   const mark = t.dataset.scanMark;
   // v163: "לא נכון? תקן את הסה״כ" — מ"עוד כמה?" לכרטיס הקודם: "כבר סומנה: … — אפשר לשנות" ושלושת הכפתורים (הסה״כ, לא תוספת)
