@@ -99,6 +99,8 @@
       html.dark [data-paper-gate] .text-emerald-800, html.dark #gatePickModal .text-emerald-800 { color:#6ee7b7 !important; }
       html.dark [data-paper-gate] .text-blue-800 { color:#bfdbfe !important; }
       html.dark #gatePickModal .text-amber-700 { color:#fcd34d !important; }
+      /* v173: "המחירון שונה מהתעודה" — על ההצעה, ברשימת החיפוש ובמה שזוהה ביד */
+      html.dark [data-paper-gate] .text-amber-800, html.dark #gatePickModal .text-amber-800, html.dark [data-gate-picked] .text-amber-800 { color:#fcd34d !important; }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800 pb-28">
@@ -854,7 +856,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '172'; // מוצר שבתעודה ואינו מזוהה במאגר: כרטיס זיהוי במסך הקליטה ("צריך רק לזהות מוצר אחד — ואז ממשיכים לקלוט"), במקום מסך ההשוואה לפני שנספר משהו (כמו יטבתה 419)
+const APP_VERSION = '173'; // מוצר שנבחר לשורה במחירון אחר מזה שבתעודה — כתוב על ההצעה, בחיפוש, בשלב האישור ואחרי השיוך; הצעה כזאת עוברת דרך שלב האישור. v172: מוצר שבתעודה ואינו מזוהה במאגר: כרטיס זיהוי במסך הקליטה ("צריך רק לזהות מוצר אחד — ואז ממשיכים לקלוט"), במקום מסך ההשוואה לפני שנספר משהו (כמו יטבתה 419)
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -6439,6 +6441,19 @@ function receiptGateProductFacts(product) {
   const list = productListPrice(product);
   return [productCode(product) ? 'קוד ' + productCode(product) : '', list > 0 ? 'מחירון ₪' + fmtMoney(list) : ''].filter(Boolean).join(' · ');
 }
+// v173: המחירון של המוצר מול המחירון שמודפס בשורה. בעל העסק (17.11.2026), על ההצעות לפי מחירון בלבד: "העיקר שהמחיר לא יהיה מטעה.
+// אם יקרה שיהיה רק מוצר שונה אבל המחיר בעצם אותו הדבר — זה לא כל כך קריטי". מוצר במחירון אחר מזה שבשורה הוא כנראה מוצר אחר (או
+// מחירון שלא עודכן במאגר), ולכן הוא אינו משויך בלי שרואים זאת: על ההצעה, ברשימת החיפוש, בשלב האישור ואחרי השיוך — "המחירון שונה
+// מהתעודה", עם שני המספרים; והצעה כזאת עוברת דרך שלב האישור במקום להשתייך בלחיצה אחת. בלי מחירון בשורה או במאגר — אין מה להשוות,
+// ואין הודעה. הפרש של עד 2 אגורות — אותו מחירון, כמו בהצעות (receiptGateGuesses).
+function receiptGatePriceGap(item, product) {
+  const row = item && item.row;
+  const printed = row && row.printedListUnitPrice != null && row.printedListUnitPrice !== '' ? Number(row.printedListUnitPrice) : NaN;
+  const list = productListPrice(product);
+  if (!(isFinite(printed) && printed > 0) || !(list > 0)) return null;
+  return Math.abs(aiMoneyCents(list) - aiMoneyCents(printed)) <= 2 ? null : { printed, list };
+}
+function receiptGatePriceGapText(gap) { return 'המחירון שונה מהתעודה: בתעודה ₪' + fmtMoney(gap.printed) + ' · במאגר ₪' + fmtMoney(gap.list); }
 // מה מודפס בשורה: קוד הפריט, הכמות והמחירון
 function receiptGateRowFactsHtml(item) {
   const row = item.row, code = String(row.supplierItemCode == null ? '' : row.supplierItemCode).trim();
@@ -6453,11 +6468,13 @@ function receiptGateRowHtml(item) {
     '<div class="font-black text-lg text-slate-800 leading-tight mt-0.5">' + htmlEscape(String(row.description || '').trim() || 'מוצר בלי שם') + '</div>' +
     '<div class="text-sm font-bold text-slate-600 mt-0.5">' + receiptGateRowFactsHtml(item) + '</div>' +
     (guesses.length ? '<div class="text-sm font-black text-slate-700 mt-3">' + (guesses.length === 1 ? 'אולי זה המוצר:' : 'אולי אחד מאלה:') + '</div>' +
-      guesses.map(g => '<button data-role="gate-pick-product"' + attrs + ' data-product="' + htmlEscape(g.product.id) + '" class="btn-tap w-full min-h-[52px] mt-2 rounded-xl border-2 border-emerald-300 bg-emerald-50 p-3 text-right flex items-center justify-between gap-3">' +
+      guesses.map(g => { const gap = receiptGatePriceGap(item, g.product); // v173: מחירון אחר — כתוב על ההצעה, והלחיצה עוברת דרך שלב האישור
+        return '<button data-role="gate-pick-product"' + attrs + ' data-product="' + htmlEscape(g.product.id) + '" class="btn-tap w-full min-h-[52px] mt-2 rounded-xl border-2 ' + (gap ? 'border-amber-300 bg-amber-50' : 'border-emerald-300 bg-emerald-50') + ' p-3 text-right flex items-center justify-between gap-3">' +
         '<span class="min-w-0"><span class="block font-black text-base text-slate-800">' + htmlEscape(g.product.name || '') + '</span>' +
         '<span class="block text-xs font-bold text-emerald-800">' + htmlEscape(g.why.join(' · ')) + '</span>' +
-        '<span class="block text-xs font-bold text-slate-500">' + htmlEscape(receiptGateProductFacts(g.product)) + '</span></span>' +
-        '<span class="shrink-0 rounded-lg bg-emerald-600 text-white text-sm font-black px-3 py-2">זה המוצר</span></button>').join('') : '') +
+        '<span class="block text-xs font-bold text-slate-500">' + htmlEscape(receiptGateProductFacts(g.product)) + '</span>' +
+        (gap ? '<span data-price-gap class="block text-xs font-black text-amber-800 mt-0.5"><i class="fa-solid fa-triangle-exclamation ml-1" aria-hidden="true"></i>' + htmlEscape(receiptGatePriceGapText(gap)) + '</span>' : '') + '</span>' +
+        '<span class="shrink-0 rounded-lg ' + (gap ? 'bg-amber-600' : 'bg-emerald-600') + ' text-white text-sm font-black px-3 py-2">זה המוצר</span></button>'; }).join('') : '') +
     '<button data-role="gate-pick-search"' + attrs + ' class="btn-tap w-full min-h-[48px] mt-3 rounded-xl border-2 border-blue-300 bg-white text-blue-800 font-black text-sm py-3"><i class="fa-solid fa-magnifying-glass ml-1" aria-hidden="true"></i>' + (guesses.length ? 'זה מוצר אחר — בחר מהמאגר' : 'בחר מוצר מהמאגר') + '</button>' +
     '<button data-role="gate-pick-new"' + attrs + ' class="btn-tap w-full min-h-[44px] mt-2 rounded-xl border border-slate-300 bg-white text-slate-700 font-black text-sm py-2.5"><i class="fa-solid fa-plus ml-1" aria-hidden="true"></i>מוצר חדש — הוסף למאגר</button>' +
   '</div>';
@@ -6506,6 +6523,7 @@ function receiptGatePickedHtml(inCard) {
     rows.map(item => '<div class="border border-slate-200 bg-white rounded-xl p-3 mt-2"><div class="font-black text-slate-800">' + htmlEscape(item.product.name || '') + '</div>' +
       '<div class="text-xs font-bold text-slate-500 mt-0.5">בתעודה: ' + htmlEscape(String(item.row.description || '').trim() || 'מוצר בלי שם') + ' · ' + htmlEscape(receiptGateWhereText(item)) +
       (item.row.supplierItemCode ? ' · קוד פריט <span dir="ltr">' + htmlEscape(String(item.row.supplierItemCode)) + '</span>' : '') + '</div>' +
+      (receiptGatePriceGap(item, item.product) ? '<div data-price-gap class="text-xs font-black text-amber-800 mt-0.5">' + htmlEscape(receiptGatePriceGapText(receiptGatePriceGap(item, item.product))) + '</div>' : '') + // v173
       '<button data-role="gate-pick-undo" data-doc="' + item.documentIndex + '" data-row="' + item.rowIndex + '" class="btn-tap min-h-[44px] py-2 font-black text-blue-700">בטל את הבחירה</button></div>').join('') + '</details>';
 }
 // המוצר שהעובד בחר מהמאגר משויך לשורה — לשורה הזאת, בקליטה הזאת; המאגר אינו משתנה. מה שהיה בשורה לפני הבחירה נשמר
@@ -6559,6 +6577,8 @@ function receiptGatePickProduct(documentIndex, rowIndex, productId, token) {
   const item = aiScanBusy ? null : receiptGateFindRow(documentIndex, rowIndex, token);
   const product = (products || []).find(p => p && p.id != null && String(p.id) === String(productId));
   if (!item || !product) return receiptGateStale();
+  // v173: מחירון אחר מזה שבשורה — לא בלחיצה אחת: קודם "זה המוצר שמופיע בשורה?", עם שני המחירונים
+  if (receiptGatePriceGap(item, product)) return openReceiptGatePicker(documentIndex, rowIndex, token, product.id);
   aiApplyCatalogPick(item.row, product);
   receiptGateAfterPick(product, false);
   return true;
@@ -6595,12 +6615,13 @@ function receiptGatePickSearchList(query) {
     return words.every(w => name.includes(w) || codes.some(c => c && c.includes(w)));
   });
 }
-function receiptGatePickButtonHtml(product, why, taken) {
-  const where = taken.get(product.id), facts = receiptGateProductFacts(product);
-  return '<button type="button" data-pick-id="' + htmlEscape(product.id) + '" class="btn-tap block w-full min-h-[52px] border-2 ' + (why ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white') + ' rounded-xl p-3 mb-2 text-right">' +
+function receiptGatePickButtonHtml(product, why, taken, item) {
+  const where = taken.get(product.id), facts = receiptGateProductFacts(product), gap = receiptGatePriceGap(item, product); // v173
+  return '<button type="button" data-pick-id="' + htmlEscape(product.id) + '" class="btn-tap block w-full min-h-[52px] border-2 ' + (why ? (gap ? 'border-amber-300 bg-amber-50' : 'border-emerald-300 bg-emerald-50') : 'border-slate-200 bg-white') + ' rounded-xl p-3 mb-2 text-right">' +
     '<div class="font-black text-base text-slate-800">' + htmlEscape(product.name || '') + '</div>' +
     (why ? '<div class="text-xs font-bold text-emerald-800">' + htmlEscape(why) + '</div>' : '') +
     (facts ? '<div class="text-xs font-bold text-slate-500">' + htmlEscape(facts) + '</div>' : '') +
+    (gap ? '<div data-price-gap class="text-xs font-black text-amber-800 mt-0.5">' + htmlEscape(receiptGatePriceGapText(gap)) + '</div>' : '') +
     (where ? '<div class="text-xs font-black text-amber-700 mt-0.5">כבר מופיע בתעודה · ' + htmlEscape(where) + '</div>' : '') + '</button>';
 }
 function receiptGatePickResultsHtml() {
@@ -6610,7 +6631,7 @@ function receiptGatePickResultsHtml() {
   if (!query) {
     const guesses = receiptGateGuesses(item);
     return guesses.length ? '<div class="font-black text-sm text-slate-700 mb-2">' + (guesses.length === 1 ? 'אולי זה המוצר:' : 'אולי אחד מאלה:') + '</div>' +
-      guesses.map(g => receiptGatePickButtonHtml(g.product, g.why.join(' · '), taken)).join('') +
+      guesses.map(g => receiptGatePickButtonHtml(g.product, g.why.join(' · '), taken, item)).join('') +
       '<div class="text-xs font-bold text-slate-500">לא זה? הקלד למעלה חלק מהשם שמודפס בשורה, או את קוד הפריט.</div>'
       : '<div class="text-sm font-bold text-slate-500 py-2">הקלד חלק מהשם שמודפס בשורה, את קוד הפריט, או כמה ספרות מהברקוד.</div>';
   }
@@ -6618,7 +6639,7 @@ function receiptGatePickResultsHtml() {
   if (!found.length) return '<div class="text-sm font-bold text-slate-500 py-2">לא נמצא מוצר כזה במאגר. מוצר חדש? סגור את החלון ולחץ "מוצר חדש — הוסף למאגר".</div>';
   // קודם מוצרים שעוד אינם בתעודה ושמוצגים בהזמנה, ואחריהם לפי השם
   found.sort((a, b) => Number(taken.has(a.id)) - Number(taken.has(b.id)) || Number(!!a.hidden) - Number(!!b.hidden) || String(a.name || '').localeCompare(String(b.name || ''), 'he'));
-  return found.slice(0, 30).map(p => receiptGatePickButtonHtml(p, '', taken)).join('') +
+  return found.slice(0, 30).map(p => receiptGatePickButtonHtml(p, '', taken, item)).join('') +
     (found.length > 30 ? '<div class="text-xs font-bold text-slate-500">מוצגים 30 מתוך ' + found.length + ' — הקלד עוד כדי לצמצם.</div>' : '');
 }
 function receiptGatePickSourceHtml(item) {
@@ -6632,12 +6653,15 @@ function renderReceiptGatePicker() {
   if (!item) { closeReceiptGatePicker(); receiptGateStale(); return; }
   const chosen = s.chosen ? (products || []).find(p => p && p.id != null && String(p.id) === String(s.chosen)) : null;
   if (chosen) {
-    const where = receiptGateTakenProducts().get(chosen.id), barcode = normalizeBarcode(chosen.barcode || '');
+    const where = receiptGateTakenProducts().get(chosen.id), barcode = normalizeBarcode(chosen.barcode || ''), gap = receiptGatePriceGap(item, chosen);
     const facts = [htmlEscape(receiptGateProductFacts(chosen)), barcode ? 'ברקוד <span dir="ltr">' + htmlEscape(barcode) + '</span>' : ''].filter(Boolean).join(' · ');
     body.innerHTML = receiptGatePickSourceHtml(item) +
       '<div class="font-black text-lg text-amber-900 mt-4">זה המוצר שמופיע בשורה?</div>' +
       '<div class="rounded-xl border-2 border-blue-300 p-3 mt-2"><div class="font-black text-xl text-slate-800">' + htmlEscape(chosen.name || '') + '</div>' +
       (facts ? '<div class="text-xs font-bold text-slate-500 mt-1">' + facts + '</div>' : '') + '</div>' +
+      // v173: מחירון אחר מזה שבשורה — שני המספרים, לפני "כן, שייך לשורה"
+      (gap ? '<div data-price-gap class="rounded-xl bg-amber-50 border border-amber-300 p-3 mt-2 text-sm font-black text-amber-900">שים לב: המחירון שונה מהתעודה — בתעודה ₪' + fmtMoney(gap.printed) + ', במאגר ₪' + fmtMoney(gap.list) +
+        '. בדוק שזה באמת המוצר. אם כן — כנראה המחירון במאגר לא מעודכן.</div>' : '') +
       (where ? '<div class="rounded-xl bg-amber-50 border border-amber-300 p-3 mt-2 text-sm font-black text-amber-900">שים לב: המוצר הזה כבר מופיע בתעודה (' + htmlEscape(where) + '). אם הוא ישויך גם לשורה הזאת, הכמויות של שתי השורות יתחברו.</div>' : '') +
       '<p class="text-sm font-bold text-slate-600 mt-2">השיוך הוא לשורה הזאת, בקליטה הזאת בלבד — המאגר לא משתנה, והכמות נשארת כמו שנקראה.</p>' +
       '<button type="button" data-pick-confirm class="btn-tap w-full min-h-[52px] rounded-xl bg-blue-600 text-white py-3 mt-3 font-black">כן, שייך לשורה</button>' +
@@ -6649,12 +6673,13 @@ function renderReceiptGatePicker() {
     '<input id="gatePickSearch" type="search" autocomplete="off" value="' + htmlEscape(s.query || '') + '" placeholder="חפש לפי שם, קוד פריט או ברקוד" aria-label="חיפוש מוצר במאגר" class="w-full border-2 border-slate-200 rounded-xl p-3 mt-3 text-base font-bold outline-none focus:border-blue-500">' +
     '<div id="gatePickResults" class="mt-3">' + receiptGatePickResultsHtml() + '</div>';
 }
-function openReceiptGatePicker(documentIndex, rowIndex, token) {
+function openReceiptGatePicker(documentIndex, rowIndex, token, chosenId) {
   if (!canEditSharedReceipt()) { sharedReceiptReadOnlyNotice(); return false; }
   const item = aiScanBusy ? null : receiptGateFindRow(documentIndex, rowIndex, token);
   if (!item) return receiptGateStale();
   closeReceiptGatePicker();
-  receiptGatePickState = { documentIndex, rowIndex, token, query: '', chosen: null, response: aiScanResponse };
+  // v173: chosenId — הצעה במחירון אחר מזה שבשורה: החלון נפתח ישר על "זה המוצר שמופיע בשורה?" ("חזרה לחיפוש" — לרשימה)
+  receiptGatePickState = { documentIndex, rowIndex, token, query: '', chosen: chosenId == null ? null : String(chosenId), response: aiScanResponse };
   const wrap = document.createElement('div');
   wrap.id = 'gatePickModal';
   wrap.setAttribute('role', 'dialog'); wrap.setAttribute('aria-modal', 'true'); wrap.setAttribute('aria-label', 'בחירת מוצר מהמאגר'); wrap.setAttribute('dir', 'rtl');
@@ -6681,7 +6706,7 @@ function openReceiptGatePicker(documentIndex, rowIndex, token) {
   document.body.appendChild(wrap);
   renderReceiptGatePicker();
   // בלי הצעות — המקלדת נפתחת מיד על החיפוש; עם הצעות — קודם רואים אותן
-  if (!receiptGateGuesses(item).length) setTimeout(() => { const input = $('gatePickSearch'); if (input && input.focus) input.focus(); }, 60);
+  if (chosenId == null && !receiptGateGuesses(item).length) setTimeout(() => { const input = $('gatePickSearch'); if (input && input.focus) input.focus(); }, 60);
   return true;
 }
 function receiptGatePickConfirm() {

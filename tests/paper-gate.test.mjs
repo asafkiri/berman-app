@@ -16,7 +16,9 @@
 // 9. שני מוצרים שלא זוהו: "N מוצרים", אחד אחד; ההצעות: קוד פריט דומה, מחירון; מוצר שכבר בתעודה אינו מוצע.
 // 10. מה שהכרטיס לא יכול לפתור נשאר כמו עד היום: אימות קריאה שממתין — הכרטיס שלו; קליטה שנספרת במסך הסריקה — מסך ההשוואה.
 // 11. עד השמירה: הקליטה נשמרת עם המוצר שנבחר, והבחירה נרשמת כהחלטה של העובד (manual_catalog_pick); בחירה שהמוצר שלה נמחק — חוזרת לזיהוי.
-// 12. הגרסה.
+// 12. (v173) מוצר במחירון אחר מזה שבשורה: "המחירון שונה מהתעודה" על ההצעה (בצבע אחר), ברשימת החיפוש, בשלב האישור ואחרי השיוך; "זה המוצר"
+//     על הצעה כזאת פותח את שלב האישור במקום לשייך. הצעה באותו מחירון — בלחיצה אחת, כמו ב-172; בלי מחירון בשורה — אין מה להשוות.
+// 13. הגרסה.
 // הרצה: TZ=Asia/Jerusalem node --test tests/paper-gate.test.mjs
 import fs from 'node:fs';
 import test from 'node:test';
@@ -256,9 +258,9 @@ test('5. "בחר מוצר מהמאגר": חיפוש לפי שם, קוד פריט
   pickerType(r, 'פיתות');
   const found = pickIds(pickerResults(r));
   assert.deepEqual(found.slice(-2).sort(), ['code_238', 'code_2381'], 'מה שכבר בתעודה — בסוף');
-  assert.match(strip(pickerResults(r)), /ברמן אסלי 5 פיתות קוד 238 · מחירון ₪7\.95 כבר מופיע בתעודה · עמוד 1 · שורה 3/);
+  assert.match(strip(pickerResults(r)), /ברמן אסלי 5 פיתות קוד 238 · מחירון ₪7\.95 המחירון שונה מהתעודה: בתעודה ₪14\.20 · במאגר ₪7\.95 כבר מופיע בתעודה · עמוד 1 · שורה 3/);
   pickerClick(r, '[data-pick-id]', { pickId: 'code_238' });
-  assert.match(pickerBody(r), /זה המוצר שמופיע בשורה\? ברמן אסלי 5 פיתות קוד 238 · מחירון ₪7\.95 · ברקוד 497204 שים לב: המוצר הזה כבר מופיע בתעודה \(עמוד 1 · שורה 3\)\. אם הוא ישויך גם לשורה הזאת, הכמויות של שתי השורות יתחברו\./);
+  assert.match(pickerBody(r), /זה המוצר שמופיע בשורה\? ברמן אסלי 5 פיתות קוד 238 · מחירון ₪7\.95 · ברקוד 497204 שים לב: המחירון שונה מהתעודה — בתעודה ₪14\.20, במאגר ₪7\.95\. בדוק שזה באמת המוצר\. אם כן — כנראה המחירון במאגר לא מעודכן\. שים לב: המוצר הזה כבר מופיע בתעודה \(עמוד 1 · שורה 3\)\. אם הוא ישויך גם לשורה הזאת, הכמויות של שתי השורות יתחברו\./);
   assert.equal(row(r).barcodeMatchMethod, null, 'עוד לא שויך דבר');
   // "חזרה לחיפוש" — החיפוש נשאר; בוחרים את המוצר הנכון ומאשרים
   pickerClick(r, '[data-pick-back]');
@@ -350,7 +352,7 @@ test('8. מוצר בלי ברקוד במאגר נבחר כמו כל מוצר; "�
   pickerType(r, 'תפזורת');
   assert.deepEqual(pickIds(pickerResults(r)), ['crate1']);
   pickerClick(r, '[data-pick-id]', { pickId: 'crate1' });
-  assert.match(pickerBody(r), /זה המוצר שמופיע בשורה\? לחם אחיד בתפזורת קוד 700 · מחירון ₪5\.00 השיוך הוא לשורה הזאת/, 'בלי ברקוד — בלי שורת ברקוד');
+  assert.match(pickerBody(r), /זה המוצר שמופיע בשורה\? לחם אחיד בתפזורת קוד 700 · מחירון ₪5\.00 שים לב: המחירון שונה מהתעודה — בתעודה ₪14\.20, במאגר ₪5\.00\. בדוק שזה באמת המוצר\. אם כן — כנראה המחירון במאגר לא מעודכן\. השיוך הוא לשורה הזאת/, 'בלי ברקוד — בלי שורת ברקוד; המחירון השונה — כתוב');
   pickerClick(r, '[data-pick-confirm]');
   assert.deepEqual([row(r).barcodeMatchMethod, row(r).__tnuvaProductId, row(r).barcode, row(r).barcodeReadType], ['user_catalog_pick', 'crate1', null, 'unreadable']);
   assert.equal(lastToast(r), '"לחם אחיד בתפזורת" שויך לשורה — הבדיקה שורה-שורה נפתחת.');
@@ -371,18 +373,22 @@ test('9. שני מוצרים שלא זוהו: "2 מוצרים", אחד אחד; �
   assert.match(text, /המוצרים האלה מודפסים בתעודה, אבל האפליקציה לא זיהתה אותם במאגר לפי קוד הפריט\. בוחרים כאן, אחד אחד, איזה מוצר זה\./);
   const offers = buttons(r, 'gate-pick-product');
   assert.deepEqual(offers.filter(o => o.row === '2').map(o => o.product), ['code_238', 'code_339', 'code_233'], 'הקודים שסוטים בספרה אחת — בלי 2381, שכבר בתעודה');
-  assert.match(text, /כך מודפס בתעודה · עמוד 1 · שורה 3 פיתות פרימיום קוד פריט 239 · 4 יח׳ בתעודה · מחירון ₪9\.99 אולי אחד מאלה: ברמן אסלי 5 פיתות קוד פריט דומה קוד 238 · מחירון ₪7\.95 זה המוצר ברמן אקטיב קוד פריט דומה קוד 339 · מחירון ₪17\.21 זה המוצר זוג לחמניות אצבע בש' קוד פריט דומה קוד 233 · מחירון ₪4\.10 זה המוצר/);
+  assert.match(text, /כך מודפס בתעודה · עמוד 1 · שורה 3 פיתות פרימיום קוד פריט 239 · 4 יח׳ בתעודה · מחירון ₪9\.99 אולי אחד מאלה: ברמן אסלי 5 פיתות קוד פריט דומה קוד 238 · מחירון ₪7\.95 המחירון שונה מהתעודה: בתעודה ₪9\.99 · במאגר ₪7\.95 זה המוצר ברמן אקטיב קוד פריט דומה קוד 339 · מחירון ₪17\.21 המחירון שונה מהתעודה: בתעודה ₪9\.99 · במאגר ₪17\.21 זה המוצר זוג לחמניות אצבע בש' קוד פריט דומה קוד 233 · מחירון ₪4\.10 המחירון שונה מהתעודה: בתעודה ₪9\.99 · במאגר ₪4\.10 זה המוצר/);
   assert.deepEqual(offers.filter(o => o.row === '4').map(o => o.product), ['code_2387']);
   // בחיפוש המוצר שכבר בתעודה מופיע — עם ההערה
   press(r, { role: 'gate-pick-search', ...buttons(r, 'gate-pick-search')[0] });
   pickerType(r, 'פרימיום');
-  assert.match(strip(pickerResults(r)), /^פיתות פרימיום 10 קוד 2381 · מחירון ₪12\.80 כבר מופיע בתעודה · עמוד 1 · שורה 4$/);
+  assert.match(strip(pickerResults(r)), /^פיתות פרימיום 10 קוד 2381 · מחירון ₪12\.80 המחירון שונה מהתעודה: בתעודה ₪9\.99 · במאגר ₪12\.80 כבר מופיע בתעודה · עמוד 1 · שורה 4$/);
   pickerClick(r, '[data-pick-close]');
   // מזהים את הראשון: נשאר עוד אחד, והכרטיס נשאר
   press(r, { role: 'gate-pick-product', ...offers.find(o => o.row === '2' && o.product === 'code_238') });
+  // v173: המחירון שונה (9.99 בתעודה, 7.95 במאגר) — לא בלחיצה אחת: שלב האישור, עם שני המחירונים
+  assert.equal(row(r, 2).barcodeMatchMethod, null, 'עוד לא שויך'); assert.equal(r.run('receiptGatePickState && receiptGatePickState.chosen'), 'code_238');
+  assert.match(pickerBody(r), /זה המוצר שמופיע בשורה\? ברמן אסלי 5 פיתות .* שים לב: המחירון שונה מהתעודה — בתעודה ₪9\.99, במאגר ₪7\.95\./);
+  pickerClick(r, '[data-pick-confirm]');
   assert.equal(lastToast(r), '"ברמן אסלי 5 פיתות" שויך לשורה. נשאר לזהות עוד מוצר אחד.');
   assert.deepEqual(gate(r).map(g => g.line), [5]); assert.match(screen(r), /צריך רק לזהות מוצר אחד — ואז ממשיכים לקלוט/);
-  assert.match(screen(r), /מוצר אחד שזיהית מהמאגר ברמן אסלי 5 פיתות בתעודה: פיתות פרימיום · עמוד 1 · שורה 3 · קוד פריט 239 בטל את הבחירה/, 'מה שכבר זוהה — בתוך הכרטיס');
+  assert.match(screen(r), /מוצר אחד שזיהית מהמאגר ברמן אסלי 5 פיתות בתעודה: פיתות פרימיום · עמוד 1 · שורה 3 · קוד פריט 239 המחירון שונה מהתעודה: בתעודה ₪9\.99 · במאגר ₪7\.95 בטל את הבחירה/, 'מה שכבר זוהה — בתוך הכרטיס, עם המחירון השונה');
   assert.deepEqual(buttons(r, 'gate-pick-product').map(o => [o.row, o.product]), [['4', 'code_2387']]);
   press(r, { role: 'gate-pick-product', ...buttons(r, 'gate-pick-product')[0] });
   assert.equal(gate(r), null); assert.equal(r.run('!!receiptLineCheckDocs()'), true);
@@ -446,8 +452,52 @@ test('11. עד השמירה: הקליטה נשמרת עם המוצר שנבחר,
   assert.equal(d.run(`aiResolveInvoiceBarcode(aiScanResponse.scan.documents[0].rows[4]).error`), 'בחירת המוצר מהמאגר אינה תואמת עוד לשורה — יש לבחור את המוצר שוב');
 });
 
-test('12. הגרסה עלתה ל-172, כולל ההערה ב-service worker', () => {
+test('12. מחירון אחר מזה שבשורה — כתוב, ואינו משויך בלחיצה אחת; אותו מחירון, או בלי מחירון בשורה — כמו ב-172', async () => {
+  // בעל העסק, 17.11.2026, על ההצעות לפי מחירון: "העיקר שהמחיר לא יהיה מטעה. אם יקרה שיהיה רק מוצר שונה אבל המחיר בעצם אותו הדבר — זה לא
+  // כל כך קריטי". בשורה 5 נקרא "לחם מלא" ב-₪14.20: הצעה לפי השם — לחם מלא בטוב (₪13.59 במאגר); הצעה לפי המחירון — פיתות עננים 8 (₪14.20).
+  const r = await arrived(unknown(rows => { rows[4] = { ...rows[4], description: 'לחם מלא' }; }));
+  const offers = buttons(r, 'gate-pick-product');
+  assert.deepEqual(offers.map(o => o.product), ['code_119', 'code_2387']);
+  const html = r.node('app').innerHTML, offerHtml = id => html.match(new RegExp('<button data-role="gate-pick-product"[^>]*data-product="' + id + '"[\\s\\S]*?</button>'))[0];
+  assert.match(strip(offerHtml('code_119')), /^לחם מלא בטוב שם דומה קוד 119 · מחירון ₪13\.59 המחירון שונה מהתעודה: בתעודה ₪14\.20 · במאגר ₪13\.59 זה המוצר$/);
+  assert.match(offerHtml('code_119'), /border-amber-300 bg-amber-50/); assert.match(offerHtml('code_119'), /bg-amber-600 text-white/);
+  assert.match(strip(offerHtml('code_2387')), /^פיתות עננים 8 אותו מחירון כמו בשורה קוד 2387 · מחירון ₪14\.20 זה המוצר$/, 'אותו מחירון — בלי הודעה');
+  assert.match(offerHtml('code_2387'), /border-emerald-300 bg-emerald-50/);
+  // "זה המוצר" על ההצעה במחירון אחר: שלב האישור, עם שני המחירונים — ושום דבר עוד לא שויך
+  press(r, { role: 'gate-pick-product', ...offers[0] });
+  assert.equal(row(r).barcodeMatchMethod, null, 'עוד לא שויך'); assert.equal(gate(r).length, 1);
+  assert.equal(r.run('receiptGatePickState && receiptGatePickState.chosen'), 'code_119');
+  assert.match(pickerBody(r), /^כך מודפס בתעודה · עמוד 1 · שורה 5 לחם מלא קוד פריט 9999 · 3 יח׳ בתעודה · מחירון ₪14\.20 זה המוצר שמופיע בשורה\? לחם מלא בטוב קוד 119 · מחירון ₪13\.59 · ברקוד 2037194 שים לב: המחירון שונה מהתעודה — בתעודה ₪14\.20, במאגר ₪13\.59\. בדוק שזה באמת המוצר\. אם כן — כנראה המחירון במאגר לא מעודכן\. השיוך הוא לשורה הזאת/);
+  // "חזרה לחיפוש" — ההצעות, ועל זו שבמחירון אחר — ההודעה; סגירה — כלום לא משתנה
+  pickerClick(r, '[data-pick-back]');
+  assert.match(pickerBody(r), /מחירון ₪14\.20 אולי אחד מאלה: לחם מלא בטוב שם דומה קוד 119 · מחירון ₪13\.59 המחירון שונה מהתעודה: בתעודה ₪14\.20 · במאגר ₪13\.59 פיתות עננים 8 אותו מחירון כמו בשורה קוד 2387 · מחירון ₪14\.20 לא זה\?/);
+  pickerType(r, 'לחם');
+  assert.match(strip(pickerResults(r)), /לחם מקמח כוסמין E-FREE קוד 344 · מחירון ₪17\.58 המחירון שונה מהתעודה: בתעודה ₪14\.20 · במאגר ₪17\.58/, 'גם בחיפוש');
+  pickerClick(r, '[data-pick-close]');
+  assert.equal(r.run('!!receiptGatePickState'), false); assert.equal(row(r).barcodeMatchMethod, null); assert.equal(gate(r).length, 1);
+  // שוב, ו"כן, שייך לשורה": משויך — ומה שזוהה ביד אומר גם אחר כך שהמחירון שונה
+  press(r, { role: 'gate-pick-product', ...buttons(r, 'gate-pick-product')[0] });
+  pickerClick(r, '[data-pick-confirm]');
+  assert.equal(row(r).barcodeMatchMethod, 'user_catalog_pick'); assert.equal(row(r).__tnuvaProductId, 'code_119'); assert.equal(gate(r), null);
+  assert.equal(lastToast(r), '"לחם מלא בטוב" שויך לשורה. עכשיו בוחרים איך לבדוק — וממשיכים לקלוט.');
+  assert.match(screen(r), /מוצר אחד שזיהית מהמאגר לחם מלא בטוב בתעודה: לחם מלא · עמוד 1 · שורה 5 · קוד פריט 9999 המחירון שונה מהתעודה: בתעודה ₪14\.20 · במאגר ₪13\.59 בטל את הבחירה/);
+  // "בטל את הבחירה", ו"זה המוצר" על ההצעה באותו מחירון — בלחיצה אחת, בלי חלון ובלי הודעה, כמו ב-172
+  press(r, { role: 'gate-pick-undo', doc: '0', row: '4' });
+  assert.equal(row(r).barcodeMatchMethod, null); assert.equal(gate(r).length, 1);
+  press(r, { role: 'gate-pick-product', ...buttons(r, 'gate-pick-product').find(o => o.product === 'code_2387') });
+  assert.equal(r.run('!!receiptGatePickState'), false, 'בלי חלון'); assert.equal(row(r).__tnuvaProductId, 'code_2387'); assert.equal(gate(r), null);
+  assert.doesNotMatch(screen(r), /המחירון שונה מהתעודה/);
+  // בלי מחירון בשורה — אין מה להשוות: בלי הודעה, ובלחיצה אחת
+  const n = await arrived(unknown(rows => { rows[4] = { ...rows[4], description: 'לחם מלא', unitPriceExVat: null, printedListUnitPrice: null }; }));
+  assert.doesNotMatch(screen(n), /המחירון שונה מהתעודה|מחירון ₪14\.20/);
+  const first = buttons(n, 'gate-pick-product')[0];
+  assert.equal(first.product, 'code_119');
+  press(n, { role: 'gate-pick-product', ...first });
+  assert.equal(n.run('!!receiptGatePickState'), false); assert.equal(row(n).__tnuvaProductId, 'code_119');
+});
+
+test('13. הגרסה עלתה ל-173, כולל ההערה ב-service worker', () => {
   const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-  assert.match(html, /const APP_VERSION = '172'/);
-  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), /גרסת אפליקציה 172/);
+  assert.match(html, /const APP_VERSION = '173'/);
+  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), /גרסת אפליקציה 173/);
 });
