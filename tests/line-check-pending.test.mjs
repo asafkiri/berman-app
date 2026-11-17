@@ -16,7 +16,8 @@
 // 4. התעודה נכנסה כשהמצלמה פתוחה: המצלמה לא נסגרת, המונה עובר ל"סומנו", כרטיס שפתוח באותו רגע נבנה מחדש מול הרשימה ומה שהוקלד
 //    בו נשאר; החלון מוצג כשהמצלמה נסגרת.
 // 5. מספר שהקריאה סימנה לבדיקה מול הנייר: בזמן שהמצלמה פתוחה לא קורה דבר; כשהיא נסגרת — אימות הקריאה במסך הקליטה (החלון נסגר,
-//    ניסיון אחד); אחרי האישור — הרשימה עולה לבד, עם מה שנסרק.
+//    ניסיון אחד); אחרי האישור — הרשימה עולה לבד, עם מה שנסרק. מוצר שאינו במאגר (v172): אחרי האימות — כרטיס הזיהוי במסך
+//    הקליטה, לא מסך ההשוואה; אחרי הזיהוי הרשימה עולה לבד.
 // 6. הסבב נגמר בלי תעודת משלוח, ונייר שלא אישר את עצמו: החלון אומר זאת וסורקים הלאה; "מה אפשר לעשות — במסך הקליטה"; תעודה שמצולמת
 //    אחר כך — הרשימה, עם מה שנסרק. מספרים שהוקלדו ביד — מסך הסריקה, עם אותה ספירה.
 // 7. בלי נייר: אותו חלון ("בדיקה בלי נייר"); "סיום — שמור בלי נייר" שומר קליטה בלי נייר, פתוחה, כמו קודם; המסך שמאחורי החלון.
@@ -330,8 +331,23 @@ test('5. מספר שהקריאה סימנה לבדיקה: המצלמה לא נק
   u.run('closeScanner()'); await settle();
   assert.ok(lineListArrives(u) >= 1);
   assert.equal(hidden(u), true); assert.equal(pendingNow(u), true); assert.equal(u.toasts.length, said + 1, 'אומרים למה');
-  assert.equal(u.run('currentView') === 'receiving' ? /data-ocr-key/.test(u.node('app').innerHTML) : u.run('currentView') === 'reconcile', true, 'מה שצריך להשלים — מול העיניים');
+  assert.equal(u.run('currentView'), 'receiving', 'מה שצריך להשלים — מול העיניים, במסך הקליטה');
+  assert.match(u.node('app').innerHTML, /data-ocr-key="4:itemCode"/, 'קודם אימות הקריאה של קוד הפריט');
   assert.deepEqual(counted(u), [['code_101', 12]], 'מה שנסרק נשמר');
+  // v172: הקוד מודפס כך בתעודה ("בדקתי מול התעודה") — כרטיס הזיהוי במסך הקליטה, לא מסך ההשוואה; אחרי הזיהוי הרשימה עולה לבד
+  // (הפירוט ב-paper-gate.test.mjs)
+  u.context.document.querySelectorAll = selector => selector === '[data-ocr-doc]' ? [{ dataset: { ocrDoc: '0', ocrKey: '4:itemCode' }, value: '9999' }] : [];
+  u.click('berman-ocr-confirm', '0'); await settle();
+  assert.equal(u.run('bermanOcrPendingDocs().length'), 0);
+  assert.ok(lineListArrives(u) >= 1);
+  assert.equal(u.run('currentView'), 'receiving', 'לא מסך ההשוואה'); assert.equal(u.run('reconcileData'), null);
+  assert.match(u.node('app').innerHTML, /data-paper-gate/); assert.match(screen(u), /צריך רק לזהות מוצר אחד — ואז ממשיכים לקלוט/);
+  assert.equal(hidden(u), true); assert.equal(pendingNow(u), true, 'הבדיקה מחכה'); assert.deepEqual(counted(u), [['code_101', 12]]);
+  assert.match(u.toasts[u.toasts.length - 1], /קודם מזהים את המוצר שכאן — ואז ממשיכים לקלוט/);
+  assert.equal(u.run(`receiptGatePickProduct(0, 4, 'code_2387', receiptGateRowToken(receiptPaperGate().rows[0]))`), true);
+  assert.ok(lineListArrives(u) >= 1);
+  assert.equal(listUp(u), true); assert.equal(hidden(u), false, 'הרשימה עלתה לבד');
+  assert.deepEqual(marks(u), ['ok,,,,']);
 });
 
 test('6. בלי תעודת משלוח בסבב, ונייר שלא אישר את עצמו: החלון אומר זאת וסורקים הלאה; תעודה שמצולמת אחר כך — הרשימה; מספרים ביד — מסך הסריקה', async () => {
@@ -652,10 +668,11 @@ test('12. מה שאינו בדיקה כזאת: צירוף נייר לקליטה 
   assert.equal(listUp(p), true); assert.deepEqual(marks(p), [',,ok,,']);
 });
 
-test('13. הגרסה עלתה ל-171, כולל ההערה ב-service worker; "סריקת מוצרים" אינה נבחרת עוד בשום מסך', () => {
+test('13. הגרסה 171 ומעלה, כולל ההערה ב-service worker; "סריקת מוצרים" אינה נבחרת עוד בשום מסך', () => {
   const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-  assert.match(html, /const APP_VERSION = '171'/);
-  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), /גרסת אפליקציה 171/);
+  const v = html.match(/const APP_VERSION = '(\d+)'/)[1];
+  assert.ok(Number(v) >= 171, v);
+  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), new RegExp('גרסת אפליקציה ' + v));
   assert.doesNotMatch(html, /data-role="rc-count-by-scan"|role === 'rc-count-by-scan'|מעבר לקליטה בסריקת מוצרים<|data-role="rc-open-photo-quantity"/);
   assert.doesNotMatch(html, /[>']\s*(התחל לספור עכשיו|קרא את התעודה והתחל לסרוק)/, 'הכפתורים של "קודם סופרים" ירדו');
   assert.match(html, /התחל לסרוק עכשיו — הרשימה תעלה כשתעודת המשלוח תיקרא/);
