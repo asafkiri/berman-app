@@ -16685,7 +16685,13 @@ function paperLedger(opts) {
         const cands = Object.keys(gaps).filter(k => k !== b && !no(k, b, rid) && retGap(k) >= q && !props.some(s => s.a === k && s.returnId === rid));
         // מוצר אחד שהחסר בו בדיוק בכמות הזו (או מועמד יחיד). כמה אפשרויות — לא מנחשים: כל צד מוצג בנפרד
         const exact = cands.filter(k => retGap(k) === q), same = samePrice(exact, b, [R && R.day, String(p.docDay || '')]);
-        const a = exact.length === 1 ? exact[0] : same.length === 1 ? same[0] : (!exact.length && cands.length === 1 ? cands[0] : null);
+        // v173: "מועמד יחיד" שחסר בו יותר מהכמות של השורה — לא כשבאותה החזרה מוצר אחר זוכה ביתר בדיוק בכמות שחסרה בו: זו
+        // ההחלפה שלו (שלב העודפים, למטה), והשורה הזו היא זיכוי על מוצר שלא הוחזר. נייר 97318 (22.11.2026): חלה מרובעת ×5 על
+        // מרובעת ×3 וקלועה ×2, ועוד "לחמניות חלומית" ×1 שלא הוחזרו. כל עוד חסר בהחזרה עוד מוצר — ההחלפה באותו מחיר נסגרה לבד;
+        // ברגע שהוא זוכה, הניחוש הזה לקח את הקלועה ("לחמניות חלומית ×1 במקום חלה קלועה"), ונשארו "חסר זיכוי על חלה קלועה ×1 —
+        // לבקש זיכוי מהנהג" ו"עודף זיכוי על חלה מרובעת ×2" — על חמש חלות שזוכו כולן.
+        const overExact = k => Object.keys(gaps).some(o => o !== k && o !== b && (gaps[o] || []).some(z => z.type === 'return' && z.id === rid && z.paperMode && z.sent > 0 && r3(z.gap) < 0 && r3(-z.gap) === r3(retGap(k))));
+        const a = exact.length === 1 ? exact[0] : same.length === 1 ? same[0] : (!exact.length && cands.length === 1 && !overExact(cands[0]) ? cands[0] : null);
         return a ? { a, rid, exact: exact.length > 0, same: ledgerSwapPrice(a, b, [R && R.day, String(p.docDay || '')]) === 'same' } : null;
       };
       // v150: נייר של כמה החזרות — ההחלפה בראשית כשחסר בה מוצר בדיוק בכמות של השורה (כמו בנייר של החזרה אחת); אחרת בזו
