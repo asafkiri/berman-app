@@ -854,7 +854,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '172'; // מוצר שבתעודה ואינו מזוהה במאגר: כרטיס זיהוי במסך הקליטה ("צריך רק לזהות מוצר אחד — ואז ממשיכים לקלוט"), במקום מסך ההשוואה לפני שנספר משהו (כמו יטבתה 419)
+const APP_VERSION = '173'; // נייר זיכוי: שורה שמודפסת במחיר אפסי (עד 5 אג׳) אינה זיכוי — לא נספרת, העוגנים יורדים איתה, והמאזן מראה "חסר זיכוי" על מה שהוחזר (נייר 97318, 22.11.2026)
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -12883,8 +12883,12 @@ function bermanOcrVerificationTargets(payload, inputDoc, docOverride) {
   const flagged = (row, index) => issues.some(issue => issue && (issue.rowIndex === index
     || (issue.lineNumber != null && issue.lineNumber === row.lineNumber && (issue.sourcePage == null || issue.sourcePage === row.sourcePage))));
   const identity = [], quantity = [];
+  // v173: שורה במחיר אפסי בנייר זיכוי אינה נספרת (paperPriceNominal, bermanPaperRecord) — הזהות שלה לא משנה דבר,
+  // ולא משלמים על קריאה נוספת כדי לאמת קוד פריט שאינו במאגר (שתי הקריאות כבר הסכימו עליו, על הכמות ועל המחיר)
+  const credit = !!doc && (doc.docType === 'credit' || /החזרה/.test(String(doc.headerText || '')));
   rows.forEach((row, index) => {
     if (!row || flagged(row, index)) return;
+    if (credit && Number(row.quantity) > 0 && paperPriceNominal(row.printedListUnitPrice)) return;
     if (!row.__tnuvaProductId || String(row.barcodeMatchMethod || '') === 'tnuva_code_repair') {
       identity.push({ noteIndex: 0, sourcePage: row.sourcePage, lineNumber: row.lineNumber, field: 'itemCode' });
     }
@@ -15775,6 +15779,34 @@ function ledgerDocBase(recs, rets) {
 }
 function paperRowKey(r) { return ledgerLineKey({ productId: r && r.productId, code: r && r.itemCode != null ? String(r.itemCode) : '', name: r && r.description, barcode: r && r.barcode }); }
 function paperUnits(p) { return ((p && p.rows) || []).reduce((a, r) => a + (Number(r && r.qty) || 0), 0); }
+// ===== v173: שורה במחיר אפסי בנייר זיכוי — אינה זיכוי =====
+// 22.11.2026, נייר הזיכוי 97318: "לחמניות כוסמין" (קוד 1649 — מוצר חדש שעוד לא משווק, ואינו במאגר) ×3 במחיר ₪0.01,
+// במקום "6 לחמניות כוסמין" ×3 שהוחזרו. החלטת בעל העסק: שורה בנייר זיכוי שמודפסת במחיר של עד 5 אגורות — אין מוצר
+// שעולה כך — "כאילו לא קיימת". היא יוצאת מ-p.rows אל p.nominal ({ line, itemCode, barcode, description, qty, price }),
+// והעוגנים יורדים איתה: anchors.units / anchors.lines הם מה שהשורות הנספרות מסתכמות אליו (97318: 55 יח׳ ו-15 שורות),
+// והמודפס בתחתית הנייר הוא הם ועוד השורות במחיר אפסי (58, 16). כך כל מה שקורא נייר — המאזן, השיוך, המרכזת, וגם טלפון
+// בגרסה קודמת — רואה נייר רגיל של 15 שורות; ומה שהוחזר ולא זוכה באמת מופיע במאזן כ"חסר זיכוי".
+// רק נייר זיכוי: בתעודת משלוח או בנייר חיוב שורה כזו היא סחורה שהגיעה, וסופרים אותה.
+// מחיר 0, או מחיר שלא נקרא — לא "אפסי": אולי פשוט לא נקרא. העובד יכול להכריע במסך הבדיקה, לשני הכיוונים.
+const PAPER_NOMINAL_PRICE_MAX = 0.05;
+function paperPriceNominal(price) {
+  const n = price == null || price === '' ? NaN : Number(price);
+  return isFinite(n) && n > 0 && Math.round(n * 1000) <= Math.round(PAPER_NOMINAL_PRICE_MAX * 1000);
+}
+function paperNominalRows(p) { return p && Array.isArray(p.nominal) ? p.nominal.filter(Boolean) : []; }
+function paperNominalUnits(p) { return paperNominalRows(p).reduce((a, r) => a + (Number(r.qty) || 0), 0); }
+// כך מודפס בנייר (לא שם המוצר במאגר — שורה כזו יכולה להיות משויכת בטעות למוצר אחר): "לחמניות כוסמין ×3 (₪0.01)"
+function paperNominalRowText(x) {
+  const prod = x && x.productId && products.find(q => q.id === x.productId);
+  const name = String((x && x.description) || '').trim() || (prod ? prod.name : '') || ('קוד ' + ((x && x.itemCode) || '—'));
+  return name + ' ×' + mtxQty(Number(x && x.qty) || 0) + (x && x.price != null && isFinite(Number(x.price)) ? ' (₪' + Number(x.price).toFixed(2) + ')' : '');
+}
+function paperNominalText(p) { return paperNominalRows(p).map(paperNominalRowText).join(', '); }
+// "שורה במחיר אפסי לא נספרה: …" — לכרטיסים (צילום, היסטוריה, החזרה)
+function paperNominalNote(p) {
+  const n = paperNominalRows(p).length;
+  return n ? (n === 1 ? 'שורה במחיר אפסי לא נספרה: ' : n + ' שורות במחיר אפסי לא נספרו: ') + paperNominalText(p) : '';
+}
 // v150: נייר זיכוי אחד יכול לזכות כמה החזרות — הנהג לקח שתי החזרות (או יותר) והדפיס נייר אחד. attach.type/id/role —
 // ההחזרה הראשית, כמו קודם; attach.also — ההחזרות הנוספות שהנייר זיכה ({ id, role }). שורה שהתחלקה בין החזרות (אותו מוצר
 // בשתיהן, והנייר מאחד אותו לשורה אחת: "ברמן אסלי ×4" — 3 לאחת, 1 לשנייה) — כמה יעדים לאותה שורה, לכל אחד qty.
@@ -16018,8 +16050,10 @@ function paperReturnCover(need, cands, opts) {
 // טביעת נייר: יום, יחידות, שורות, וקוד:כמות של כל שורה כפי שמודפסים — בלי מספר
 // התעודה, כדי לתפוס אותו נייר שנקרא פעם עם ספרה שגויה במספר, או שנכלל כבר בקליטה.
 function paperFingerprint(p) {
-  const rows = ((p && p.rows) || []).map(r => String((r && (r.itemCode || r.barcode)) || '') + ':' + (Number(r && r.qty) || 0)).sort();
-  return [String((p && p.docDay) || ''), paperUnits(p), rows.length, rows.join(',')].join('|');
+  // v173: הטביעה היא של מה שמודפס בנייר — גם השורות במחיר אפסי (p.nominal). כך צילום חדש של נייר שנשמר בגרסה קודמת
+  // עם השורה הזו בין השורות הוא אותו נייר (ומחליף אותו כשהוא נקרא עד הסוף), ולא "נייר אחר עם אותו מספר".
+  const rows = ((p && p.rows) || []).concat(paperNominalRows(p)).map(r => String((r && (r.itemCode || r.barcode)) || '') + ':' + (Number(r && r.qty) || 0)).sort();
+  return [String((p && p.docDay) || ''), paperUnits(p) + paperNominalUnits(p), rows.length, rows.join(',')].join('|');
 }
 // v142: אותו תוכן מודפס. יום שנקבע לנייר כי התאריך שלו לא נקרא היטב (paperDayDefaulted) הוא יום הצילום או של
 // הקליטה, לא היום המודפס — שני צילומים של אותו נייר יכולים לקבל ימים שונים. אז משווים בלי היום, והזהות
@@ -16098,6 +16132,8 @@ function ledgerPaperStates(papers, recs, start, asOf) {
     // תעודת משלוח לא נספרת במאזן (הקליטה סופרת) — רק תזכורת עד שנקלטה, גם אם לא נקראה עד הסוף.
     // v130: נייר "ת.משלוח" קטן — רק לפי המספר או התוכן (קליטה בלי נייר מאותו יום היא כמעט תמיד התעודה הגדולה)
     else if (p.kind === 'delivery') st = inReceipt() || (!p.small && bareDays.has(String(p.docDay))) ? 'in-receipt' : 'awaiting-receipt';
+    // v173: נייר זיכוי שכל שורותיו במחיר אפסי — אושר, ואין בו מה לספור: לא "לבדיקה", ולא זיכוי של אף החזרה
+    else if (p.kind === 'credit' && p.state === 'accepted' && p.docDay && rows && !rows.length && paperNominalRows(p).length) st = 'nominal';
     else if (p.state !== 'accepted' || !p.docDay || !rows || !rows.length || rows.some(r => !r || !r.productId || !(Number(r.qty) > 0))) st = 'unproven';
     else if (inReceipt()) st = 'in-receipt';
     if (st === 'counted' && p.kind !== 'declared') {
@@ -16649,7 +16685,13 @@ function paperLedger(opts) {
         const cands = Object.keys(gaps).filter(k => k !== b && !no(k, b, rid) && retGap(k) >= q && !props.some(s => s.a === k && s.returnId === rid));
         // מוצר אחד שהחסר בו בדיוק בכמות הזו (או מועמד יחיד). כמה אפשרויות — לא מנחשים: כל צד מוצג בנפרד
         const exact = cands.filter(k => retGap(k) === q), same = samePrice(exact, b, [R && R.day, String(p.docDay || '')]);
-        const a = exact.length === 1 ? exact[0] : same.length === 1 ? same[0] : (!exact.length && cands.length === 1 ? cands[0] : null);
+        // v173: "מועמד יחיד" שחסר בו יותר מהכמות של השורה — לא כשבאותה החזרה מוצר אחר זוכה ביתר בדיוק בכמות שחסרה בו: זו
+        // ההחלפה שלו (שלב העודפים, למטה), והשורה הזו היא זיכוי על מוצר שלא הוחזר. נייר 97318 (22.11.2026): חלה מרובעת ×5 על
+        // מרובעת ×3 וקלועה ×2, ועוד "לחמניות חלומית" ×1 שלא הוחזרו. כל עוד חסר בהחזרה עוד מוצר — ההחלפה באותו מחיר נסגרה לבד;
+        // ברגע שהוא זוכה, הניחוש הזה לקח את הקלועה ("לחמניות חלומית ×1 במקום חלה קלועה"), ונשארו "חסר זיכוי על חלה קלועה ×1 —
+        // לבקש זיכוי מהנהג" ו"עודף זיכוי על חלה מרובעת ×2" — על חמש חלות שזוכו כולן.
+        const overExact = k => Object.keys(gaps).some(o => o !== k && o !== b && (gaps[o] || []).some(z => z.type === 'return' && z.id === rid && z.paperMode && z.sent > 0 && r3(z.gap) < 0 && r3(-z.gap) === r3(retGap(k))));
+        const a = exact.length === 1 ? exact[0] : same.length === 1 ? same[0] : (!exact.length && cands.length === 1 && !overExact(cands[0]) ? cands[0] : null);
         return a ? { a, rid, exact: exact.length > 0, same: ledgerSwapPrice(a, b, [R && R.day, String(p.docDay || '')]) === 'same' } : null;
       };
       // v150: נייר של כמה החזרות — ההחלפה בראשית כשחסר בה מוצר בדיוק בכמות של השורה (כמו בנייר של החזרה אחת); אחרת בזו
@@ -17100,8 +17142,15 @@ function ledgerItemText(it, lg, papers) {
       }).filter(Boolean).join(' · ');
       if (it.waitPaper) return { text: 'חסר זיכוי על ' + list + ' מההחזרה של ' + d + ' — ממתין לנייר זיכוי שצילמת ועוד לא נספר',
         detail: (nums ? nums + '.' : '') + ' ענה במאזן על הנייר שממתין (לאיזו החזרה, או בדיקה מול הנייר) — אם הוא משלים את הזיכוי, זה ייסגר לבד.', actions: [] };
+      // v173: בנייר הזיכוי של ההחזרה יש שורה במחיר אפסי שלא נספרה — כנראה זו שבמקום מה שחסר; כתוב כאן, כדי לדעת מה להגיד
+      // לנהג. רק כשהיא יכולה להסביר את החוסר הזה — לא יותר יחידות במחיר אפסי ממה שחסר: אחרי שהזיכוי האמיתי הגיע, השורה
+      // כבר לא קשורה לחוסר אחר שנשאר בהחזרה.
+      const dv = (lg.docViews || {})[x.id] || {};
+      const nomP = [it.mainPaperId].concat(dv.mainIds || [], dv.papers || []).filter((id, i, a) => id && a.indexOf(id) === i).map(P).filter(p => p && paperNominalRows(p).length);
+      const shortUnits = (it.keys || [{ units: it.units }]).reduce((a, z) => a + (Number(z.units) || 0), 0);
+      const nomTxt = nomP.length && nomP.reduce((a, p) => a + paperNominalUnits(p), 0) <= shortUnits ? nomP.map(p => ' ב' + paperLabel(p) + ' — ' + paperNominalNote(p) + '.').join('') : '';
       return { text: 'חסר זיכוי על ' + list + ' מההחזרה של ' + d + ' — לבקש זיכוי מהנהג',
-        detail: (nums ? nums + '.' : '') + (x.paperMode ? ' אם הנהג הביא עוד תעודת זיכוי — צלם אותה בכפתור "צלם נייר מהנהג" למעלה, וזה ייסגר לבד.' : LEDGER_PHOTO_HINT), actions: [] };
+        detail: (nums ? nums + '.' : '') + nomTxt + (x.paperMode ? ' אם הנהג הביא עוד תעודת זיכוי — צלם אותה בכפתור "צלם נייר מהנהג" למעלה, וזה ייסגר לבד.' : LEDGER_PHOTO_HINT), actions: [] };
     }
     case 'returnNotCreditedYet': {
       const many = it.keys && it.keys.length > 1;
@@ -17698,12 +17747,31 @@ function bermanPaperRecord(result, ctx) {
   const gating = !!(ver && ver.status === 'needs_review' && (!(ver.issues || []).length || issues.length));
   // מה לבדוק מול הנייר: שורות שהסריקה סימנה, ומשפט לכל דבר אחר
   const notes = [], docFields = [];
+  const issueRow = issue => issue.rowIndex != null ? Number(issue.rowIndex)
+    : issue.lineNumber != null ? rawRows.findIndex(x => x && x.lineNumber === issue.lineNumber && (issue.sourcePage == null || x.sourcePage == null || x.sourcePage === issue.sourcePage)) : -1;
   issues.forEach(issue => {
-    const idx = issue.rowIndex != null ? Number(issue.rowIndex)
-      : issue.lineNumber != null ? rawRows.findIndex(x => x && x.lineNumber === issue.lineNumber && (issue.sourcePage == null || x.sourcePage == null || x.sourcePage === issue.sourcePage)) : -1;
+    const idx = issueRow(issue);
     if (idx >= 0 && rows[idx]) rows[idx].flag = true;
     else { const f = PAPER_FIELD_LABELS[issue.field] || 'הקריאה'; if (docFields.indexOf(f) === -1) docFields.push(f); }
   });
+  // v173: שורה בנייר זיכוי שמודפסת במחיר אפסי (עד 5 אג׳) אינה זיכוי — יוצאת מהשורות הנספרות אל paper.nominal, והעוגנים
+  // יורדים איתה (ראה paperPriceNominal). הנייר מוכיח את עצמו כמו תמיד — כל השורות שנקראו מול בלוק הסיכום וה"ביקורת"
+  // (anchor, checkOk) — ורק אחר כך השורה יוצאת. לא מכריעים לבד כשיש ספק: שורה שהקריאה סימנה לבדיקה, שורה שהמחיר שלה
+  // נשאר במחלוקת בין הקריאות, כמות שלא נקראה, או קריאה שלא אומתה כולה — אלה נשארות שורות רגילות, והעובד מכריע במסך
+  // הבדיקה ("מחיר אפסי — לא לספור").
+  const nominal = [], nominalAt = new Set();
+  if (kind === 'credit' && !(gating && !issues.length) && !(ver && ver.error)) {
+    const priceDoubt = new Set((ver && Array.isArray(ver.issues) ? ver.issues : []).filter(x => x && x.field === 'unitPriceExVat').map(issueRow).filter(i => i >= 0));
+    rows.forEach((r, i) => {
+      const src = (doc.rows || [])[i] || {}, raw = rawRows[i] || {};
+      const price = src.printedListUnitPrice != null ? src.printedListUnitPrice : raw.unitPriceExVat;
+      if (r.flag || priceDoubt.has(i) || !(r.qty > 0) || !paperPriceNominal(price)) return;
+      nominalAt.add(i);
+      nominal.push({ ...r, price: Math.round(Number(price) * 1000) / 1000 });
+    });
+  }
+  const counted = nominalAt.size ? rows.filter((r, i) => !nominalAt.has(i)) : rows;
+  const nominalUnits = nominal.reduce((a, r) => a + r.qty, 0);
   const flaggedRows = rows.filter(r => r.flag).length;
   if (flaggedRows) notes.push(flaggedRows === 1 ? 'הקריאה סימנה שורה אחת לבדיקה — היא מסומנת בצהוב' : 'הקריאה סימנה ' + flaggedRows + ' שורות לבדיקה — הן מסומנות בצהוב');
   if (docFields.length) notes.push('בדוק מול הנייר: ' + docFields.join(', '));
@@ -17728,19 +17796,22 @@ function bermanPaperRecord(result, ctx) {
   const docDay = dateDoubt ? (toReceiving ? delivery.day : (delivery.capture || delivery.day)) : readDay;
   // מה נקרא — כפי שהודפס; כשהקריאה האחרונה לא קראה תאריך, היום שהקריאות שלפניה קראו
   const readText = doc.docDate != null && doc.docDate !== '' ? String(doc.docDate) : readDay ? readDay.split('-').reverse().join('/') : null;
-  const unmapped = rows.filter(r => !r.productId).length;
+  // v173: מה שלא זוהה ומה שחוסם אישור — רק בשורות הנספרות (שורה במחיר אפסי לא צריכה מוצר); נייר שכל שורותיו במחיר
+  // אפסי מאושר בלי שורות (במאזן: "מחיר אפסי — לא נספר")
+  const unmapped = counted.filter(r => !r.productId).length;
   if (unmapped) notes.push((unmapped === 1 ? 'שורה אחת לא זוהתה' : unmapped + ' שורות לא זוהו') + ' — בחר מוצר');
   const terminal = internal || (/^2900/.test(number) ? number : '');
-  const accepted = !!kind && anchor.ok && checkOk !== false && !gating && !!docDay && rows.length > 0 && rows.every(r => r.productId && r.qty > 0);
+  const accepted = !!kind && anchor.ok && checkOk !== false && !gating && !!docDay && rows.length > 0 && counted.every(r => r.productId && r.qty > 0);
   const paper = {
     schema: 1, rev: 1, id: paperDocId(number, ctx.captureId), kind, kindKnown: !!kind, number: number || null, terminalNumber: terminal || null,
-    numerator: doc.numerator || null, headerText: header || null, docDay, printedTime: null, rows, ...(small ? { small: true } : {}),
+    numerator: doc.numerator || null, headerText: header || null, docDay, printedTime: null, rows: counted, ...(nominal.length ? { nominal } : {}), ...(small ? { small: true } : {}),
     // v142: היום נקבע ולא נקרא מהנייר — למה, מה נקרא (כפי שהודפס/נקרא), ואיזה יום: capture — יום הצילום,
     // receiving — היום של הקליטה שהתעודה נכנסה אליה
     ...(dateDoubt ? { docDayDefault: { reason: dateDoubt, printed: readText, day: docDay, from: toReceiving ? 'receiving' : 'capture' } } : {}),
     // v142: מתי צולם (נכנס לתור) — יום הצילום של נייר שנקרא אחר כך
     ...(Number(ctx.capturedAt) > 0 ? { capturedAt: Number(ctx.capturedAt) } : {}),
-    anchors: { units: anchor.printedUnits, lines: anchor.printedLines, check, source: 'printed' },
+    // v173: מה שהשורות הנספרות מסתכמות אליו — המודפס פחות השורות במחיר אפסי. ה"ביקורת" נשארת כפי שמודפסת.
+    anchors: { units: anchor.printedUnits == null ? null : anchor.printedUnits - nominalUnits, lines: anchor.printedLines == null ? null : anchor.printedLines - nominal.length, check, source: 'printed' },
     proof: { unitsOk: anchor.units === true, linesOk: anchor.lines === true, checkOk, scanStatus: ver ? ver.status : null },
     state: accepted ? 'accepted' : 'needs-review', otherPapersVisible: doc.otherPapersVisible === true,
     forReturnId: ctx.forReturnId || null, captureId: ctx.captureId, photoHash: ctx.hash || null,
@@ -18723,7 +18794,8 @@ function paperIntakeItemHtml(item) {
       btn('ledger-paper-delete', 'מחק את הצילום', ' data-paper="' + htmlEscape(p.id) + '"' + capAttr); // v132
   } else if (p && (item.status === 'saved' || item.status === 'review')) {
     let st = '', lgNow = null; try { lgNow = currentLedger(); st = lgNow.states[p.id] || ''; } catch (e) {}
-    const head = htmlEscape(paperLabel(p)) + ' · ' + ledgerRowsText((p.rows || []).length) + ' · ' + mtxQty(paperUnits(p)) + ' יח׳';
+    // v173: נייר שכל שורותיו במחיר אפסי — בלי "0 שורות · 0 יח׳"; מה שלא נספר כתוב בשורה משלו (paperNominalNote)
+    const head = htmlEscape(paperLabel(p)) + (st === 'nominal' ? '' : ' · ' + ledgerRowsText((p.rows || []).length) + ' · ' + mtxQty(paperUnits(p)) + ' יח׳');
     if (rec && rec.conflict) {
       body = '<div class="font-black text-sm text-amber-800">' + head + '</div><div class="text-[11px] text-amber-800 font-bold mt-0.5">נייר אחר כבר שמור עם המספר הזה, עם שורות אחרות. מה נכון?</div>';
       tone = 'border-amber-300 bg-amber-50';
@@ -18740,6 +18812,7 @@ function paperIntakeItemHtml(item) {
         : st === 'duplicate' ? 'זהה לנייר שכבר נספר — נספר פעם אחת.'
         : st === 'in-receipt' ? 'כבר כלול בקליטה — לא נספר פעמיים.'
         : st === 'outside' ? pre + 'מחוץ לתקופת המאזן — לא נספר.'
+        : st === 'nominal' ? pre + 'כל השורות בנייר במחיר אפסי — הנייר לא נספר כזיכוי.' // v173
         : (paperAttachShown(p) || 'נספר לפי מוצר');
       const good = ok && !again && (st === 'counted' || st === '');
       // v141: נייר זיכוי שחסרה בו שורה של ההחזרה, או שזיכה מוצר אחר במקום — מה שפתוח בו, כאן (הנייר ביד, והנהג אולי עוד כאן)
@@ -18748,6 +18821,8 @@ function paperIntakeItemHtml(item) {
       const gap = gapItems.length > 0;
       body = '<div class="font-black text-sm ' + (gap ? 'text-rose-800' : good ? 'text-emerald-800' : ok ? 'text-slate-700' : 'text-amber-800') + '">' + (good && !gap ? '✓ ' : '') + head + (gap ? ' — נקרא, ויש פער מול ההחזרה' : good ? ' — תואם לנייר' : '') + '</div>' +
         '<div class="text-[11px] ' + (ok ? 'text-slate-600' : 'text-amber-800') + ' font-bold mt-0.5">' + htmlEscape(sub) + '</div>' +
+        // v173: שורה במחיר אפסי שלא נספרה — כאן, כשהנייר ביד והנהג אולי עוד כאן
+        (paperNominalRows(p).length ? '<div data-nominal-note class="text-[11px] text-slate-600 font-bold mt-0.5"><i class="fa-solid fa-circle-info" aria-hidden="true"></i> ' + htmlEscape(paperNominalNote(p)) + '</div>' : '') +
         (gap ? ledgerSentencesHtml(gapItems, lgNow, ledgerAllPapers(lgNow)) : '') +
         (!ok && p.review && p.review.notes && p.review.notes.length ? '<div class="text-[11px] text-amber-700 font-bold mt-0.5">' + (p.review.notes.length === 1 ? 'דבר אחד' : p.review.notes.length + ' דברים') + ' לבדוק מול הנייר — לחץ "לבדיקה"</div>' : '') +
         paperDayDefaultHtml(p) + // v142: לא חוסם — רק אומר איזה יום נקבע
@@ -18837,30 +18912,39 @@ async function openPaperReview(id, cap) {
   const p = cloneSafe(found.paper);
   const local = !!found.local && !found.local.ackedAt;
   let st = ''; try { st = currentLedger().states[p.id] || ''; } catch (e) {}
+  // v173: "המספרים בתחתית הנייר" הם מה שמודפס — העוגנים השמורים (של השורות הנספרות) ועוד השורות במחיר אפסי.
+  // nom0 — כמה כאלה היו כשהנייר נפתח (העוגנים השמורים נמדדים מולן עד שמאשרים)
+  const nom0 = { units: paperNominalUnits(p), lines: paperNominalRows(p).length };
   paperReview = { id: p.id, cap: (found.local && found.local.captureId) || p.captureId || '', paper: p, local, conflict: !!(found.local && found.local.conflict),
     st, wasAccepted: p.state === 'accepted', attachPick: false, checked: false, query: '', pickLine: null, orig: JSON.stringify(p),
     day0: p.docDay || '', dayConfirmed: false, // v142: היום כשנפתח, והאם העובד אישר יום שנקבע ("התאריך נכון")
     from: ['receiptsHistory', 'receiving', 'manage'].indexOf(currentView) !== -1 ? currentView : null, // v127/v130: חוזרים למסך שממנו נפתח (היסטוריה, קליטה, ניהול)
-
-    units: p.anchors && p.anchors.units != null ? p.anchors.units : '', lines: p.anchors && p.anchors.lines != null ? p.anchors.lines : '', img: null };
+    nom0,
+    units: p.anchors && p.anchors.units != null ? paperReviewPrinted(p.anchors.units, nom0.units) : '', lines: p.anchors && p.anchors.lines != null ? paperReviewPrinted(p.anchors.lines, nom0.lines) : '', img: null };
   setView('paperReview');
   const key = (found.local && found.local.captureId) || p.captureId;
   const img = key ? await paperImgGet(key) : null;
   if (img && paperReview && paperReview.id === p.id) { paperReview.img = img; if (currentView === 'paperReview') renderPaperReview(); }
 }
+// v173: המודפס בתחתית הנייר = העוגן השמור ועוד השורות במחיר אפסי. בנייר בלי שורות כאלה — העוגן כמו שהוא, בדיוק כמו עד 172
+function paperReviewPrinted(anchor, nominal) { return nominal ? Number(anchor) + nominal : anchor; }
 function paperReviewState() {
   const r = paperReview, p = r.paper;
-  const units = (p.rows || []).reduce((a, x) => a + (Number(x.qty) || 0), 0);
+  // v173: מול תחתית הנייר נמדד כל מה שמודפס בו — השורות הנספרות ועוד השורות במחיר אפסי (nominal / nominalUnits).
+  // מוצר וכמות נדרשים רק בשורות הנספרות; נייר שכל שורותיו במחיר אפסי מאושר בלי שורות.
+  const nominal = paperNominalRows(p).length, nominalUnits = paperNominalUnits(p);
+  const units = (p.rows || []).reduce((a, x) => a + (Number(x.qty) || 0), 0) + nominalUnits;
+  const lineCount = (p.rows || []).length + nominal;
   const u = r.units === '' ? null : Number(r.units), l = r.lines === '' ? null : Number(r.lines);
-  const unitsOk = u != null && u === units, linesOk = l != null && l === (p.rows || []).length;
+  const unitsOk = u != null && u === units, linesOk = l != null && l === lineCount;
   const mapped = (p.rows || []).every(x => x.productId && Number(x.qty) > 0);
   const dayOk = /^\d{4}-\d{2}-\d{2}$/.test(String(p.docDay || ''));
   const kindOk = !!p.kind && p.kindKnown !== false;
   const mustCheck = !!(p.review && p.review.mustCheck);
   // צילום שמתנגש עם נייר שמור: אישור בלי לתקן את המספר רק יחזיר את ההתנגשות — החלף או מחק
   const conflictBlocked = !!(r.conflict && paperDocId(p.number, r.cap) === r.id);
-  return { units, unitsOk, linesOk, mapped, dayOk, kindOk, mustCheck, conflictBlocked,
-    ok: unitsOk && linesOk && mapped && (p.rows || []).length > 0 && dayOk && kindOk && (!mustCheck || !!r.checked) && !conflictBlocked };
+  return { units, lineCount, nominal, nominalUnits, unitsOk, linesOk, mapped, dayOk, kindOk, mustCheck, conflictBlocked,
+    ok: unitsOk && linesOk && mapped && lineCount > 0 && dayOk && kindOk && (!mustCheck || !!r.checked) && !conflictBlocked };
 }
 function renderPaperReview() {
   const r = paperReview; if (!r) { setView('ledger'); return; }
@@ -18876,8 +18960,10 @@ function renderPaperReview() {
       '<div class="flex items-center justify-between gap-2"><div class="min-w-0"><div class="font-black text-sm text-slate-800 truncate">' + htmlEscape(prod ? prod.name : 'לא זוהה: ' + (x.description || '')) + '</div>' +
         '<div class="text-[11px] text-slate-400 font-bold">שורה ' + htmlEscape(x.line) + ' · קוד ' + htmlEscape(x.itemCode || '—') + (x.barcode ? ' · ברקוד ' + htmlEscape(x.barcode) : '') + (x.flag ? ' · <span class="text-amber-700">סומנה לבדיקה</span>' : '') + '</div></div>' +
         (blind ? '' : '<input data-role="review-qty" data-id="' + i + '" type="text" inputmode="numeric" aria-label="כמות" value="' + htmlEscape(x.qty) + '" class="w-16 h-11 text-center text-base font-black border-2 border-slate-300 rounded-lg outline-none focus:border-blue-500">') + '</div>' +
-      '<div class="flex gap-1.5 mt-2"><button data-role="review-pick" data-id="' + i + '" class="btn-tap min-h-[44px] px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-black">' + (prod ? 'שנה מוצר' : 'בחר מוצר') + '</button>' +
-        '<button data-role="review-row-del" data-id="' + i + '" class="btn-tap min-h-[44px] px-3 py-1.5 rounded-lg bg-white border border-rose-200 text-rose-600 text-xs font-black">הסר שורה</button></div>' +
+      '<div class="flex flex-wrap gap-1.5 mt-2"><button data-role="review-pick" data-id="' + i + '" class="btn-tap min-h-[44px] px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-black">' + (prod ? 'שנה מוצר' : 'בחר מוצר') + '</button>' +
+        '<button data-role="review-row-del" data-id="' + i + '" class="btn-tap min-h-[44px] px-3 py-1.5 rounded-lg bg-white border border-rose-200 text-rose-600 text-xs font-black">הסר שורה</button>' +
+        // v173: בנייר זיכוי — שורה שמודפסת במחיר אפסי (עד 5 אג׳) אינה זיכוי: נשארת בנייר, ולא נספרת
+        (p.kind === 'credit' && p.kindKnown !== false ? '<button data-role="review-row-nominal" data-id="' + i + '" class="btn-tap min-h-[44px] px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-600 text-xs font-black">מחיר אפסי — לא לספור</button>' : '') + '</div>' +
       (r.pickLine === i ? '<input id="reviewSearch" type="text" value="' + htmlEscape(r.query) + '" placeholder="חפש מוצר בשם או בקוד" class="w-full mt-2 p-2.5 rounded-xl border-2 border-slate-200 outline-none text-base font-bold focus:border-blue-500"><div id="reviewSearchList" class="space-y-1.5 mt-1.5"></div>' : '') +
     '</div>';
   };
@@ -18899,6 +18985,7 @@ function renderPaperReview() {
     (blind ? '<div class="text-[11px] text-slate-500 font-bold mb-2">' + (p.kind === 'delivery' && p.kindKnown !== false ? 'תעודת משלוח: הכמויות לא מוצגות לפני הקליטה — סופרים בקליטה כמו תמיד.' : 'בחר קודם את סוג הנייר — הכמויות יוצגו אחרי שתבחר (בתעודת משלוח הן לא מוצגות לפני הקליטה).') + '</div>' : '') +
     paperReviewAttachHtml(r) +
     '<div class="space-y-2 mb-2">' + (p.rows || []).map(rowHtml).join('') + '</div>' +
+    paperReviewNominalHtml(p) + // v173
     '<button data-role="review-row-add" class="btn-tap w-full min-h-[44px] bg-white border-2 border-dashed border-slate-300 text-slate-500 rounded-xl py-2 font-black text-xs mb-3"><i class="fa-solid fa-plus"></i> שורה שלא נקראה</button>' +
     '<div class="bg-white border border-slate-200 rounded-2xl p-3 mb-3"><div class="font-black text-slate-700 text-sm mb-2">המספרים בתחתית הנייר</div>' +
       '<div class="grid grid-cols-2 gap-2"><label class="text-xs font-black text-slate-500">סה״כ כללי<input id="reviewUnits" type="text" inputmode="numeric" value="' + htmlEscape(r.units) + '" class="w-full h-11 mt-1 text-center font-black border-2 border-slate-200 rounded-xl"></label>' +
@@ -18912,6 +18999,38 @@ function renderPaperReview() {
       '<button id="reviewSave" data-role="review-save" aria-disabled="' + (st.ok ? 'false' : 'true') + '" class="btn-tap flex-1 py-3 rounded-xl font-black text-white ' + (st.ok ? 'bg-blue-600' : 'bg-slate-300') + '">אשר את הנייר</button>' +
     '</div><div class="h-24"></div>';
   if (r.pickLine != null) refreshReviewSearch();
+}
+// v173: השורות במחיר אפסי של נייר זיכוי — מוצגות כפי שמודפסות, מתחת לשורות הנספרות, עם "ספור בכל זאת"
+// (כשהמחיר נקרא לא נכון, או שזו כן שורת זיכוי). הן חלק מהנייר: נמדדות מול "המספרים בתחתית הנייר", ולא נספרות במאזן.
+function paperReviewNominalHtml(p) {
+  const list = paperNominalRows(p);
+  if (!list.length) return '';
+  return '<div data-review-nominal class="rounded-xl border border-slate-300 bg-slate-100 p-2.5 mb-2">' +
+    '<div class="text-xs font-black text-slate-700">' + (list.length === 1 ? 'שורה במחיר אפסי — לא נספרת כזיכוי' : list.length + ' שורות במחיר אפסי — לא נספרות כזיכוי') + '</div>' +
+    '<div class="text-[11px] text-slate-500 font-bold mt-0.5">שורה שמודפסת במחיר של עד 5 אג׳ אינה זיכוי. מה שהחזרת ולא זוכה באמת יופיע במאזן כ"חסר זיכוי".</div>' +
+    list.map((x, i) => '<div class="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-slate-200"><div class="min-w-0">' +
+        '<div class="font-black text-sm text-slate-600 break-words">' + htmlEscape(paperNominalRowText(x)) + '</div>' +
+        '<div class="text-[11px] text-slate-400 font-bold">שורה ' + htmlEscape(x.line) + ' · קוד ' + htmlEscape(x.itemCode || '—') + (x.barcode ? ' · ברקוד ' + htmlEscape(x.barcode) : '') + '</div></div>' +
+      '<button data-role="review-nominal-count" data-id="' + i + '" class="btn-tap shrink-0 min-h-[44px] px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-700 text-xs font-black">ספור בכל זאת</button></div>').join('') +
+  '</div>';
+}
+// v173: שורה ↔ שורה במחיר אפסי, במסך הבדיקה. השורה עוברת כמו שהיא (גם המוצר שנבחר לה, אם נבחר), ונשארת במקומה לפי מספר השורה.
+function paperReviewRowToNominal(p, i) {
+  const x = (p.rows || [])[i]; if (!x) return;
+  p.rows.splice(i, 1);
+  const row = { ...x }; delete row.flag;
+  const list = paperNominalRows(p), at = list.findIndex(y => Number(y.line) > Number(row.line));
+  if (at === -1) list.push(row); else list.splice(at, 0, row);
+  p.nominal = list;
+}
+function paperReviewNominalToRow(p, i) {
+  const list = paperNominalRows(p), x = list[i]; if (!x) return;
+  list.splice(i, 1); p.nominal = list;
+  // נייר שנפתח בלי שורות כאלה וחזר להיות בלעדיהן — בלי שדה ריק (אחרת הוא נראה "שונה" ממה שנפתח)
+  if (!list.length && !(paperReview && paperReview.paper === p && paperReview.nom0 && paperReview.nom0.lines)) delete p.nominal;
+  p.rows = Array.isArray(p.rows) ? p.rows : [];
+  const at = p.rows.findIndex(y => Number(y.line) > Number(x.line));
+  if (at === -1) p.rows.push({ ...x }); else p.rows.splice(at, 0, { ...x });
 }
 // v142: יום שנקבע לנייר (התאריך לא נקרא היטב) — ההערה, ו"התאריך נכון": העובד מאשר את היום בלי לשנות אותו.
 // יום שהעובד שינה בשדה או אישר כאן — שלו (savePaperReview); בדיקה שנפתחה רק בשביל שורה לא נוגעת בו.
@@ -18927,8 +19046,8 @@ function paperReviewDaySetByUser(r) {
   return !!r && (String(r.paper.docDay || '') !== String(r.day0 || '') || (!!r.dayConfirmed && paperDayDefaulted(r.paper)));
 }
 function paperReviewDirty(r) {
-  const p = r.paper, a = p.anchors || {};
-  return JSON.stringify(p) !== r.orig || String(r.units) !== String(a.units != null ? a.units : '') || String(r.lines) !== String(a.lines != null ? a.lines : '');
+  const p = r.paper, a = p.anchors || {}, n = r.nom0 || { units: 0, lines: 0 }; // v173: השדות מציגים את המודפס — העוגנים השמורים ועוד השורות במחיר אפסי
+  return JSON.stringify(p) !== r.orig || String(r.units) !== String(a.units != null ? paperReviewPrinted(a.units, n.units) : '') || String(r.lines) !== String(a.lines != null ? paperReviewPrinted(a.lines, n.lines) : '');
 }
 // שיוך נייר זיכוי שכבר נספר: מה המאזן שייך, ו[שנה] — ההחזרות של 14 הימים שלפני התאריך המודפס
 function paperReviewAttachHtml(r) {
@@ -18961,20 +19080,21 @@ function paperReviewBlockers(st) {
   if (st.conflictBlocked) out.push('המספר זהה לנייר שמור — תקן את המספר, או בחר למעלה: החלף / מחק.');
   if (!st.kindOk) out.push('בחר למעלה מה הנייר: חיוב, זיכוי / החזרה או תעודת משלוח.');
   if (!st.dayOk) out.push('חסר התאריך המודפס — מלא אותו.');
-  if (!rows.length) out.push('אין שורות — הוסף כל שורה מהנייר ב"שורה שלא נקראה".');
+  // v173: שורות במחיר אפסי הן חלק מהנייר — נמדדות מול תחתית הנייר יחד עם השורות הנספרות (st.units, st.lineCount)
+  if (!st.lineCount) out.push('אין שורות — הוסף כל שורה מהנייר ב"שורה שלא נקראה".');
   if (rows.some(x => !x.productId)) out.push('יש שורה בלי מוצר — "בחר מוצר" בשורה המסומנת.');
   if (rows.some(x => !(Number(x.qty) > 0))) out.push('יש שורה עם כמות 0 — רשום את הכמות מהנייר, או הסר את השורה.');
   const u = r.units === '' ? null : Number(r.units), l = r.lines === '' ? null : Number(r.lines);
   if (u == null) out.push('מלא את "סה״כ כללי" מתחתית הנייר.');
-  else if (rows.length && !st.unitsOk) {
+  else if (st.lineCount && !st.unitsOk) {
     const d = u - st.units;
-    out.push((rows.length === 1 ? 'בשורה רשומה כמות ' + mtxQty(st.units) : 'הכמויות בשורות מסתכמות ל-' + mtxQty(st.units)) + ', ובתחתית הנייר "סה״כ כללי" ' + mtxQty(u) + '. ' +
+    out.push((st.lineCount === 1 && !st.nominal ? 'בשורה רשומה כמות ' + mtxQty(st.units) : 'הכמויות בשורות מסתכמות ל-' + mtxQty(st.units) + (st.nominal ? ' (כולל ' + mtxQty(st.nominalUnits) + ' יח׳ במחיר אפסי)' : '')) + ', ובתחתית הנייר "סה״כ כללי" ' + mtxQty(u) + '. ' +
       (d > 0 ? 'חסר ' + mtxQty(d) : 'יש ' + mtxQty(-d) + ' יותר מדי') + ': תקן את הכמות בשורה, או את "סה״כ כללי" אם הועתק לא נכון.');
   }
   if (l == null) out.push('מלא את "סהכ שורות" מתחתית הנייר.');
-  else if (rows.length && !st.linesOk) {
-    out.push('כאן ' + ledgerRowsText(rows.length) + ', ובתחתית הנייר "סהכ שורות" ' + mtxQty(l) + '. ' +
-      (l > rows.length ? 'חסרה שורה: הוסף אותה ב"שורה שלא נקראה"' : 'יש שורה מיותרת: הסר אותה') + ', או תקן את "סהכ שורות" אם הועתק לא נכון.');
+  else if (st.lineCount && !st.linesOk) {
+    out.push('כאן ' + ledgerRowsText(st.lineCount) + (st.nominal ? ' (כולל ' + ledgerRowsText(st.nominal) + ' במחיר אפסי)' : '') + ', ובתחתית הנייר "סהכ שורות" ' + mtxQty(l) + '. ' +
+      (l > st.lineCount ? 'חסרה שורה: הוסף אותה ב"שורה שלא נקראה"' : 'יש שורה מיותרת: הסר אותה') + ', או תקן את "סהכ שורות" אם הועתק לא נכון.');
   }
   if (st.mustCheck && !r.checked) out.push('אחרי שהשווית לנייר — סמן "בדקתי מול הנייר".');
   return out;
@@ -18983,10 +19103,12 @@ function paperReviewStatusHtml() {
   const st = paperReviewState(), p = paperReview.paper;
   const mark = ok => ok ? '<span class="text-emerald-700">✓</span>' : '<span class="text-rose-700">✗</span>';
   const why = paperReviewBlockers(st);
-  return mark(st.unitsOk) + ' שורות הנייר: ' + mtxQty(st.units) + ' יח׳ · ' + mark(st.linesOk) + ' ' + ledgerRowsText((p.rows || []).length) +
+  return mark(st.unitsOk) + ' שורות הנייר: ' + mtxQty(st.units) + ' יח׳ · ' + mark(st.linesOk) + ' ' + ledgerRowsText(st.lineCount) +
     (why.length ? '<div data-review-why class="rounded-xl bg-amber-50 border border-amber-200 p-2.5 mt-2"><div class="text-xs font-black text-amber-800 mb-1">עוד אי אפשר לאשר:</div>' +
         why.map(t => '<div class="text-xs font-bold text-amber-800">• ' + htmlEscape(t) + '</div>').join('') + '</div>'
-      : ' · <span class="text-emerald-700">✓ תואם לנייר — אפשר לאשר</span>');
+      : ' · <span class="text-emerald-700">✓ תואם לנייר — אפשר לאשר</span>') +
+    // v173: כמה מזה נספר כזיכוי — בלי השורות במחיר אפסי
+    (st.nominal ? '<div data-review-counted class="text-xs font-bold text-slate-500 mt-1">נספר כזיכוי: ' + mtxQty(st.units - st.nominalUnits) + ' יח׳ · ' + ledgerRowsText((p.rows || []).length) + ' (בלי ' + (st.nominal === 1 ? 'השורה' : st.nominal + ' השורות') + ' במחיר אפסי)</div>' : '');
 }
 // v151: לחיצה על הכפתור האפור אומרת למה, ומגלגלת אל ההסבר — במקום כפתור מושבת ששותק
 function paperReviewExplain() {
@@ -19012,7 +19134,8 @@ async function savePaperReview() {
   // v142: לפני האישור — אחריו ה-confirmedAt החדש כבר לא שווה ל-proofAt (paperDayDefaulted)
   const daySetByUser = paperReviewDaySetByUser(r), dayKept = !daySetByUser && paperDayDefaulted(p);
   const confirmedAt = Date.now();
-  p.anchors = { units: Number(r.units), lines: Number(r.lines), check: p.anchors ? p.anchors.check : null, source: 'typed' };
+  // v173: השדות הם מה שמודפס בתחתית הנייר; נשמר מה שהשורות הנספרות מסתכמות אליו — המודפס פחות השורות במחיר אפסי
+  p.anchors = { units: Number(r.units) - paperNominalUnits(p), lines: Number(r.lines) - paperNominalRows(p).length, check: p.anchors ? p.anchors.check : null, source: 'typed' };
   p.proof = { ...(p.proof || {}), unitsOk: true, linesOk: true, confirmedBy: deviceName || 'user', confirmedAt };
   p.state = 'accepted'; p.kindKnown = true;
   // v142: תאריך שהעובד שינה בשדה, או אישר ("התאריך נכון") — שלו: ההערה יורדת, והוא גובר גם בקליטה. בדיקה שנפתחה
@@ -19060,6 +19183,8 @@ async function paperWrite(p, ctx) {
   // v142: מי קבע את היום (העובד, בבדיקת הנייר); הסימן של יום שנקבע (התאריך לא נקרא היטב) — רק כשהיה, כדי לא לכתוב שדה חדש לכל נייר
   if (p.docDayBy) data.docDayBy = p.docDayBy;
   if (p.docDayDefault !== undefined || (cur && cur.docDayDefault)) data.docDayDefault = p.docDayDefault || null;
+  // v173: השורות במחיר אפסי — רק לנייר שיש בו כאלה (או שהיו, ועכשיו נספרות): שדה חדש לא נכתב לכל נייר
+  if (paperNominalRows(p).length || paperNominalRows(cur).length) data.nominal = paperNominalRows(p);
   const ok = await runCloudTask('save paper review', { op: 'update', path: dataPath('papers', p.id), data, operationId: makeOperationId('paper_review') });
   if (ok) { const i = papers.findIndex(x => x.id === p.id); if (i !== -1) papers[i] = { ...papers[i], ...data }; ledgerInvalidate(); }
   // הנייר כבר נשמר בענן במספר שלו (שהוא המזהה שם) — מספר אחר לא נשמר, ואומרים זאת
@@ -19171,7 +19296,8 @@ function ledgerConflictCardHtml(rec) {
     '<div class="flex gap-1.5 mt-2 flex-wrap">' + b('paper-conflict-keep', 'החלף בצילום החדש') + b('paper-conflict-drop', 'מחק את הצילום החדש') + (blind ? '' : b('paper-open', 'פרטים')) + '</div></div></div></div>';
 }
 function ledgerPaperStateLabel(st) {
-  return { counted: 'נספר', 'in-receipt': 'כבר בקליטה', 'awaiting-receipt': 'ממתין לקליטה', unproven: 'לבדיקה', 'needs-attach': 'ממתין לשיוך', duplicate: 'כפול — לא נספר', outside: 'מחוץ לתקופה', void: 'בוטל', superseded: 'הוחלף בנייר', orphan: 'יתום', unsupported: 'מגרסה חדשה יותר — רענן את האפליקציה' }[st] || '';
+  return { counted: 'נספר', 'in-receipt': 'כבר בקליטה', 'awaiting-receipt': 'ממתין לקליטה', unproven: 'לבדיקה', 'needs-attach': 'ממתין לשיוך', duplicate: 'כפול — לא נספר', outside: 'מחוץ לתקופה', void: 'בוטל', superseded: 'הוחלף בנייר', orphan: 'יתום', unsupported: 'מגרסה חדשה יותר — רענן את האפליקציה',
+    nominal: 'מחיר אפסי — לא נספר' }[st] || ''; // v173
 }
 function renderLedger() {
   if (!ledgerSourcesReady()) {
@@ -19513,7 +19639,8 @@ function retPapersHtml(r, ls) {
     // v145: ומה מהנייר הלך לחוסר בקליטה (כמו בכרטיס הנייר עד v144). v150: מה הנייר בשביל ההחזרה הזו, ואילו עוד החזרות הוא זיכה
     const what = paperAttachShown(p, lg, r.id);
     const local = !papers.some(x => x && x.id === p.id && !x.deleted);
-    const sub = [ledgerRowsText((p.rows || []).filter(Boolean).length), mtxQty(paperUnits(p)) + ' יח׳', what, local ? 'ממתין לשמירה בענן' : ''].filter(Boolean).join(' · ');
+    // v173: וגם מה שבנייר ולא נספר — שורה במחיר אפסי
+    const sub = [ledgerRowsText((p.rows || []).filter(Boolean).length), mtxQty(paperUnits(p)) + ' יח׳', what, paperNominalNote(p), local ? 'ממתין לשמירה בענן' : ''].filter(Boolean).join(' · ');
     return '<div class="mt-1.5 bg-white border border-slate-200 rounded-xl p-3 flex items-center justify-between gap-2">' +
       '<div class="min-w-0"><div class="font-black text-sm text-slate-800"><i class="fa-solid ' + (p.kind === 'credit' ? 'fa-file-circle-minus' : 'fa-receipt') + ' text-slate-400" aria-hidden="true"></i> ' + htmlEscape(paperLabel(p)) + '</div>' +
         '<div class="text-[11px] text-slate-500 font-bold">' + htmlEscape(sub) + '</div></div>' +
@@ -19621,6 +19748,7 @@ function paperCardInHistory(p, lg, all, isOpenCard) {
   else if (st === 'awaiting-receipt') { tone = 'amber'; status = '<i class="fa-solid fa-hourglass-half"></i> ממתינה לקליטה'; }
   else if (st === 'outside') { tone = 'slate'; status = 'מחוץ לתקופת המאזן'; }
   else if (st === 'unsupported') { tone = 'slate'; status = 'רענן את האפליקציה'; }
+  else if (st === 'nominal') { tone = 'slate'; status = 'מחיר אפסי — לא נספר'; } // v173: כל שורות הנייר במחיר אפסי
   else if (pv.open.length) { const pr = pv.open.some(i => i.state === 'problem'); tone = pr ? 'rose' : 'amber'; status = pr ? '<i class="fa-solid fa-triangle-exclamation"></i> ' + (pv.open.length === 1 ? 'לטיפול במאזן' : pv.open.length + ' לטיפול במאזן') : '<i class="fa-solid fa-circle-question"></i> שאלה במאזן'; }
   else if (pv.pending.length) { tone = 'amber'; status = '<i class="fa-solid fa-hourglass-half"></i> ממתין'; }
   const head = p.kind === 'credit' ? '<i class="fa-solid fa-file-circle-minus"></i> נייר זיכוי מהנהג' : p.kind === 'charge' ? '<i class="fa-solid fa-file-circle-plus"></i> נייר חיוב מהנהג'
@@ -19635,7 +19763,11 @@ function paperCardInHistory(p, lg, all, isOpenCard) {
     return '<div class="flex items-center justify-between gap-2 py-1 border-b border-slate-100 last:border-0"><div class="min-w-0"><div class="text-sm font-bold text-slate-700 truncate">' + htmlEscape(prod ? prod.name : (x.description || 'לא זוהה')) + '</div>' +
       '<div class="text-[11px] text-slate-400">' + (x.itemCode ? 'קוד ' + htmlEscape(x.itemCode) : '') + (x.barcode ? (x.itemCode ? ' · ' : '') + '<i class="fa-solid fa-barcode"></i> ' + htmlEscape(x.barcode) : '') + '</div></div>' +
       '<div class="text-sm font-black text-slate-600 shrink-0">' + mtxQty(x.qty) + ' יח׳</div></div>';
-  }).join('') + '</div>';
+  }).join('') +
+    // v173: השורות במחיר אפסי — בנייר, ולא נספרות; כפי שהן מודפסות
+    paperNominalRows(p).map(x => '<div data-nominal-row class="flex items-center justify-between gap-2 py-1 border-b border-slate-100 last:border-0"><div class="min-w-0"><div class="text-sm font-bold text-slate-400 truncate">' + htmlEscape(String(x.description || '').trim() || ('קוד ' + (x.itemCode || '—'))) + '</div>' +
+      '<div class="text-[11px] text-slate-400">' + (x.itemCode ? 'קוד ' + htmlEscape(x.itemCode) + ' · ' : '') + 'מחיר אפסי' + (x.price != null && isFinite(Number(x.price)) ? ' (₪' + Number(x.price).toFixed(2) + ')' : '') + ' — לא נספר</div></div>' +
+      '<div class="text-sm font-black text-slate-400 shrink-0">' + mtxQty(x.qty) + ' יח׳</div></div>').join('') + '</div>';
   const btn = (role, label, extra, strong) => '<button data-role="' + role + '"' + (extra || '') + ' class="btn-tap w-full min-h-[44px] mt-2 rounded-xl py-2.5 font-black text-sm ' + (strong ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700') + '">' + label + '</button>';
   const pid = ' data-id="' + htmlEscape(p.id) + '"';
   const actions = st === 'unproven' ? btn('paper-open', '<i class="fa-solid fa-magnifying-glass"></i> לבדיקה מול הנייר', pid, true)
@@ -19816,7 +19948,14 @@ function paperUiClick(t) {
   if (role.indexOf('ledger-') === 0) { ledgerAnswer(role, t.dataset.item, t.dataset.return, t.dataset.paper, t.dataset.receipt); return true; }
   if (!paperReview) return false;
   const r = paperReview;
-  if (role === 'review-kind') { r.paper.kind = t.dataset.kind; r.paper.kindKnown = true; renderPaperReview(); return true; }
+  // v173: שורה במחיר אפסי "לא נספרת" רק בנייר זיכוי — בסוג אחר (חיוב, תעודת משלוח) היא סחורה, וחוזרת להיות שורה רגילה
+  if (role === 'review-kind') {
+    r.paper.kind = t.dataset.kind; r.paper.kindKnown = true;
+    if (r.paper.kind !== 'credit' && paperNominalRows(r.paper).length) { while (paperNominalRows(r.paper).length) paperReviewNominalToRow(r.paper, 0); r.pickLine = null; }
+    renderPaperReview(); return true;
+  }
+  if (role === 'review-row-nominal') { if (r.paper.kind === 'credit') { paperReviewRowToNominal(r.paper, parseInt(id, 10)); r.pickLine = null; } renderPaperReview(); return true; }
+  if (role === 'review-nominal-count') { paperReviewNominalToRow(r.paper, parseInt(id, 10)); r.pickLine = null; renderPaperReview(); return true; }
   if (role === 'review-checked') { r.checked = !r.checked; renderPaperReview(); return true; }
   if (role === 'review-day-confirm') { r.dayConfirmed = true; renderPaperReview(); return true; } // v142
   if (role === 'review-attach-toggle') { r.attachPick = !r.attachPick; renderPaperReview(); return true; }
@@ -19825,7 +19964,7 @@ function paperUiClick(t) {
   if (role === 'review-pick') { const i = parseInt(id, 10); r.pickLine = r.pickLine === i ? null : i; r.query = ''; renderPaperReview(); const s = $('reviewSearch'); if (s) s.focus(); return true; }
   if (role === 'review-pick-product') { const p = products.find(x => x.id === id); const row = r.paper.rows[r.pickLine]; if (p && row) { row.productId = p.id; row.matchedBy = 'user'; if (!row.itemCode) row.itemCode = productCode(p); } r.pickLine = null; r.query = ''; renderPaperReview(); return true; }
   if (role === 'review-row-del') { r.paper.rows.splice(parseInt(id, 10), 1); r.pickLine = null; renderPaperReview(); return true; }
-  if (role === 'review-row-add') { r.paper.rows.push({ line: r.paper.rows.length + 1, itemCode: '', barcode: null, description: '', qty: 1, productId: null, matchedBy: 'user' }); r.pickLine = r.paper.rows.length - 1; renderPaperReview(); return true; }
+  if (role === 'review-row-add') { r.paper.rows.push({ line: r.paper.rows.length + paperNominalRows(r.paper).length + 1, itemCode: '', barcode: null, description: '', qty: 1, productId: null, matchedBy: 'user' }); r.pickLine = r.paper.rows.length - 1; renderPaperReview(); return true; }
   if (role === 'review-save') { if (paperReviewState().ok) savePaperReview(); else paperReviewExplain(); return true; } // v151: אפור — מסביר למה
   if (role === 'review-delete') { deletePaperFromReview(); return true; }
   return false;
