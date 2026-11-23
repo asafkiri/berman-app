@@ -347,7 +347,8 @@ test('נייר בלי שורות במחיר אפסי: שום שדה חדש, או
   assert.deepEqual(JSON.parse(JSON.stringify(upd.data.anchors)), { units: 11, lines: 4, check: 228, source: 'typed' });
 });
 
-test('הגרסה 173, כולל ההערה ב-service worker', () => {
-  assert.match(html, /const APP_VERSION = '173'/);
-  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), /גרסת אפליקציה 173/);
+test('הגרסה 173 ומעלה, כולל ההערה ב-service worker', () => {
+  const v = html.match(/const APP_VERSION = '(\d+)'/)[1];
+  assert.ok(Number(v) >= 173, v);
+  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), new RegExp('גרסת אפליקציה ' + v));
 });

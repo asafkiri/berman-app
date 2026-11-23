@@ -854,7 +854,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '173'; // נייר זיכוי: שורה שמודפסת במחיר אפסי (עד 5 אג׳) אינה זיכוי — לא נספרת, העוגנים יורדים איתה, והמאזן מראה "חסר זיכוי" על מה שהוחזר (נייר 97318, 22.11.2026)
+const APP_VERSION = '174'; // ליטושים ל-173: ניחוש של החלפה ("מועמד יחיד") נסוג רק מפני החלפה מדויקת שבאמת נוצרת, אחרת כמו עד 172; הדילוג על קריאת האימות לשורה במחיר אפסי — רק בקליטת הניירות; "ספור בכל זאת" מנקה את השורה גם כשהנייר לא ברשימה שבזיכרון
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -12872,7 +12872,7 @@ function aiSingleDocScoreBetter(candidate, best) {
 // v122: יעדי האימות הנוסף (קריאה שלישית בתשלום) הם זהות וכמות בלבד: שורה
 // שלא זוהתה במאגר (או שזוהתה בתיקון ספרה) — קוד הפריט; שורה שהכמות שלה לא
 // נקראה — הכמות. בלי מחיר ובלי סכום: הכסף אינו עניין של הקליטה.
-function bermanOcrVerificationTargets(payload, inputDoc, docOverride) {
+function bermanOcrVerificationTargets(payload, inputDoc, docOverride, opts) {
   const doc = docOverride || (payload && payload.scan && Array.isArray(payload.scan.documents) ? payload.scan.documents[0] : null);
   const rows = doc && Array.isArray(doc.rows) ? doc.rows : [];
   // שורה שהשרת כבר סימן בקריאה הזאת אינה יעד נוסף (כמו ocr_uncertain עד v121) —
@@ -12884,8 +12884,10 @@ function bermanOcrVerificationTargets(payload, inputDoc, docOverride) {
     || (issue.lineNumber != null && issue.lineNumber === row.lineNumber && (issue.sourcePage == null || issue.sourcePage === row.sourcePage))));
   const identity = [], quantity = [];
   // v173: שורה במחיר אפסי בנייר זיכוי אינה נספרת (paperPriceNominal, bermanPaperRecord) — הזהות שלה לא משנה דבר,
-  // ולא משלמים על קריאה נוספת כדי לאמת קוד פריט שאינו במאגר (שתי הקריאות כבר הסכימו עליו, על הכמות ועל המחיר)
-  const credit = !!doc && (doc.docType === 'credit' || /החזרה/.test(String(doc.headerText || '')));
+  // ולא משלמים על קריאה נוספת כדי לאמת קוד פריט שאינו במאגר (שתי הקריאות כבר הסכימו עליו, על הכמות ועל המחיר).
+  // v174: רק בקליטת הניירות מהנהג (opts.paperIntake) — שם השורה באמת יוצאת מהנייר. בקריאה של תעודה בתוך קליטה
+  // (aiScanDocuments) השורה נשארת שורה שצריך לזהות, והקוד שלה נשלח לאימות כמו עד 172.
+  const credit = !!(opts && opts.paperIntake) && !!doc && (doc.docType === 'credit' || /החזרה/.test(String(doc.headerText || '')));
   rows.forEach((row, index) => {
     if (!row || flagged(row, index)) return;
     if (credit && Number(row.quantity) > 0 && paperPriceNominal(row.printedListUnitPrice)) return;
@@ -12948,7 +12950,7 @@ async function aiScanSingleDocPipeline(token, docIndex, opts) {
   }
   const verification = best.payload.verification;
   if (isCurrent() && verification && !verification.escalationAttempted) {
-    const targets = bermanOcrVerificationTargets(best.payload, inputDoc);
+    const targets = bermanOcrVerificationTargets(best.payload, inputDoc, null, { paperIntake: opts.paperIntake === true });
     if (targets.length) {
       if (opts.onProgress) opts.onProgress('בודק שוב את המספרים החשודים…');
       else { aiScanProgressText = 'בודק שוב את המספרים החשודים בתעודה ' + (docIndex + 1) + '…'; refreshScanHost(); }
@@ -16670,9 +16672,26 @@ function paperLedger(opts) {
   // לא חלה וברמן אקטיב). כמה כאלה, או אף אחד — לא מנחשים
   const samePrice = (list, b, days) => list.length > 1 ? list.filter(k => ledgerSwapPrice(k, b, days) === 'same') : [];
   // v145: הצעה ששלב 2 דחה (A+B בהחזרה) — לא חוסמת את השורות האחרות: בונים שוב בלעדיה, עד שכל מה שהוצע מחזיק
-  const buildProps = rejected => {
+  // v174: בנייה אחת של ההצעות (buildProps, למטה, בונה שוב כשניחוש חוסם החלפה מדויקת). yielded — ניחושים ("מועמד יחיד")
+  // שנסוגו ואינם מוצעים בבנייה הזו; blocked — לכאן נאספים הניחושים שהבנייה הזו מצאה שהם חוסמים החלפה מדויקת
+  const buildOnce = (rejected, yielded, blocked) => {
   const no = (a, b, rid) => rejected.has(a + '|' + b + '|' + rid);
   const props = [];
+  // v174: ההצעות שהן "מועמד יחיד" (המוצר החסר אינו בדיוק בכמות של השורה) — ניחוש. הערך: האם הניחוש הוא החלפה באותו מחיר
+  const guesses = new Map();
+  // v174: ניחוש מתוך list שלקח, בהחזרה rid, מוצר שחסר בדיוק ב-q — הכמות של b (שורה של מוצר שלא הוחזר, או עודף על מוצר
+  // שהוחזר): הוא חוסם החלפה מדויקת של אותו מוצר. ניחוש שהוא החלפה באותו מחיר (נסגרת לבד, "אין מה לבקש") — רק מול החלפה
+  // מדויקת שגם היא באותו מחיר; מול מחיר אחר הוא נשאר, כמו עד 172. ורק כשה"בדיוק" אמיתי גם בחשבון הכולל של שני המוצרים:
+  // כל הכמות של b עודפת (לא כשחלק ממנה מכסה חוסר של b במקום אחר — החזרה אחרת שלו שעוד לא זוכתה, חוסר בקליטה), וכל
+  // הכמות חסרה במוצר שהניחוש לקח (לא כשחלק מהחוסר שלו כבר מכוסה במקום אחר — שורה שלו בנייר, עודף בהחזרה אחרת)
+  const netOf = k => r3((gaps[k] || []).reduce((a, x) => a + x.gap, 0));
+  const blocks = (list, b, q, rid, retGap, days) => {
+    if (!blocked || !(q > 0) || r3(netOf(b) + q) > 0) return;
+    list.forEach(s => {
+      if (guesses.has(s) && s.returnId === rid && s.a !== b && s.b !== b && !no(s.a, b, rid) && retGap(s.a) === q && netOf(s.a) >= r3(q)
+        && (!guesses.get(s) || ledgerSwapPrice(s.a, b, days) === 'same')) blocked.set(s.a + '|' + s.b + '|' + rid, { a: s.a, rid });
+    });
+  };
   placed.filter(p => p.kind === 'credit' && p.attach.type === 'return').forEach(p => {
     const rids = paperReturnsOf(p).map(x => x.id);
     (p.attach.rowTargets || []).forEach(t => {
@@ -16684,15 +16703,11 @@ function paperLedger(opts) {
         const retGap = k => (gaps[k] || []).filter(x => x.type === 'return' && x.id === rid).reduce((a, x) => a + x.gap, 0);
         const cands = Object.keys(gaps).filter(k => k !== b && !no(k, b, rid) && retGap(k) >= q && !props.some(s => s.a === k && s.returnId === rid));
         // מוצר אחד שהחסר בו בדיוק בכמות הזו (או מועמד יחיד). כמה אפשרויות — לא מנחשים: כל צד מוצג בנפרד
-        const exact = cands.filter(k => retGap(k) === q), same = samePrice(exact, b, [R && R.day, String(p.docDay || '')]);
-        // v173: "מועמד יחיד" שחסר בו יותר מהכמות של השורה — לא כשבאותה החזרה מוצר אחר זוכה ביתר בדיוק בכמות שחסרה בו: זו
-        // ההחלפה שלו (שלב העודפים, למטה), והשורה הזו היא זיכוי על מוצר שלא הוחזר. נייר 97318 (22.11.2026): חלה מרובעת ×5 על
-        // מרובעת ×3 וקלועה ×2, ועוד "לחמניות חלומית" ×1 שלא הוחזרו. כל עוד חסר בהחזרה עוד מוצר — ההחלפה באותו מחיר נסגרה לבד;
-        // ברגע שהוא זוכה, הניחוש הזה לקח את הקלועה ("לחמניות חלומית ×1 במקום חלה קלועה"), ונשארו "חסר זיכוי על חלה קלועה ×1 —
-        // לבקש זיכוי מהנהג" ו"עודף זיכוי על חלה מרובעת ×2" — על חמש חלות שזוכו כולן.
-        const overExact = k => Object.keys(gaps).some(o => o !== k && o !== b && (gaps[o] || []).some(z => z.type === 'return' && z.id === rid && z.paperMode && z.sent > 0 && r3(z.gap) < 0 && r3(-z.gap) === r3(retGap(k))));
-        const a = exact.length === 1 ? exact[0] : same.length === 1 ? same[0] : (!exact.length && cands.length === 1 && !overExact(cands[0]) ? cands[0] : null);
-        return a ? { a, rid, exact: exact.length > 0, same: ledgerSwapPrice(a, b, [R && R.day, String(p.docDay || '')]) === 'same' } : null;
+        const days = [R && R.day, String(p.docDay || '')];
+        const exact = cands.filter(k => retGap(k) === q), same = samePrice(exact, b, days);
+        // v174: "מועמד יחיד" שנסוג (חסם החלפה מדויקת של אותו מוצר) — לא מוצע שוב בבנייה הזו
+        const a = exact.length === 1 ? exact[0] : same.length === 1 ? same[0] : (!exact.length && cands.length === 1 && !yielded.has(cands[0] + '|' + b + '|' + rid) ? cands[0] : null);
+        return a ? { a, rid, exact: exact.length > 0, same: ledgerSwapPrice(a, b, days) === 'same' } : null;
       };
       // v150: נייר של כמה החזרות — ההחלפה בראשית כשחסר בה מוצר בדיוק בכמות של השורה (כמו בנייר של החזרה אחת); אחרת בזו
       // מהנוספות שחסר בה מוצר בדיוק בכמות (כמה כאלה — זו שבה המוצר באותו מחיר, כשהיא היחידה, כמו בתוך החזרה אחת; אחרת לא
@@ -16701,7 +16716,18 @@ function paperLedger(opts) {
       const hits = rids.map(hitIn), ex = hits.slice(1).filter(h => h && h.exact), any = hits.slice(1).filter(Boolean);
       const exSame = ex.filter(h => h.same), own = t.for && rids.indexOf(t.for) !== -1 ? hits[rids.indexOf(t.for)] : null;
       const hit = own && own.exact ? own : hits[0] && hits[0].exact ? hits[0] : ex.length === 1 ? ex[0] : ex.length ? (exSame.length === 1 ? exSame[0] : null) : hits[0] || (any.length === 1 ? any[0] : null);
-      if (hit && !props.some(s => s.b === b && s.returnId === hit.rid)) props.push({ a: hit.a, b, q, returnId: hit.rid, paperId: p.id, day: String(p.docDay || ''), ts: paperTs(p) });
+      // v174: השורה לא מצאה החלפה מדויקת, ובאחת ההחזרות שלה מוצר ששורה קודמת לקחה רק כ"מועמד יחיד" חסר בדיוק בכמות שלה —
+      // הניחוש ההוא חוסם החלפה מדויקת (התוצאה לא אמורה להיות תלויה בסדר השורות בנייר)
+      if (!(hit && hit.exact)) rids.forEach(rid => {
+        if (props.some(s => s.b === b && s.returnId === rid)) return;
+        const R = byId.get('return:' + rid);
+        blocks(props, b, q, rid, k => (gaps[k] || []).filter(x => x.type === 'return' && x.id === rid).reduce((a, x) => a + x.gap, 0), [R && R.day, String(p.docDay || '')]);
+      });
+      if (hit && !props.some(s => s.b === b && s.returnId === hit.rid)) {
+        const prop = { a: hit.a, b, q, returnId: hit.rid, paperId: p.id, day: String(p.docDay || ''), ts: paperTs(p) };
+        props.push(prop);
+        if (!hit.exact) guesses.set(prop, hit.same);
+      }
     });
   });
   // v141: החלפה גם כשהמוצר שזוכה במקום כן נשלח בהחזרה — הנייר זיכה עליו יותר ממה שנשלח (נשלחה 1, זוכו 3),
@@ -16744,8 +16770,11 @@ function paperLedger(opts) {
       if (!src) return;
       const cands = Object.keys(gaps).filter(k => k !== b && !no(k, b, rid) && retGap(k) >= q && !looseProps.some(s => s.a === k && s.returnId === rid));
       // רק מוצר אחד שחסר בדיוק בכמות העודף (לא "מועמד יחיד" שחסר בו יותר — אז גם העודף וגם החוסר גלויים)
-      const exact = cands.filter(k => retGap(k) === q), same = samePrice(exact, b, [R && R.day, String(p.docDay || '')]);
+      const days = [R && R.day, String(p.docDay || '')];
+      const exact = cands.filter(k => retGap(k) === q), same = samePrice(exact, b, days);
       const a = exact.length === 1 ? exact[0] : same.length === 1 ? same[0] : null;
+      // v174: אף מוצר פנוי לא חסר בדיוק בכמות העודף, אבל מוצר שנלקח רק כ"מועמד יחיד" כן — הניחוש חוסם החלפה מדויקת
+      if (!exact.length && !looseProps.some(s => s.b === b && s.returnId === rid)) blocks(looseProps, b, q, rid, retGap, days);
       // היום — של הנייר האחרון שזיכה את B בהחזרה הזו
       const last = onB.slice().sort((u, v) => u.day.localeCompare(v.day) || u.ts - v.ts).pop();
       if (a && !looseProps.some(s => s.b === b && s.returnId === rid)) overProps.push({ a, b, q, returnId: rid, paperId: src.id, over: true, day: last.day, ts: last.ts });
@@ -16774,7 +16803,28 @@ function paperLedger(opts) {
       if (pick) props.push({ a: pick.a, b, q: pick.q, returnId: pick.d.id, paperId: p.id, day, ts });
     });
   });
-  return props;
+  return { props, guesses };
+  };
+  // v173/v174: "מועמד יחיד" מוותר להחלפה מדויקת. שורה של מוצר שלא הוחזר, שהמוצר היחיד שחסר בהחזרה חסר ביותר מהכמות שלה,
+  // היא ניחוש — ועד 172 הוא חסם את אותו מוצר בפני החלפה מדויקת: מוצר שזוכה ביתר בדיוק בכמות החסרה, או שורה אחרת של מוצר
+  // שלא הוחזר, בדיוק בכמות. נייר 97318 (22.11.2026): חלה מרובעת ×5 על מרובעת ×3 וקלועה ×2, ועוד "לחמניות חלומית" ×1 שלא
+  // הוחזרו. כל עוד חסר בהחזרה עוד מוצר, ההחלפה באותו מחיר נסגרה לבד; ברגע שהוא זוכה, הניחוש לקח את הקלועה ("לחמניות
+  // חלומית ×1 במקום חלה קלועה"), ונשארו "חסר זיכוי על חלה קלועה ×1 — לבקש זיכוי מהנהג" ו"עודף זיכוי על חלה מרובעת ×2" —
+  // על חמש חלות שזוכו כולן. עכשיו: ניחוש שחוסם החלפה מדויקת נסוג, והכול נבנה שוב בלעדיו (השורה שלו חופשית למצוא החלפה
+  // אחרת — בנייר של כמה החזרות; אחרת היא זיכוי על מוצר שלא הוחזר). ורק כשזה באמת הביא החלפה מדויקת של אותו מוצר באותה
+  // החזרה: אם לא (שלב העודפים לא הציע אותה — שני עודפים זהים, למשל), או ששלב 2 דחה אותה (rejected) — כמו עד 172.
+  // (ב-173 הניחוש לא נלקח בכל פעם שמוצר אחר זוכה ביתר בדיוק בכמות החסרה, גם כשההחלפה ההיא לא הוצעה או נדחתה.)
+  const buildProps = rejected => {
+    const yielded = new Map();
+    for (let round = 0; round < 6; round++) {
+      const blocked = new Map(), built = buildOnce(rejected, yielded, blocked);
+      if (!blocked.size) {
+        if ([...yielded.values()].every(y => built.props.some(s => s.a === y.a && s.returnId === y.rid && !built.guesses.has(s)))) return built.props;
+        break;
+      }
+      blocked.forEach((y, key) => yielded.set(key, y));
+    }
+    return buildOnce(rejected, new Map(), null).props;
   };
   // שלב 2: החלקים של כל החלפה — החוסר של A בהחזרה, והעודף של B (שורת הנייר שלא שייכת להחזרה, או העודף על שורת ההחזרה)
   const propA = s => (gaps[s.a] || []).find(x => x.type === 'return' && x.id === s.returnId && x.gap > 0);
@@ -18178,6 +18228,7 @@ async function paperIntakeReadOne(token, item) {
   try {
     result = await aiScanSingleDocPipeline(token, 0, {
       inputDoc: { noteIndex: 0, pages: [item.page], amount: null, units: null, lines: null, kind: 'charge' },
+      paperIntake: true, // v174: הנייר הולך ל-bermanPaperRecord — שורה במחיר אפסי בנייר זיכוי לא נשלחת לאימות (bermanOcrVerificationTargets)
       isCurrent: () => true,
       onProgress: text => { if (paperIntake) { paperIntake.progress = text; refreshPaperIntake(); } },
       onBeforeVerify: best => { mark({ verify: true }); try { keep(paperPipelineResult(best), true); } catch (e) { console.error('paper interim save failed', e); } }
@@ -19184,7 +19235,8 @@ async function paperWrite(p, ctx) {
   if (p.docDayBy) data.docDayBy = p.docDayBy;
   if (p.docDayDefault !== undefined || (cur && cur.docDayDefault)) data.docDayDefault = p.docDayDefault || null;
   // v173: השורות במחיר אפסי — רק לנייר שיש בו כאלה (או שהיו, ועכשיו נספרות): שדה חדש לא נכתב לכל נייר
-  if (paperNominalRows(p).length || paperNominalRows(cur).length) data.nominal = paperNominalRows(p);
+  // v174: וגם כשהנייר שנפתח נושא את השדה (גם ריק) — הוא אולי לא ברשימה שבזיכרון (cur), ובענן השורות עוד רשומות שם
+  if (paperNominalRows(p).length || paperNominalRows(cur).length || Array.isArray(p.nominal)) data.nominal = paperNominalRows(p);
   const ok = await runCloudTask('save paper review', { op: 'update', path: dataPath('papers', p.id), data, operationId: makeOperationId('paper_review') });
   if (ok) { const i = papers.findIndex(x => x.id === p.id); if (i !== -1) papers[i] = { ...papers[i], ...data }; ledgerInvalidate(); }
   // הנייר כבר נשמר בענן במספר שלו (שהוא המזהה שם) — מספר אחר לא נשמר, ואומרים זאת
