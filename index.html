@@ -18920,12 +18920,14 @@ async function openPaperReview(id, cap) {
     day0: p.docDay || '', dayConfirmed: false, // v142: היום כשנפתח, והאם העובד אישר יום שנקבע ("התאריך נכון")
     from: ['receiptsHistory', 'receiving', 'manage'].indexOf(currentView) !== -1 ? currentView : null, // v127/v130: חוזרים למסך שממנו נפתח (היסטוריה, קליטה, ניהול)
     nom0,
-    units: p.anchors && p.anchors.units != null ? p.anchors.units + nom0.units : '', lines: p.anchors && p.anchors.lines != null ? p.anchors.lines + nom0.lines : '', img: null };
+    units: p.anchors && p.anchors.units != null ? paperReviewPrinted(p.anchors.units, nom0.units) : '', lines: p.anchors && p.anchors.lines != null ? paperReviewPrinted(p.anchors.lines, nom0.lines) : '', img: null };
   setView('paperReview');
   const key = (found.local && found.local.captureId) || p.captureId;
   const img = key ? await paperImgGet(key) : null;
   if (img && paperReview && paperReview.id === p.id) { paperReview.img = img; if (currentView === 'paperReview') renderPaperReview(); }
 }
+// v173: המודפס בתחתית הנייר = העוגן השמור ועוד השורות במחיר אפסי. בנייר בלי שורות כאלה — העוגן כמו שהוא, בדיוק כמו עד 172
+function paperReviewPrinted(anchor, nominal) { return nominal ? Number(anchor) + nominal : anchor; }
 function paperReviewState() {
   const r = paperReview, p = r.paper;
   // v173: מול תחתית הנייר נמדד כל מה שמודפס בו — השורות הנספרות ועוד השורות במחיר אפסי (nominal / nominalUnits).
@@ -19024,6 +19026,8 @@ function paperReviewRowToNominal(p, i) {
 function paperReviewNominalToRow(p, i) {
   const list = paperNominalRows(p), x = list[i]; if (!x) return;
   list.splice(i, 1); p.nominal = list;
+  // נייר שנפתח בלי שורות כאלה וחזר להיות בלעדיהן — בלי שדה ריק (אחרת הוא נראה "שונה" ממה שנפתח)
+  if (!list.length && !(paperReview && paperReview.paper === p && paperReview.nom0 && paperReview.nom0.lines)) delete p.nominal;
   p.rows = Array.isArray(p.rows) ? p.rows : [];
   const at = p.rows.findIndex(y => Number(y.line) > Number(x.line));
   if (at === -1) p.rows.push({ ...x }); else p.rows.splice(at, 0, { ...x });
@@ -19043,7 +19047,7 @@ function paperReviewDaySetByUser(r) {
 }
 function paperReviewDirty(r) {
   const p = r.paper, a = p.anchors || {}, n = r.nom0 || { units: 0, lines: 0 }; // v173: השדות מציגים את המודפס — העוגנים השמורים ועוד השורות במחיר אפסי
-  return JSON.stringify(p) !== r.orig || String(r.units) !== String(a.units != null ? a.units + n.units : '') || String(r.lines) !== String(a.lines != null ? a.lines + n.lines : '');
+  return JSON.stringify(p) !== r.orig || String(r.units) !== String(a.units != null ? paperReviewPrinted(a.units, n.units) : '') || String(r.lines) !== String(a.lines != null ? paperReviewPrinted(a.lines, n.lines) : '');
 }
 // שיוך נייר זיכוי שכבר נספר: מה המאזן שייך, ו[שנה] — ההחזרות של 14 הימים שלפני התאריך המודפס
 function paperReviewAttachHtml(r) {
