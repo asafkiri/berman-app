@@ -446,8 +446,9 @@ test('11. עד השמירה: הקליטה נשמרת עם המוצר שנבחר,
   assert.equal(d.run(`aiResolveInvoiceBarcode(aiScanResponse.scan.documents[0].rows[4]).error`), 'בחירת המוצר מהמאגר אינה תואמת עוד לשורה — יש לבחור את המוצר שוב');
 });
 
-test('12. הגרסה עלתה ל-172, כולל ההערה ב-service worker', () => {
+test('12. הגרסה 172 ומעלה, כולל ההערה ב-service worker', () => {
   const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-  assert.match(html, /const APP_VERSION = '172'/);
-  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), /גרסת אפליקציה 172/);
+  const v = html.match(/const APP_VERSION = '(\d+)'/)[1];
+  assert.ok(Number(v) >= 172, v);
+  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), new RegExp('גרסת אפליקציה ' + v));
 });
