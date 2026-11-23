@@ -199,7 +199,8 @@ test('"ספור בכל זאת" ואישור כשהנייר אינו ברשימה
   assert.deepEqual(JSON.parse(JSON.stringify([upd.data.rows.length, upd.data.anchors.units, upd.data.anchors.lines, upd.data.nominal])), [4, 11, 4, []], 'בלי זה השורה הייתה גם נספרת וגם רשומה כ"לא נספרת"');
 });
 
-test('הגרסה 174, כולל ההערה ב-service worker', () => {
-  assert.match(html, /const APP_VERSION = '174'/);
-  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), /גרסת אפליקציה 174/);
+test('הגרסה 174 ומעלה, כולל ההערה ב-service worker', () => {
+  const v = html.match(/const APP_VERSION = '(\d+)'/)[1];
+  assert.ok(Number(v) >= 174, v);
+  assert.match(fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), new RegExp('גרסת אפליקציה ' + v));
 });

@@ -854,7 +854,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '174'; // ליטושים ל-173: ניחוש של החלפה ("מועמד יחיד") נסוג רק מפני החלפה מדויקת שבאמת נוצרת, אחרת כמו עד 172; הדילוג על קריאת האימות לשורה במחיר אפסי — רק בקליטת הניירות; "ספור בכל זאת" מנקה את השורה גם כשהנייר לא ברשימה שבזיכרון
+const APP_VERSION = '175'; // בדיקת נייר: "מוצר חדש" בשורה שלא זוהתה — הכרטיס הרגיל של מוצר חדש עם מה שמודפס בשורה, ואחרי השמירה המוצר משויך לשורה (כמו "מוצר חדש — הוסף למאגר" בקליטה, v172)
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -19012,6 +19012,8 @@ function renderPaperReview() {
         '<div class="text-[11px] text-slate-400 font-bold">שורה ' + htmlEscape(x.line) + ' · קוד ' + htmlEscape(x.itemCode || '—') + (x.barcode ? ' · ברקוד ' + htmlEscape(x.barcode) : '') + (x.flag ? ' · <span class="text-amber-700">סומנה לבדיקה</span>' : '') + '</div></div>' +
         (blind ? '' : '<input data-role="review-qty" data-id="' + i + '" type="text" inputmode="numeric" aria-label="כמות" value="' + htmlEscape(x.qty) + '" class="w-16 h-11 text-center text-base font-black border-2 border-slate-300 rounded-lg outline-none focus:border-blue-500">') + '</div>' +
       '<div class="flex flex-wrap gap-1.5 mt-2"><button data-role="review-pick" data-id="' + i + '" class="btn-tap min-h-[44px] px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-black">' + (prod ? 'שנה מוצר' : 'בחר מוצר') + '</button>' +
+        // v175: שורה בלי מוצר — אולי המוצר באמת חדש (הגיע או הוחזר, ועוד אינו במאגר): הכרטיס הרגיל של מוצר חדש, מהשורה
+        (prod ? '' : '<button data-role="review-row-new" data-id="' + i + '" aria-label="מוצר חדש — הוסף למאגר" class="btn-tap min-h-[44px] px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-black">מוצר חדש</button>') +
         '<button data-role="review-row-del" data-id="' + i + '" class="btn-tap min-h-[44px] px-3 py-1.5 rounded-lg bg-white border border-rose-200 text-rose-600 text-xs font-black">הסר שורה</button>' +
         // v173: בנייר זיכוי — שורה שמודפסת במחיר אפסי (עד 5 אג׳) אינה זיכוי: נשארת בנייר, ולא נספרת
         (p.kind === 'credit' && p.kindKnown !== false ? '<button data-role="review-row-nominal" data-id="' + i + '" class="btn-tap min-h-[44px] px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-600 text-xs font-black">מחיר אפסי — לא לספור</button>' : '') + '</div>' +
@@ -19178,6 +19180,83 @@ function refreshReviewSearch() {
   const box = $('reviewSearchList'); if (!box || !paperReview) return;
   const q = (paperReview.query || '').trim();
   box.innerHTML = q ? addListFilter(q, {}).slice(0, 6).map(p => addListRowHtml(p, 'review-pick-product', q)).join('') || '<div class="text-center text-slate-400 py-2 text-xs">לא נמצא</div>' : '';
+}
+// v175: "מוצר חדש" בבדיקת נייר. בעל העסק (23.11.2026, על שורה "לא זוהה" בנייר זיכוי): "נגיד שבאמת הייתי מקבל פריט כזה או
+// מחזיר פריט כזה שלא קיים לי באפליקציה — צריך לתת לי אופציה להוסיף מוצר חדש". עד 174 היה כאן רק "בחר מוצר" (מתוך המאגר),
+// ומוצר שבאמת חדש חייב לצאת מהמסך, להוסיף אותו בניהול ולחזור. בקליטה של תעודת משלוח זה קיים מ-v172 (receiptGateOpenNewProduct).
+// הכרטיס הרגיל של מוצר חדש, עם מה שמודפס בשורה — קוד הפריט, השם, הברקוד, והמחירון (מהקריאה השמורה של הנייר, כשהיא זמינה;
+// מחיר אפסי אינו מחירון). אחרי השמירה המוצר משויך לשורה כמו ב"בחר מוצר"; סגירת הכרטיס בלי לשמור — שום דבר לא משתנה.
+let paperReviewNewProductContext = null;
+function paperReviewRowHasProduct(row) { return !!(row && row.productId && products.some(p => p.id === row.productId)); }
+function paperReviewOpenNewProduct(i) {
+  const r = paperReview, row = r && (r.paper.rows || [])[i];
+  if (!row || paperReviewRowHasProduct(row)) return false;
+  const code = String(row.itemCode == null ? '' : row.itemCode).replace(/[^0-9]/g, '');
+  // קוד הפריט כבר במאגר (המוצר נוסף אחרי שהנייר נקרא, למשל) — זה המוצר: בוחרים אותו, לא יוצרים כפילות
+  const known = /^[0-9]{2,4}$/.test(code) ? findProductByCode(code) : null;
+  if (known) {
+    r.pickLine = i; r.query = code; renderPaperReview(); refreshReviewSearch();
+    showToast('קוד הפריט ' + code + ' כבר במאגר: ' + (known.name || '') + ' — בחר אותו מהרשימה', null, null, 4500);
+    return true;
+  }
+  openProdModal(null, false, normalizeBarcode(row.barcode || ''), 'paper_review');
+  const ctx = paperReviewNewProductContext = { id: r.id, row };
+  const codeInput = $('prod_code'); if (codeInput && /^[0-9]{2,4}$/.test(code)) codeInput.value = code;
+  $('prod_name').value = String(row.description || '').trim();
+  updateProdFinalHint(); updateProdRecHint();
+  const nameInput = $('prod_name'); if (nameInput) { nameInput.focus(); if (nameInput.select) nameInput.select(); }
+  // המחירון מגיע רגע אחרי (קריאה מהמכשיר או מהענן) — רק אם הכרטיס הזה עוד פתוח והשדה עוד ריק
+  paperStoredScan(r.id, r.cap).then(scan => {
+    const price = paperScanRowPrice(scan, row), input = $('prod_price');
+    if (paperReviewNewProductContext !== ctx || !input || String(input.value || '').trim() !== '' || !(price > 0) || paperPriceNominal(price)) return;
+    input.value = price; updateProdFinalHint(); updateProdRecHint();
+  }).catch(() => {});
+  return true;
+}
+function paperReviewCompleteNewProduct(savedProduct, ctx) {
+  const product = savedProduct ? (products || []).find(p => p && String(p.id) === String(savedProduct.id)) : null;
+  const r = paperReview, rows = r && ctx && r.id === ctx.id ? (r.paper.rows || []) : [];
+  const row = ctx && rows.indexOf(ctx.row) !== -1 ? ctx.row : null;
+  if (!product || !row || paperReviewRowHasProduct(row)) {
+    showToast('המוצר נוסף למאגר, אבל השורה בנייר השתנתה ולכן לא שויכה — בחר אותו ב"בחר מוצר".', null, null, 4500);
+    if (currentView === 'paperReview' && paperReview) renderPaperReview();
+    return false;
+  }
+  // כמו "בחר מוצר". שורה אחרת באותו נייר עם אותו קוד פריט מודפס, שגם היא בלי מוצר — אותו מוצר (כשזה גם הקוד שלו במאגר)
+  const code = String(row.itemCode == null ? '' : row.itemCode).trim();
+  rows.forEach(x => {
+    const same = x === row || (code && productCode(product) === code && String(x.itemCode == null ? '' : x.itemCode).trim() === code && !paperReviewRowHasProduct(x));
+    if (!same) return;
+    x.productId = product.id; x.matchedBy = 'user'; if (!x.itemCode) x.itemCode = productCode(product);
+  });
+  r.pickLine = null; r.query = '';
+  if (currentView === 'paperReview') renderPaperReview();
+  showToast('"' + (product.name || '') + '" נוסף למאגר ושויך לשורה ' + row.line + '.', null, null, 3500);
+  return true;
+}
+// הקריאה השמורה של נייר (בלי תמונה): מהמכשיר, ורק אם אין — מהענן. לעולם לא קריאה חדשה.
+async function paperStoredScan(paperId, cap) {
+  const shaped = scan => !!(scan && scan.doc && typeof scan.doc === 'object' && Array.isArray(scan.doc.rows));
+  let local = [];
+  try { const store = paperLocalResults(); local = [cap && store[cap] && store[cap].scan].concat(Object.keys(store).map(k => store[k]).filter(x => x && x.scan && x.paper && x.paper.id === paperId).map(x => x.scan)); } catch (e) {}
+  let scan = local.find(shaped) || null;
+  if (!scan && navigator.onLine) { const c = await paperScanFromCloud(paperId); if (shaped(c)) scan = c; }
+  return scan;
+}
+// המחיר המודפס בשורה של הנייר, לפי מספר השורה וקוד הפריט (כמו ש-bermanPaperRecord בונה את השורות); בלי התאמה אחת ויחידה — אין
+function paperScanRowPrice(scan, row) {
+  const doc = scan && scan.doc, list = doc && Array.isArray(doc.rows) ? doc.rows : [];
+  const raws = doc && doc.__pricePaper && Array.isArray(doc.__pricePaper.rows) ? doc.__pricePaper.rows : [];
+  const want = String(row && row.itemCode != null ? row.itemCode : ''), prices = [];
+  list.forEach((x, i) => {
+    const raw = raws[i] || {};
+    const line = x && x.lineNumber != null ? Number(x.lineNumber) : i + 1;
+    const code = String(raw.itemCode != null ? raw.itemCode : ((x && x.supplierItemCode) || ''));
+    if (!row || line !== Number(row.line) || code !== want) return;
+    const price = x && x.printedListUnitPrice != null ? x.printedListUnitPrice : raw.unitPriceExVat;
+    if (price != null && price !== '' && isFinite(Number(price))) prices.push(Number(price));
+  });
+  return prices.length === 1 ? prices[0] : null;
 }
 async function savePaperReview() {
   const r = paperReview; if (!r || !paperReviewState().ok) return;
@@ -20015,6 +20094,7 @@ function paperUiClick(t) {
   if (role === 'review-back') { setView(r.from || 'ledger'); return true; }
   if (role === 'review-pick') { const i = parseInt(id, 10); r.pickLine = r.pickLine === i ? null : i; r.query = ''; renderPaperReview(); const s = $('reviewSearch'); if (s) s.focus(); return true; }
   if (role === 'review-pick-product') { const p = products.find(x => x.id === id); const row = r.paper.rows[r.pickLine]; if (p && row) { row.productId = p.id; row.matchedBy = 'user'; if (!row.itemCode) row.itemCode = productCode(p); } r.pickLine = null; r.query = ''; renderPaperReview(); return true; }
+  if (role === 'review-row-new') { paperReviewOpenNewProduct(parseInt(id, 10)); return true; } // v175
   if (role === 'review-row-del') { r.paper.rows.splice(parseInt(id, 10), 1); r.pickLine = null; renderPaperReview(); return true; }
   if (role === 'review-row-add') { r.paper.rows.push({ line: r.paper.rows.length + paperNominalRows(r.paper).length + 1, itemCode: '', barcode: null, description: '', qty: 1, productId: null, matchedBy: 'user' }); r.pickLine = r.paper.rows.length - 1; renderPaperReview(); return true; }
   if (role === 'review-save') { if (paperReviewState().ok) savePaperReview(); else paperReviewExplain(); return true; } // v151: אפור — מסביר למה
@@ -22614,6 +22694,7 @@ function openProdModal(p, fromScan, presetCode, afterSaveTarget) {
   setAiUnknownProductBarcodeLock(false);
   if (afterSaveTarget !== 'ai_unknown') aiUnknownProductCreateContext = null;
   receiptGateNewProductContext = null; // v172: נקבע מחדש רק כשהכרטיס נפתח מכרטיס הזיהוי (receiptGateOpenNewProduct)
+  paperReviewNewProductContext = null; // v175: וכך גם כשנפתח משורה בבדיקת נייר (paperReviewOpenNewProduct)
   priceEditId = p ? p.id : null;
   priceFromScan = !!fromScan;
   productCreateId = p ? null : makeOperationId('prod');
@@ -22699,6 +22780,7 @@ function hideProdModal() {
   setAiUnknownProductBarcodeLock(false);
   setProductBarcodeBlocked(false);
   priceEditId = null; priceFromScan = false; productCreateId = null; prodAfterSaveTarget = null; productEditorScanReturn = false; aiUnknownProductCreateContext = null; receiptGateNewProductContext = null;
+  paperReviewNewProductContext = null;
 }
 function calcCartonPrice() {
   const cp = parseFloat(($('prod_cartonPrice').value || '').toString().replace(',', '.'));
@@ -22872,14 +22954,16 @@ async function saveProd(again) {
   const st = orderState[docId] || (orderState[docId] = { amount: '', unit: defaultUnit });
   if (!hasEnteredAmount(st.amount)) st.unit = defaultUnit;
   saveDraftPassive();
-  const wasFromScan = priceFromScan, afterTarget = prodAfterSaveTarget, gateContext = receiptGateNewProductContext;
+  const wasFromScan = priceFromScan, afterTarget = prodAfterSaveTarget, gateContext = receiptGateNewProductContext, reviewContext = paperReviewNewProductContext;
   hideProdModal();
   if (currentView === 'prices') renderPrices();
   else if (currentView === 'settings') renderSettings();
-  if (afterTarget !== 'ai_unknown' && afterTarget !== 'paper_gate') showToast(id ? 'המוצר עודכן' : 'המוצר נוסף', null, null, 1600);
+  if (afterTarget !== 'ai_unknown' && afterTarget !== 'paper_gate' && afterTarget !== 'paper_review') showToast(id ? 'המוצר עודכן' : 'המוצר נוסף', null, null, 1600);
   if (afterTarget === 'ai_unknown' && savedProduct) { aiCompleteUnknownProduct(savedProduct, unknownCreateContext); return; }
   // v172: מוצר חדש שנפתח מכרטיס הזיהוי — משויך לשורה שממנה נפתח (אין כאן שאלת כמות: הכמות היא מה שסופרים בבדיקה)
   if (afterTarget === 'paper_gate') { if (savedProduct) receiptGateCompleteNewProduct(savedProduct, gateContext); return; }
+  // v175: מוצר חדש שנפתח משורה בבדיקת נייר — משויך לשורה שממנה נפתח (בלי שאלת כמות: הכמות היא מה שמודפס בנייר)
+  if (afterTarget === 'paper_review') { if (savedProduct) paperReviewCompleteNewProduct(savedProduct, reviewContext); return; }
   if (afterTarget && savedProduct) { promptQty(savedProduct, afterTarget); return; }
   if (again) { if (wasFromScan) openPriceScanner(); else openProdModal(null, false, ''); }
 }
