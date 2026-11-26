@@ -18,7 +18,9 @@ const names = ['aiCompressInvoiceImage', 'aiRenderInvoiceRegion', 'aiRenderSplit
   'aiReprocessFromSource', 'aiUnrotateRect', 'aiNormalizeQuarterTurns', 'aiRenderInvoiceRotation',
   'aiSetOrientationBusy', 'aiUpdateOrientationControls', 'aiToggleCropMode', 'aiRestoreOriginalImage',
   'aiCropInfoText', 'aiPaintOrientationReview', 'aiOrientationLocation', 'aiOpenOrientationReview',
-  'aiCloseOrientationReview', 'aiRotateOrientationReview', 'aiConfirmOrientationReview', 'invalidateAiInvoiceResult'];
+  'aiCloseOrientationReview', 'aiRotateOrientationReview', 'aiConfirmOrientationReview', 'invalidateAiInvoiceResult',
+  // v175: מסך האישור משרת גם צילום של נייר מהנהג (paperIntake) — כאן אין כזה, והמסך מתנהג כמו תמיד
+  'aiOrientationEpoch', 'paperItemPages'];
 
 // Record real canvas source/destination rectangles; no model calls or external images.
 function context() {
@@ -42,6 +44,8 @@ function context() {
   }
   const c = vm.createContext({ console, Number, Math, Array, Object, String, Promise,
     aiOrientationSession: null, aiOrientationBusy: false, aiCropState: null, aiScanBusy: false,
+    // v175: אין סבב של ניירות מהנהג; יישור של צילום שוכב נבדק בנפרד (photo-confirm-v175.test.mjs)
+    paperIntake: null, paperIntakeSession: 0, aiStraightenSideways: async () => null,
     aiScanDocuments: [], aiScanResponse: null, aiScanEvaluation: null, aiScanError: '',
     aiScanAutoRotationNote: '', aiScanAttemptCount: 0, aiScanSession: 0, saveReceiptDraft() {},
     $: node, setTimeout() {}, refreshScanHost() {}, aiOpenNextUnconfirmedOrientation() {},
