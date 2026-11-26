@@ -111,10 +111,12 @@ async function device(name) {
   return { page, context };
 }
 const state = page => page.evaluate(() => window.t.state());
-// צילום בכפתור שבפס → הקריאה רצה לבד → הנייר הקטן פותח קליטה ונכנס אליה
+// צילום בכפתור שבפס → מסך האישור → "אשר" (v175) → הקריאה רצה לבד → הנייר הקטן פותח קליטה ונכנס אליה
 async function photographSmall(page) {
   const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.locator('#ledgerBar [data-role="paper-photo"]').click()]);
   await chooser.setFiles({ name: 'paper.svg', mimeType: 'image/svg+xml', buffer: photo });
+  await page.waitForSelector('#aiOrientationModal:not(.hidden)');
+  await page.locator('#aiOrientationConfirm').click();
   await page.waitForFunction(() => window.t.state().paperState === 'ok' && window.t.state().view === 'paperIntake');
   // v134: קודם מצלמים את כל הניירות — "צלם עוד נייר" / "זה כל הניירות"; הבחירות רק אחרי
   await page.locator('#app [data-role="paper-all-in"]').waitFor({ state: 'visible' });

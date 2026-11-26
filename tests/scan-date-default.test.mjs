@@ -946,7 +946,14 @@ test('סבב 3 (D3): צילום שנכנס לתור נושא את זמן הצי�
   assert.equal(r.run('paperIntake.items.length'), 1);
   assert.equal(r.run('paperIntake.items[0].status'), 'photo');
   assert.equal(r.run('paperIntake.items[0].capturedAt'), clock, 'זמן הצילום נרשם כשנכנס לתור');
+  // v175: התמונה מאושרת במסך האישור כשצולמה — בלי רשת, ולכן הקריאה לא מתחילה
+  r.run('navigator.onLine = false');
+  assert.equal(r.run('paperOpenNextPhotoReview()'), true);
+  await r.run('aiConfirmOrientationReview()');
+  assert.equal(r.requests.length, 0, 'בלי רשת — לא נקרא');
+  assert.equal(r.run('paperIntake.items[0].status'), 'photo');
   clock = Date.UTC(2026, 9, 15, 6, 0); // למחרת בבוקר — יש רשת
+  r.run('navigator.onLine = true');
   await r.run('paperIntakeRun()');
   const id = r.run('paperIntake.items[0].paperId');
   const p = json(r, `paperFind(${JSON.stringify(id)}).paper`);

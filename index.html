@@ -348,7 +348,7 @@
           <button id="aiOrientationRestore" type="button" class="hidden btn-tap py-2.5 rounded-xl bg-white/10 border border-white/15 text-white font-bold text-sm">חזור לתמונה המקורית</button>
         </div>
         <button id="aiOrientationConfirm" type="button" class="btn-tap w-full py-3.5 rounded-xl bg-emerald-600 text-white font-black text-lg"><i class="fa-solid fa-check ml-1"></i> אשר תמונה מלאה</button>
-        <p class="text-[11px] text-slate-400 font-bold text-center mt-2">התמונה לא תישלח ל-AI לפני האישור.</p>
+        <p id="aiOrientationNote" class="text-[11px] text-slate-400 font-bold text-center mt-2">התמונה לא תישלח ל-AI לפני האישור.</p>
       </div>
     </div>
 
@@ -824,6 +824,10 @@ const AI_SCAN_MIN_SERVICE_VERSION = 1; // v13: סדרת גרסאות של שרת
 const AI_BARCODE_SUFFIX_DIGITS = 6;
 let aiOrientationSession = null;
 let aiOrientationBusy = false;
+// v175: מתי מסך האישור סגר את עצמו בפעם האחרונה (אישור, מחיקה) — נגד הקשה כפולה (aiOrientationTapTooSoon)
+let aiOrientationClosedAt = 0;
+const AI_ORIENTATION_DOUBLE_TAP_MS = 450;
+function aiOrientationTapTooSoon() { return Date.now() - aiOrientationClosedAt < AI_ORIENTATION_DOUBLE_TAP_MS; }
 let reconcileAiAudit = null;     // מטא-נתונים בלבד, ללא תמונות
 let receiptFix = null;           // תיקון תעודה פתוחה מההיסטוריה
 let returnVerify = null;          // אימות תעודת זיכוי (חזרות)
@@ -854,7 +858,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '174'; // ליטושים ל-173: ניחוש של החלפה ("מועמד יחיד") נסוג רק מפני החלפה מדויקת שבאמת נוצרת, אחרת כמו עד 172; הדילוג על קריאת האימות לשורה במחיר אפסי — רק בקליטת הניירות; "ספור בכל זאת" מנקה את השורה גם כשהנייר לא ברשימה שבזיכרון
+const APP_VERSION = '175'; // מסך האישור גם לצילום של נייר מהנהג (סיבוב, חיתוך, מחיקה) — הצילום נקרא רק אחרי "אשר", והקריאה ממשיכה ברקע; תעודה ארוכה מתחלקת לחלקים גם במסלול הזה; צילום שיצא שוכב מיושר לבד לפני החיתוך; נתוני הצילום (חיתוך, חלוקה, איכות, סיבוב) נשמרים עם הקריאה
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -6391,7 +6395,7 @@ function receiptGateFindRow(documentIndex, rowIndex, token) {
 function receiptGateWhereText(item) {
   const row = item.row, docs = (aiScanResponse && aiScanResponse.scan && aiScanResponse.scan.documents) || [];
   return [docs.length > 1 ? 'תעודה ' + (receiptPaperDocNumber(item.doc) || (Number(item.doc.noteIndex) + 1)) : '',
-    row.sourcePage != null ? 'עמוד ' + row.sourcePage : '', row.lineNumber != null ? 'שורה ' + row.lineNumber : 'מוצר ' + (Number(item.rowIndex) + 1)].filter(Boolean).join(' · ');
+    aiRowPageText(item.doc, row), row.lineNumber != null ? 'שורה ' + row.lineNumber : 'מוצר ' + (Number(item.rowIndex) + 1)].filter(Boolean).join(' · ');
 }
 // השורה כפי שנקראה מהנייר, לפני ההתאמה למאגר (שם הברקוד המודפס)
 function receiptGateRawRow(item) {
@@ -10432,6 +10436,14 @@ function aiOrderSplitGroup(doc, page) {
 function aiPageLabel(page, pageIndex) {
   return page && page.split ? 'חלק ' + (page.split.index + 1) + ' מתוך ' + page.split.count : 'עמוד ' + (pageIndex + 1);
 }
+// v175: איפה השורה בנייר — "עמוד 1". בתעודה ארוכה שחולקה (כל העמודים שנשלחו הם חלקים של אותו צילום, לפי נתוני הצילום
+// שנשמרו עם הקריאה) העמוד הוא חלק של אותו נייר — "חלק 2", כדי שלא יחפשו דף שני שאינו קיים.
+function aiRowPageText(doc, row) {
+  if (!row || row.sourcePage == null) return '';
+  const per = aiScanResponse && Array.isArray(aiScanResponse.perDocument) ? aiScanResponse.perDocument.find(p => p && doc && Number(p.docIndex) === Number(doc.noteIndex)) : null;
+  const split = !!(per && Array.isArray(per.splitReasons) && per.splitReasons.length > 1 && per.splitReasons.every(reason => reason === 'split'));
+  return (split ? 'חלק ' : 'עמוד ') + row.sourcePage;
+}
 // v166: למה תעודה ארוכה לא חולקה — לתווית ולהנחיה במסך האישור, כדי שצילום מסך אחד יענה. שורות מרווחות
 // (pitch_ok) אינן "לא חולקה" — פשוט לא היה צורך.
 function aiSplitSkipText(info) {
@@ -10444,6 +10456,101 @@ function aiSplitSkipText(info) {
   if (reason === 'no_rows' || reason === 'no_profile') return 'לא חולקה: שורות הדפוס לא נמדדו' + pitch;
   return 'לא חולקה' + pitch;
 }
+// ===== v175: צילום שיצא שוכב מיושר לפני החיתוך =====
+// טלפון שמוחזק שטוח מעל נייר שמונח על משטח לא יודע איפה "למעלה", ואפליקציית המצלמה שומרת את הצילום לרוחב: התעודה
+// יוצאת שוכבת. הזיהוי (aiDetectPaperRegion) סורק שורות דפוס אופקיות, ולכן בצילום כזה הוא עונה "אין טקסט": הנייר לא
+// נחתך, תעודה ארוכה לא מתחלקת, והמודל מקבל טקסט מסובב על פריים מלא — הנייר מקבל פחות פיקסלים בדיוק כשקשה יותר
+// לקרוא אותו. כאן, כשלא נמצא טקסט, אותו זיהוי רץ שוב על עותק מוקטן שסובב ברבע סיבוב; אם שם נמצאות שורות דפוס —
+// הצילום שוכב. אז נבנה מהמקור צילום מסובב (JPEG כמעט חסר-אובדן), והוא עובר את כל הצינור כאילו כך צולם: זיהוי, חיתוך,
+// חלוקה, וגם חיתוך ידני ושחזור מאוחר יותר (sourceBlob הוא הצילום המסובב).
+// לאיזה צד: הזיהוי לא מבדיל בין תעודה ישרה להפוכה, ולכן הצד נקבע מתג הכיוון של הקובץ. מי שמצלם תעודה ארוכה רואה
+// אותה זקופה על המסך, כלומר הטלפון היה לאורך והתג היה צריך להיות 6 (רבע סיבוב ימינה). תג 1 — המצלמה חשבה "לרוחב",
+// וחסר רבע סיבוב ימינה; תג 3 — חשבה "לרוחב" לצד השני, וחסר רבע סיבוב שמאלה. בלי תג (גלריה, צילום מסך) — ימינה.
+// זה ניחוש מושכל ולא קריאה של הנייר, ולכן מסך האישור אומר שהצילום יושר ומבקש לוודא שהכותרת למעלה (autoRotated).
+// מתי — רק כשאין ספק (מהסקירה שלפני המיזוג): סיבוב בטעות גרוע מאי-סיבוב. הצילום מוצג ממילא במסך האישור, ושתי לחיצות על
+// "סובב" מתקנות אותו; צילום ישר שסובב לצד נשלח למודל שוכב. הדפוס של המסופון ברוחב קבוע (כל אות בעמודה משלה), ולכן בעותק
+// מסובב של תעודה ישרה וקצרה העמודות נראות כמו שורות דפוס — בדיוק במקום שבו בתעודה הישרה עצמה לא נמדדו שורות (מעט מדי
+// שורות למחזוריות). לכן הצילום מסובב רק כשכל אלה נכונים:
+//   1. הפריים לרוחב. פריים לאורך אומר שהמצלמה ידעה איפה למעלה.
+//   2. בעותק המסובב שני העוגנים מסכימים על מסגרת נייר שעוברת את כל השערים ('cropped').
+//   3. המסגרת הזאת היא רצועה ארוכה — גבוהה מרוחבה לפחות פי 1.4: תעודת משלוח ששוכבת על הצד. נייר קצר (זיכוי, נייר משלוח
+//      קטן) גבוה בערך כמו רוחבו גם כשהוא ישר, עם הכותרת והסיכום שלו, ולכן העותק המסובב שלו לעולם לא עובר.
+//   4. הצילום המסובב עצמו, דרך כל הצינור, נחתך או מתחלק.
+// כל השאר — הצילום כפי שצולם, וסיבוב ידני במסך האישור.
+const AI_STRAIGHTEN_MIN_ASPECT = 1.4;
+const AI_STRAIGHTEN_MAX_SIDE = 5600; // הצלע הארוכה של הצילום המסובב: שלושה חלקים של 1850 פיקסל, ולא יותר זיכרון מזה
+const AI_STRAIGHTEN_MAX_PIXELS = 16000000; // שטח הקנבס של הצילום המסובב: מעל ~16.7 מיליון פיקסלים Safari מחזיר קנבס ריק בלי שגיאה
+function aiExifOrientationFromBytes(view) {
+  try {
+    if (!view || view.byteLength < 4 || view.getUint16(0) !== 0xFFD8) return 0;
+    let offset = 2;
+    while (offset + 4 <= view.byteLength) {
+      const marker = view.getUint16(offset);
+      if ((marker & 0xFF00) !== 0xFF00) return 0;
+      const size = view.getUint16(offset + 2);
+      // APP1 שמתחיל ב-"Exif\0\0": כותרת TIFF (סדר בתים), ואחריה IFD0 — שם תג 0x0112
+      if (marker === 0xFFE1 && offset + 18 <= view.byteLength && view.getUint32(offset + 4) === 0x45786966 && view.getUint16(offset + 8) === 0) {
+        const tiff = offset + 10, order = view.getUint16(tiff);
+        if (order !== 0x4949 && order !== 0x4D4D) return 0;
+        const little = order === 0x4949;
+        const ifd = tiff + view.getUint32(tiff + 4, little);
+        if (ifd + 2 > view.byteLength) return 0;
+        const count = view.getUint16(ifd, little);
+        for (let i = 0; i < count; i++) {
+          const entry = ifd + 2 + i * 12;
+          if (entry + 12 > view.byteLength) return 0;
+          if (view.getUint16(entry, little) === 0x0112) { const value = view.getUint16(entry + 8, little); return value >= 1 && value <= 8 ? value : 0; }
+        }
+        return 0;
+      }
+      if (marker === 0xFFDA || size < 2) return 0; // תחילת נתוני התמונה — אין EXIF אחריה
+      offset += 2 + size;
+    }
+  } catch (exifError) { /* קובץ שאינו JPEG תקין — אין תג */ }
+  return 0;
+}
+// תג הכיוון של הקובץ (1–8), או 0 כשאין. נקראים רק 128KB הראשונים.
+async function aiExifOrientation(file) {
+  try {
+    if (!file || typeof file.slice !== 'function') return 0;
+    return aiExifOrientationFromBytes(new DataView(await file.slice(0, 131072).arrayBuffer()));
+  } catch (readError) { return 0; }
+}
+// המקור מצויר מסובב ברבעי סיבוב עם כיוון השעון, בהקטנה scale
+function aiRotatedSourceCanvas(img, sourceWidth, sourceHeight, quarterTurns, scale) {
+  const turns = aiNormalizeQuarterTurns(quarterTurns), swap = turns % 2 === 1;
+  const width = Math.max(1, Math.round(sourceWidth * scale)), height = Math.max(1, Math.round(sourceHeight * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = swap ? height : width; canvas.height = swap ? width : height;
+  const ctx = canvas.getContext('2d', { alpha: false });
+  if (!ctx) return null;
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.rotate(turns * Math.PI / 2);
+  ctx.drawImage(img, -width / 2, -height / 2, width, height);
+  return canvas;
+}
+// null — הצילום אינו שוכב (או שאי אפשר לדעת); אחרת { blob, turns }: הצילום המסובב, וכמה רבעי סיבוב ימינה.
+async function aiStraightenSideways(img, sourceWidth, sourceHeight, file) {
+  if (!(sourceWidth > sourceHeight)) return null; // (1) פריים לאורך — המצלמה ידעה איפה למעלה
+  const proxyScale = Math.min(1, AI_CROP_PROXY_SIDE / Math.max(sourceWidth, sourceHeight));
+  const probe = aiRotatedSourceCanvas(img, sourceWidth, sourceHeight, 1, proxyScale);
+  if (!probe) return null;
+  const report = {};
+  const found = aiDetectPaperRegion(probe, probe.width, probe.height, report);
+  // (2) + (3): בעותק המסובב — מסגרת נייר מוסכמת, והיא רצועה ארוכה זקופה
+  if (!found || report.reason !== 'cropped' || !(found.height >= AI_STRAIGHTEN_MIN_ASPECT * found.width)) return null;
+  const turns = (await aiExifOrientation(file)) === 3 ? 3 : 1;
+  const fullScale = Math.min(1, AI_STRAIGHTEN_MAX_SIDE / Math.max(sourceWidth, sourceHeight), Math.sqrt(AI_STRAIGHTEN_MAX_PIXELS / (sourceWidth * sourceHeight)));
+  const full = aiRotatedSourceCanvas(img, sourceWidth, sourceHeight, turns, fullScale);
+  if (!full || typeof full.toBlob !== 'function') return null;
+  const blob = await new Promise(resolve => { try { full.toBlob(resolve, 'image/jpeg', 0.97); } catch (encodeError) { resolve(null); } });
+  try { full.width = 1; full.height = 1; } catch (releaseError) { /* שחרור הזיכרון של הקנבס הגדול — לא חובה */ }
+  if (!blob) return null;
+  let rotated = blob;
+  try { rotated = new File([blob], (file && file.name) || ('עמוד-' + Date.now() + '.jpg'), { type: 'image/jpeg' }); } catch (fileError) { rotated = blob; }
+  return { blob: rotated, turns };
+}
 // v180: החיתוך האוטומטי חוזר, אבל הפעם הוא מדווח על עצמו ומסיג לאחור
 // בנגיעה אחת. ההסרה ב-v179 נומקה ב"קשה לדעת אם שולי התעודה נשמרו" —
 // ולכן כאן מגיעים גם cropInfo.kept (תרשים במסך האישור) וגם כפתור
@@ -10452,7 +10559,8 @@ function aiSplitSkipText(info) {
 // v166: מחזירה עמוד אחד — או, לתעודה ארוכה שחולקה, מערך של עמודים (aiRenderSplitPages; כמו תנובה 158–159 ויטבתה 414).
 // noSplit: בלי חלוקה — כשאין מקום בתקרת 8 העמודים, ובמסלולים שמצפים לעמוד אחד (קליטת ניירות, מכתב מבצעים).
 // forceFullFrame — בלי זיהוי ובלי חלוקה — מסלול השחזור.
-async function aiCompressInvoiceImage(file, forceFullFrame, noSplit) {
+// v175: straightened — הצילום כבר סובב כאן פעם אחת (aiStraightenSideways); לא מסובבים שוב.
+async function aiCompressInvoiceImage(file, forceFullFrame, noSplit, straightened) {
   const raw = await aiReadFile(file);
   const img = await aiLoadImage(raw);
   const sourceWidth = img.naturalWidth || img.width, sourceHeight = img.naturalHeight || img.height;
@@ -10472,6 +10580,23 @@ async function aiCompressInvoiceImage(file, forceFullFrame, noSplit) {
       // כשל זיהוי לעולם אינו מפיל צילום — ממשיכים עם הפריים המלא.
       cropInfo.reason = 'error'; cropInfo.value = (error && error.message) || '';
     }
+  }
+  // v175: לא נמצא טקסט — אולי הצילום שוכב. אם כן, הצילום המסובב עובר את כל הצינור מההתחלה, והעמודים מסומנים
+  // autoRotated (מעלות, עם כיוון השעון). כל כשל כאן — ממשיכים עם הצילום כפי שהוא.
+  if (!forceFullFrame && !straightened && cropInfo.reason === 'no_text') {
+    try {
+      const turned = await aiStraightenSideways(img, sourceWidth, sourceHeight, file);
+      if (turned) {
+        const made = await aiCompressInvoiceImage(turned.blob, false, noSplit, true);
+        // (4) הצילום המסובב עצמו נחתך או מתחלק; אחרת (קנבס שיצא ריק, קידוד שנכשל בשקט, עוגנים שלא הסכימו) — הצילום כפי שצולם
+        const first = [].concat(made)[0];
+        const reason = first && first.cropInfo ? first.cropInfo.reason : 'error';
+        if (reason === 'cropped' || reason === 'split') {
+          [].concat(made).forEach(page => { page.autoRotated = turned.turns * 90; });
+          return made;
+        }
+      }
+    } catch (straightenError) { /* הצילום נשאר כפי שצולם */ }
   }
   // v166: גודל הצילום המקורי (הצלע הארוכה) נשמר לאודיט — בלעדיו אי אפשר לדעת אם היה מה להרוויח מחלוקה.
   if (quality) quality.sourcePx = Math.max(sourceWidth, sourceHeight);
@@ -10518,12 +10643,26 @@ async function aiCompressInvoiceImage(file, forceFullFrame, noSplit) {
   const originalImage = fullFrame() || { dataUrl: encoded.dataUrl, region: { ...region }, scale, rotationOffset: 0 };
   return { dataUrl: encoded.dataUrl, baseDataUrl: encoded.dataUrl, rotation: 0, orientationConfirmed: false, cropped: autoCropped, autoCropped: autoCropped, cropInfo: cropInfo, quality: quality, qualityAdvice: aiQualityAdvice(quality), originalImage, sourceBlob: file, sourceRegion: { x: region.x, y: region.y, width: region.width, height: region.height }, processScale: scale, name: file.name || ('עמוד-' + Date.now() + '.jpg'), bytes: encoded.bytes };
 }
+// v175: העמוד שבמסך האישור שייך לתעודה בקליטה (aiScanDocuments), או — paper — לצילום של נייר מהנהג שמחכה במסך
+// הניירות (paperIntake.items). לצילום נייר doc הוא הצילום עצמו: pages שלו הם החלקים שנשלחים.
 function aiOrientationLocation(page) {
   for (let docIndex = 0; docIndex < aiScanDocuments.length; docIndex++) {
     const pageIndex = aiScanDocuments[docIndex].pages.indexOf(page);
     if (pageIndex !== -1) return { docIndex, pageIndex, doc: aiScanDocuments[docIndex], page };
   }
+  const items = paperIntake ? paperIntake.items : [];
+  for (const item of items) {
+    const pageIndex = paperItemPages(item).indexOf(page);
+    if (pageIndex !== -1) return { paper: item, docIndex: -1, pageIndex, doc: item, page };
+  }
   return null;
+}
+// v175: ה"סבב" שהעמוד שייך לו. פעולה ארוכה במסך האישור (סיבוב, חיתוך, שחזור) מוותרת כשהסבב התחלף באמצע: לתעודה
+// בקליטה — aiScanSession (מתחלף בכל איפוס של הפענוח); לצילום נייר — הסבב של מסך הניירות, כך שתעודת משלוח שנכנסת
+// בינתיים לקליטה (ומקדמת את aiScanSession) לא מבטלת פעולה על צילום אחר.
+function aiOrientationEpoch(page) {
+  const location = aiOrientationLocation(page);
+  return location ? (location.paper ? 'paper:' + paperIntakeSession : 'scan:' + aiScanSession) : null;
 }
 function aiSetOrientationBusy(busy) {
   aiOrientationBusy = !!busy;
@@ -10712,9 +10851,9 @@ async function aiApplyCropIfMoved(page) {
   const state = aiCropState;
   if (!aiOrientationSession || aiOrientationSession.reviewOnly || !aiOrientationSession.cropMode
     || aiOrientationSession.page !== page || !state || !state.moved) return false;
-  const session = aiOrientationSession, scanSession = aiScanSession;
-  const current = () => scanSession === aiScanSession && aiOrientationSession === session
-    && aiCropState === state && !!aiOrientationLocation(page);
+  const session = aiOrientationSession, epoch = aiOrientationEpoch(page);
+  const current = () => epoch !== null && epoch === aiOrientationEpoch(page) && aiOrientationSession === session
+    && aiCropState === state;
   if (!page.originalImage && !page.cropped) {
     page.originalImage = { dataUrl: page.baseDataUrl || page.dataUrl,
       region: page.sourceRegion ? { ...page.sourceRegion } : null, scale: page.processScale || null, rotationOffset: 0 };
@@ -10833,6 +10972,11 @@ function aiUpdateOrientationControls() {
   // האישור: היום זו מדידה בלבד.
   const advice = !reviewOnly && !cropMode && session.page.qualityAdvice;
   if (hint && advice) hint.textContent = advice.text + ' · ' + hint.textContent;
+  // v175: צילום שיצא שוכב ויושר לבד — אומרים זאת ראשון: לאיזה צד ליישר נקבע בלי לקרוא את הנייר, ולכן ייתכן שהוא הפוך
+  if (hint && !reviewOnly && !cropMode && session.page.autoRotated) hint.textContent = 'הצילום יצא שוכב ויושר לבד — ודא שהכותרת למעלה (הפוך? סובב פעמיים). ' + hint.textContent;
+  // v175: צילום של נייר מהנהג נקרא מיד אחרי האישור — בלי כפתור "קרא" נוסף
+  const note = $('aiOrientationNote');
+  if (note) note.textContent = session.paper ? 'התמונה לא תישלח ל-AI לפני האישור. אחרי האישור הקריאה מתחילה לבד.' : 'התמונה לא תישלח ל-AI לפני האישור.';
   ['aiOrientationCancel', 'aiOrientationRotateRow', 'aiOrientationCropRow'].forEach(id => { const node = $(id); if (node) node.classList.toggle('hidden', reviewOnly); });
   if (crop) crop.innerHTML = cropMode ? 'בטל חיתוך' : '<i class="fa-solid fa-crop-simple ml-1"></i> חתוך תמונה';
   const canRestore = !!((cropMode || session.page.cropped) && (session.page.originalImage || session.page.sourceBlob));
@@ -10854,9 +10998,9 @@ function aiToggleCropMode() {
 async function aiRestoreOriginalImage() {
   const session = aiOrientationSession, location = session && aiOrientationLocation(session.page);
   if (!location || session.reviewOnly || aiOrientationBusy) return;
-  const scanSession = aiScanSession;
   const page = location.page;
-  const current = () => scanSession === aiScanSession && aiOrientationSession === session && !!aiOrientationLocation(page);
+  const epoch = aiOrientationEpoch(page);
+  const current = () => epoch !== null && epoch === aiOrientationEpoch(page) && aiOrientationSession === session;
   if (!page.cropped) {
     session.cropMode = false; aiCropResetOverlay(); aiUpdateOrientationControls(); return;
   }
@@ -10877,6 +11021,7 @@ async function aiRestoreOriginalImage() {
       const siblings = aiSplitSiblings(location.doc, page);
       location.doc.pages = location.doc.pages.filter(item => !siblings.includes(item));
       page.split = null;
+      if (location.paper) paperItemSync(location.paper); // v175: הצילום של הנייר נשאר עמוד אחד
     }
     page.originalImage = { ...original, rotationOffset: 0 };
     page.baseDataUrl = original.dataUrl; page.dataUrl = rendered.dataUrl;
@@ -10894,15 +11039,19 @@ async function aiRestoreOriginalImage() {
 function aiPaintOrientationReview() {
   aiCropResetOverlay();
   const location = aiOrientationSession && aiOrientationLocation(aiOrientationSession.page);
-  if (!location) { aiCloseOrientationReview(); return false; }
+  if (!location) { aiCloseOrientationReview(true); return false; }
   const img = $('aiOrientationImage'), label = $('aiOrientationLabel');
   if (img) img.src = location.page.dataUrl;
-  if (label) label.textContent = 'תעודה ' + (location.docIndex + 1) + ' · ' + aiPageLabel(location.page, location.pageIndex) + ((Number(location.page.rotation) || 0) ? ' · סיבוב ' + (Number(location.page.rotation) || 0) + '°' : '') + ' · ' + aiCropInfoText(location.page);
+  // v175: צילום של נייר מהנהג — "נייר מהנהג", ו"חלק 1 מתוך 2" רק כשהתעודה חולקה (צילום אחד הוא עמוד אחד)
+  const head = location.paper ? 'נייר מהנהג' + (location.page.split ? ' · ' + aiPageLabel(location.page, location.pageIndex) : '')
+    : 'תעודה ' + (location.docIndex + 1) + ' · ' + aiPageLabel(location.page, location.pageIndex);
+  if (label) label.textContent = head + ((Number(location.page.rotation) || 0) ? ' · סיבוב ' + (Number(location.page.rotation) || 0) + '°' : '') + ' · ' + aiCropInfoText(location.page);
   aiUpdateOrientationControls();
   return true;
 }
 function aiOpenOrientationReview(docIndex, pageIndex, requireReconfirm) {
   if (aiScanBusy || aiOrientationBusy) return false;
+  if (aiOrientationSession && aiOrientationSession.paper) return false; // v175: צילום של נייר מהנהג מחכה לאישור — קודם הוא
   const doc = aiScanDocuments[docIndex], page = doc && doc.pages[pageIndex];
   if (!page) return false;
   if (requireReconfirm) page.orientationConfirmed = false;
@@ -10923,7 +11072,12 @@ function aiOpenNextUnconfirmedOrientation() {
   }
   return false;
 }
-function aiCloseOrientationReview() {
+// v175: own — המסך סוגר את עצמו (אישור, מחיקה, עמוד שנעלם). כל קריאה אחרת היא איפוס של הקליטה (תעודה שנכנסה,
+// "התחל לסרוק", טיוטה שהתעדכנה): היא סוגרת בדיקה של עמוד בקליטה, ולא נוגעת בצילום של נייר מהנהג שמחכה לאישור —
+// הוא אינו חלק מהקליטה, ונייר קודם שנקרא ברקע לא סוגר את המסך מול העיניים.
+function aiCloseOrientationReview(own) {
+  if (own !== true && aiOrientationSession && aiOrientationSession.paper) return;
+  if (own === true && aiOrientationSession) aiOrientationClosedAt = Date.now();
   aiCropResetOverlay();
   aiOrientationSession = null;
   aiOrientationBusy = false;
@@ -10935,8 +11089,8 @@ function aiCloseOrientationReview() {
 async function aiRotateOrientationReview(deltaTurns) {
   const session = aiOrientationSession, location = session && aiOrientationLocation(session.page);
   if (!location || aiOrientationBusy || session.reviewOnly) return;
-  const scanSession = aiScanSession;
-  const current = () => scanSession === aiScanSession && aiOrientationSession === session && !!aiOrientationLocation(session.page);
+  const epoch = aiOrientationEpoch(session.page);
+  const current = () => epoch !== null && epoch === aiOrientationEpoch(session.page) && aiOrientationSession === session;
   aiSetOrientationBusy(true);
   try {
     const page = location.page;
@@ -10959,6 +11113,7 @@ async function aiRotateOrientationReview(deltaTurns) {
     siblings.forEach((item, index) => { item.sibling.baseDataUrl = item.base; item.sibling.dataUrl = siblingRenders[index].dataUrl;
       item.sibling.rotation = targetTurns * 90; item.sibling.bytes = siblingRenders[index].bytes; item.sibling.orientationConfirmed = false; });
     if (siblings.length) aiOrderSplitGroup(location.doc, page);
+    if (location.paper) { paperItemSync(location.paper); refreshPaperIntake(); } // v175: התמונה הממוזערת שמאחורי המסך
     aiPaintOrientationReview();
   } catch (error) {
     if (!current()) return;
@@ -10969,10 +11124,12 @@ async function aiRotateOrientationReview(deltaTurns) {
 async function aiConfirmOrientationReview() {
   const session = aiOrientationSession;
   const location = session && aiOrientationLocation(session.page);
+  // v175: העמוד שבמסך כבר לא קיים (הצילום הוסר ממקום אחר) — המסך נסגר, ולא נשאר בלי דרך החוצה
+  if (session && !location && !aiOrientationBusy) { aiCloseOrientationReview(true); return; }
   if (!location || aiOrientationBusy) return;
-  if (session.reviewOnly) { aiCloseOrientationReview(); return; }
-  const scanSession = aiScanSession;
-  const current = () => scanSession === aiScanSession && aiOrientationSession === session && !!aiOrientationLocation(location.page);
+  if (session.reviewOnly) { aiCloseOrientationReview(true); return; }
+  const epoch = aiOrientationEpoch(location.page);
+  const current = () => epoch !== null && epoch === aiOrientationEpoch(location.page) && aiOrientationSession === session;
   // v157: אם מסגרת החיתוך הוזזה — קודם מחילים אותה מהמקור, ורק אז מאשרים.
   if (session.cropMode && aiCropState && aiCropState.moved) {
     aiSetOrientationBusy(true);
@@ -10991,7 +11148,9 @@ async function aiConfirmOrientationReview() {
   location.page.orientationConfirmed = true;
   // v166: אישור של חלק אחד של תעודה ארוכה מאשר את כל חלקיה — אותו צילום, אותו כיוון.
   aiSplitSiblings(location.doc, location.page).forEach(sibling => { sibling.orientationConfirmed = true; });
-  aiCloseOrientationReview();
+  aiCloseOrientationReview(true);
+  // v175: צילום של נייר מהנהג — הפענוח של הקליטה לא נוגע לו; מה שאושר נקרא עכשיו (paperPhotoConfirmed)
+  if (location.paper) { paperPhotoConfirmed(location.paper); return; }
   invalidateAiInvoiceResult();
   refreshScanHost();
   const completedSession = aiScanSession;
@@ -10999,12 +11158,15 @@ async function aiConfirmOrientationReview() {
 }
 function aiCancelOrientationReview() {
   const location = aiOrientationSession && aiOrientationLocation(aiOrientationSession.page);
+  if (aiOrientationSession && !location && !aiOrientationBusy) { aiCloseOrientationReview(true); return; } // v175: כמו ב"אשר"
   if (!location || aiOrientationBusy) return;
-  if (aiOrientationSession.reviewOnly) { aiCloseOrientationReview(); return; }
+  if (aiOrientationSession.reviewOnly) { aiCloseOrientationReview(true); return; }
+  // v175: "מחק צילום" על נייר מהנהג — הצילום יורד ממסך הניירות (עם כל חלקיו), ולא נשלח
+  if (location.paper) { aiCloseOrientationReview(true); paperPhotoDiscarded(location.paper); return; }
   // v166: מחיקת חלק של תעודה ארוכה מוחקת את כל חלקיה — חצי תעודה אינה תעודה.
   const removed = aiSplitGroupPages(location.doc, location.page);
   location.doc.pages = location.doc.pages.filter(item => !removed.includes(item));
-  aiCloseOrientationReview();
+  aiCloseOrientationReview(true);
   invalidateAiInvoiceResult();
   refreshScanHost();
   setTimeout(aiOpenNextUnconfirmedOrientation, 0);
@@ -11489,7 +11651,7 @@ function bermanOcrReviewHtml() {
     const cards = [...groups].sort(([a], [b]) => (a < 0 ? Infinity : a) - (b < 0 ? Infinity : b)).map(([rowIndex, fields]) => {
       const row = rowIndex < 0 ? null : raw.rows[rowIndex];
       const name = row ? row.description || 'מוצר ללא שם' : 'סיכום התעודה';
-      const location = row ? [row.sourcePage != null ? 'עמוד ' + row.sourcePage : '',
+      const location = row ? [aiRowPageText(doc, row),
         row.lineNumber != null ? 'שורה ' + row.lineNumber : 'מוצר ' + (rowIndex + 1)].filter(Boolean).join(' · ') : '';
       return '<fieldset class="ocr-review-card' + (row ? '' : ' ocr-review-summary') + '">'
         + '<legend class="sr-only">' + htmlEscape(name + (location ? ' · ' + location : '')) + '</legend>'
@@ -17711,11 +17873,17 @@ function paperIdb() {
   return paperIdbConn;
 }
 // התמונה נשארת בטלפון שצילם עד שהנייר אושר (לבדיקה ידנית), ונמחקת אחרי 30 יום
+// v175: תעודה ארוכה שחולקה נשמרת עם כל חלקיה (parts) — בבדיקת הנייר רואים את כולה. dataUrl נשאר החלק הראשון,
+// כך שרשומה שנשמרה לפני 175 (תמונה אחת) נקראת כמו קודם.
 async function paperImgPut(key, dataUrl) {
-  try { const idb = await paperIdb(); await new Promise((res, rej) => { const tx = idb.transaction('img', 'readwrite'); tx.objectStore('img').put({ dataUrl, at: Date.now() }, key); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); } catch (e) {}
+  const parts = (Array.isArray(dataUrl) ? dataUrl : [dataUrl]).filter(Boolean);
+  if (!parts.length) return;
+  try { const idb = await paperIdb(); await new Promise((res, rej) => { const tx = idb.transaction('img', 'readwrite'); tx.objectStore('img').put({ dataUrl: parts[0], ...(parts.length > 1 ? { parts } : {}), at: Date.now() }, key); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); } catch (e) {}
 }
+// כל חלקי הצילום, לפי הסדר (צילום רגיל — מערך של תמונה אחת); null כשאין תמונה
 async function paperImgGet(key) {
-  try { const idb = await paperIdb(); return await new Promise(res => { const r = idb.transaction('img').objectStore('img').get(key); r.onsuccess = () => res(r.result ? r.result.dataUrl : null); r.onerror = () => res(null); }); } catch (e) { return null; }
+  try { const idb = await paperIdb(); return await new Promise(res => { const r = idb.transaction('img').objectStore('img').get(key);
+    r.onsuccess = () => { const v = r.result; res(v ? (Array.isArray(v.parts) && v.parts.length ? v.parts.slice() : (v.dataUrl ? [v.dataUrl] : null)) : null); }; r.onerror = () => res(null); }); } catch (e) { return null; }
 }
 // תמונה של נייר שעוד מחכה לבדיקה נשמרת; כל השאר — 30 יום
 async function paperImgPrune() {
@@ -18026,7 +18194,8 @@ async function paperDayMigration() {
 function paperScanAudit(result) {
   return cloneSafe({ at: Date.now(), serviceVersion: result.serviceVersion || null, model: result.model || null, requestId: result.requestId || null,
     usage: result.usage || null, verification: result.verification || null, reads: result.reads || [], warnings: result.warnings || [], attempts: result.attempts || 1,
-    retryAudit: result.retryAudit || null, doc: result.doc || null });
+    retryAudit: result.retryAudit || null, doc: result.doc || null,
+    ...(result.photo ? { photo: result.photo } : {}) }); // v175: נתוני הצילום (paperPhotoAudit)
 }
 // לאן שייך נייר — לפי מה שקיים עכשיו במאזן. נשמר על הנייר ומוצג עם [שנה].
 function paperAttachNow(paper) {
@@ -18095,29 +18264,94 @@ async function paperIntakeAddFilesNow(it, files) {
         continue;
       }
       try {
-        // v166: צילום של נייר נשאר עמוד אחד (noSplit) — חלוקת תעודה ארוכה היא של מסלול הקליטה בלבד.
-        const page = await aiCompressInvoiceImage(file, false, true);
-        page.orientationConfirmed = true;
-        it.items.push({ captureId, hash, page, status: 'photo', forReturnId, target, forDraftId, capturedAt });
+        // v175: אותה הכנה כמו לצילום בקליטה — כולל חלוקה של תעודה ארוכה לחלקים (עד 174 הצילום נשאר עמוד אחד,
+        // noSplit, כי לא היה מסך שמראה את החלקים). page — החלק הראשון (התמונה הממוזערת); pages — מה שנשלח.
+        // הצילום לא מאושר לבד: הוא מחכה למסך האישור (paperOpenNextPhotoReview), ולא נשלח לפניו.
+        const pages = [].concat(await aiCompressInvoiceImage(file));
+        it.items.push({ captureId, hash, page: pages[0], pages, status: 'photo', forReturnId, target, forDraftId, capturedAt });
       } catch (e) {
         it.items.push({ captureId, hash, status: 'error', message: e && e.message === 'image_too_large' ? 'התמונה גדולה מדי — צלם שוב מקרוב' : 'לא הצלחתי להכין את התמונה — צלם שוב' });
       }
     }
   } finally { it.preparing = false; refreshPaperIntake(); }
 }
-// צילום שעוד לא נשלח (לא בסבב שכבר קורא) — אפשר לסובב או להסיר
+// צילום שעוד לא נשלח (לא בסבב שכבר קורא) — אפשר לבדוק אותו שוב או להסיר
 function paperIntakeEditable(item) { return !!item && !paperIntake.preparing && (item.status === 'photo' || item.status === 'error' || (item.status === 'queued' && !paperIntake.busy)); }
-async function paperIntakeRotate(captureId) {
-  const item = paperIntake && paperIntake.items.find(x => x.captureId === captureId);
-  if (!item || !item.page || !paperIntakeEditable(item)) return;
-  item.page.rotation = ((Number(item.page.rotation) || 0) + 1) % 4;
-  try { const r = await aiRenderInvoiceRotation(item.page.baseDataUrl, item.page.rotation); item.page.dataUrl = r.dataUrl; } catch (e) {}
-  refreshPaperIntake();
-}
 function paperIntakeRemove(captureId) {
   if (!paperIntake || !paperIntakeEditable(paperIntake.items.find(x => x.captureId === captureId))) return;
   paperIntake.items = paperIntake.items.filter(x => x.captureId !== captureId);
   refreshPaperIntake();
+}
+// ===== v175: מסך האישור גם לצילום של נייר מהנהג =====
+// 26.11.2026, בעל העסק: תעודה יצאה בצילום שוכבת, נשלחה כך לקריאה, וחזרה עם מספרים לבדיקה — "אצל ברמן אין את מנגנון
+// האישור של המשתמש או החיתוך במקרה הצורך, וזה ישר לוקח את התמונה שצילמת ושולח אותה למודל. צריך קודם להופיע למשתמש,
+// כמו אצל יטבתה ותנובה, ואז לשלוח". עד 174 הצילום סומן כמאושר לבד והקריאה התחילה מיד (v126); מעכשיו כל צילום
+// נפתח במסך האישור של הקליטה — סיבוב, חיתוך, "השאר תמונה מלאה", "מחק צילום" — ונקרא רק אחרי "אשר". הקריאה עצמה
+// ממשיכה ברקע כמו קודם, כך שמיד אחרי האישור אפשר לצלם את הנייר הבא.
+// העמודים שנשלחים: חלק אחד, או חלקי תעודה ארוכה שחולקה. צילום שנבנה בלי pages (לפני 175) — העמוד היחיד שלו.
+function paperItemPages(item) {
+  if (!item) return [];
+  if (!Array.isArray(item.pages)) item.pages = item.page ? [item.page] : [];
+  return item.pages;
+}
+// אחרי שינוי בעמודים (סיבוב של 180° הופך את סדר החלקים, "השאר תמונה מלאה" מוריד אותם) — page נשאר החלק הראשון
+function paperItemSync(item) { if (item) item.page = paperItemPages(item)[0] || null; }
+function paperItemConfirmed(item) {
+  const pages = paperItemPages(item);
+  return pages.length > 0 && pages.every(page => page && page.orientationConfirmed === true);
+}
+// צילומים שמחכים לאישור התמונה — לא נקראים, ולא נספרים כ"מוכן לקריאה"
+function paperPhotosToConfirm(it) { return it ? it.items.filter(x => x.status === 'photo' && !paperItemConfirmed(x)) : []; }
+// פותח את מסך האישור על צילום שעוד לא נשלח. again — צילום שכבר אושר נפתח שוב לבדיקה: האישור יורד, כדי שלא ייקרא
+// באמצע (למשל כשהרשת חוזרת) לפני שאושר מחדש.
+function paperOpenPhotoReview(captureId, again) {
+  const it = paperIntake, item = it && it.items.find(x => x.captureId === captureId);
+  if (!item || !paperIntakeEditable(item) || aiOrientationSession || aiOrientationBusy) return false;
+  const pages = paperItemPages(item);
+  if (!pages.length) return false;
+  if (again) pages.forEach(page => { page.orientationConfirmed = false; });
+  if (item.status === 'queued') item.status = 'photo';
+  const page = pages.find(p => !p.orientationConfirmed) || pages[0];
+  aiOrientationSession = { page, reviewOnly: false, cropMode: false, paper: true };
+  const modal = $('aiOrientationModal');
+  if (modal) { modal.classList.remove('hidden'); modal.classList.add('flex'); }
+  aiSetOrientationBusy(false);
+  aiPaintOrientationReview();
+  refreshPaperIntake();
+  return true;
+}
+function paperOpenNextPhotoReview() {
+  if (!paperIntake || paperIntake.preparing || aiOrientationSession || aiOrientationBusy) return false;
+  const item = paperPhotosToConfirm(paperIntake)[0];
+  return item ? paperOpenPhotoReview(item.captureId, false) : false;
+}
+// "אשר" במסך האישור: הצילום נקרא עכשיו (צילום שהקריאה שלו נכשלה נשאר עם "קרא שוב (בתשלום)" — האישור לבדו אינו
+// קריאה נוספת), והצילום הבא שמחכה לאישור נפתח.
+function paperPhotoConfirmed(item) {
+  paperItemSync(item);
+  refreshPaperIntake();
+  if (item.status === 'photo') paperIntakeRun().catch(e => console.error('paper read failed', e));
+  setTimeout(paperOpenNextPhotoReview, 0);
+}
+// "מחק צילום" במסך האישור: הצילום יורד ממסך הניירות ולא נשלח
+function paperPhotoDiscarded(item) {
+  if (paperIntake) paperIntake.items = paperIntake.items.filter(x => x !== item);
+  refreshPaperIntake();
+  setTimeout(paperOpenNextPhotoReview, 0);
+}
+// נתוני הצילום נשמרים עם הקריאה גם לנייר מהנהג — אותם שדות שהקליטה שומרת לצילום שלה (aiScanPageAudit), ועוד הסיבוב
+// שהמשתמש קבע (rotations) ויישור אוטומטי של צילום שוכב (autoRotated). עד 174 לא נשמר כאן דבר, ולכן אי אפשר היה
+// לדעת מהגיבוי איך נראה הצילום שנקרא רע. בלי cropInfo (צילום שלא עבר את הכנת התמונה) — אין מה לשמור.
+function paperPhotoAudit(pages) {
+  pages = (pages || []).filter(Boolean);
+  if (!pages.length || !pages.some(page => page.cropInfo)) return null;
+  return { pageCount: pages.length,
+    cropReasons: pages.map(page => (page.cropInfo && page.cropInfo.reason) || '?'),
+    splitReasons: pages.map(page => (page.cropInfo && (page.cropInfo.reason === 'split' ? 'split' : page.cropInfo.splitReason)) || null),
+    photoQuality: pages.map(page => page.quality || null),
+    qualityAdvice: pages.map(page => (page.qualityAdvice && page.qualityAdvice.code) || 'ok'),
+    rotations: pages.map(page => Number(page.rotation) || 0),
+    autoRotated: pages.map(page => Number(page.autoRotated) || 0) };
 }
 function paperSleep(ms) { return new Promise(res => setTimeout(res, ms)); }
 // v126: תור. צילום שנוסף בזמן שהסבב קורא — נקרא באותו סבב. כל צילום נלקח מהתור לפני כל
@@ -18125,7 +18359,8 @@ function paperSleep(ms) { return new Promise(res => setTimeout(res, ms)); }
 // שנקראה — עוד לפני השמירה בענן, מהקריאה שבזיכרון.
 async function paperIntakeRun() {
   const it = paperIntake; if (!it) return;
-  it.items.forEach(x => { if (x.status === 'photo') { x.status = 'queued'; if (x.localEpoch == null) x.localEpoch = localReceivingEpoch; } });
+  // v175: רק צילום שהתמונה שלו אושרה נכנס לתור — צילום שמחכה למסך האישור לא נשלח
+  it.items.forEach(x => { if (x.status === 'photo' && paperItemConfirmed(x)) { x.status = 'queued'; if (x.localEpoch == null) x.localEpoch = localReceivingEpoch; } });
   if (it.busy) { refreshPaperIntake(); return; }
   const back = () => it.items.forEach(x => { if (x.status === 'queued') x.status = 'photo'; });
   if (!it.items.some(x => x.status === 'queued')) return;
@@ -18225,28 +18460,32 @@ async function paperIntakeReadOne(token, item) {
   };
   let result = null, error = null;
   mark();
+  // v175: מה שנשלח — כל חלקי הצילום (תעודה ארוכה שחולקה נשלחת כעמודים של אותה תעודה), ונתוני הצילום נשמרים עם הקריאה
+  const pages = paperItemPages(item).slice();
+  let photo = null; try { photo = paperPhotoAudit(pages); } catch (e) { photo = null; }
+  const withPhoto = r => { if (r && photo) r.photo = photo; return r; };
   try {
     result = await aiScanSingleDocPipeline(token, 0, {
-      inputDoc: { noteIndex: 0, pages: [item.page], amount: null, units: null, lines: null, kind: 'charge' },
+      inputDoc: { noteIndex: 0, pages, amount: null, units: null, lines: null, kind: 'charge' },
       paperIntake: true, // v174: הנייר הולך ל-bermanPaperRecord — שורה במחיר אפסי בנייר זיכוי לא נשלחת לאימות (bermanOcrVerificationTargets)
       isCurrent: () => true,
       onProgress: text => { if (paperIntake) { paperIntake.progress = text; refreshPaperIntake(); } },
-      onBeforeVerify: best => { mark({ verify: true }); try { keep(paperPipelineResult(best), true); } catch (e) { console.error('paper interim save failed', e); } }
+      onBeforeVerify: best => { mark({ verify: true }); try { keep(withPhoto(paperPipelineResult(best)), true); } catch (e) { console.error('paper interim save failed', e); } }
     });
   } catch (e) { error = e; }
   try {
     if (result) {
-      const { rec, ok, scan } = keep(result, false);
+      const { rec, ok, scan } = keep(withPhoto(result), false);
       // v126: הקריאה עצמה נשארת בזיכרון של הדף — תעודת משלוח נכנסת ממנה לקליטה גם אחרי שהענן אישר
       // (ואז הרשומה במכשיר כבר בלי התשובה הכבדה). לא נשמר בשום מקום נוסף.
       item.scan = scan || null;
       if (!ok) showToast('הזיכרון במכשיר מלא — הנייר שמור רק בדף הזה עד שיישמר בענן. אל תרענן עכשיו', null, null, 5000);
-      if (rec.rejected) { item.status = 'rejected'; item.page = null; return {}; }
+      if (rec.rejected) { item.status = 'rejected'; item.page = null; item.pages = null; return {}; }
       if (!rec.paper) { item.status = 'error'; item.message = 'הקריאה נשמרה, אבל לא הצלחתי לבנות ממנה נייר — צלם שוב'; return {}; }
       item.paperId = rec.paper.id;
       item.status = rec.paper.kind === 'delivery' ? 'delivery' : rec.paper.state === 'accepted' ? 'saved' : 'review';
-      if (rec.paper.state !== 'accepted' && item.page) paperImgPut(cap, item.page.dataUrl);
-      if (rec.paper.state === 'accepted' && ok) item.page = null;
+      if (rec.paper.state !== 'accepted' && item.page) paperImgPut(cap, pages.map(page => page.dataUrl)); // v175: כל חלקי הצילום
+      if (rec.paper.state === 'accepted' && ok) { item.page = null; item.pages = null; }
       return {};
     }
     // נכשל באמצע — אם כבר נשמרה קריאה לפני האימות הנוסף, היא עוברת לבדיקה ידנית
@@ -18256,7 +18495,7 @@ async function paperIntakeReadOne(token, item) {
       item.paperId = saved.paper.id;
       item.scan = saved.scan || null;
       item.status = saved.paper.kind === 'delivery' ? 'delivery' : 'review';
-      if (item.page) paperImgPut(cap, item.page.dataUrl);
+      if (item.page) paperImgPut(cap, pages.map(page => page.dataUrl));
       return { fatal: !!(error && error.fatal) };
     }
     item.status = 'error'; item.message = paperErrorText(error);
@@ -18332,6 +18571,12 @@ async function paperDeliveryScan(paperId, cap, item, cached) {
   return scan ? { scan: cloneSafe(scan), paper } : null;
 }
 function receiptPaperDocNumber(d) { return receiptPaperNumber(d && (d.docNumber ?? d.invoiceNumber)); }
+// v175: כמה עמודים נשלחו בקריאה של נייר — 1, או מספר החלקים של תעודה ארוכה שחולקה. השרת מחזיר ב-pageCount בדיוק את
+// מספר התמונות שקיבל (ודוחה תשובה אחרת), והקליטה משווה אליו את מספר העמודים של התעודה (aiEvaluateInvoiceScan).
+function paperScanPageCount(scan) {
+  const n = Number(scan && scan.doc && scan.doc.pageCount);
+  return Number.isInteger(n) && n >= 1 && n <= 8 ? n : 1;
+}
 function receivingDraftEmpty() {
   return !(receiptOpened || receiptList.length || receiptNotes.length || receiptAttachTarget || aiScanDocuments.some(d => d.pages && d.pages.length)) && !aiScanResponse;
 }
@@ -18415,8 +18660,9 @@ function receivingDeliveryRoute(scan, paper, item, opts) {
   }
   // 10. קריאה שאישרה את עצמה — התעודה מתווספת כתעודה נוספת מאותו משלוח
   if (resp && receiptPaperScanState === 'ok') {
+    // v175: תעודה ארוכה שחולקה נכנסת עם כל חלקיה (עד 3) — התקרה של 8 עמודים נספרת לפיהם
     const pages = aiScanDocuments.reduce((a, d) => a + aiScanDocumentPageCount(d), 0);
-    if (aiScanDocuments.length >= 4 || docs.length >= 4 || pages + 1 > 8) return { action: 'refuse', reason: 'full' };
+    if (aiScanDocuments.length >= 4 || docs.length >= 4 || pages + paperScanPageCount(scan) > 8) return { action: 'refuse', reason: 'full' };
     if (!selfOk) return ask('selfcheck', 'append');
     // תעודה נוספת מאותו יום כמו הקליטה (או כמו תעודה שכבר בה) — אותו משלוח, נכנסת לבד
     // v142: תעודה בקליטה שהתאריך שלה לא נקרא היטב — היום שלה הוא יום הקליטה ("בעתיד" — אחרי היום)
@@ -18447,10 +18693,15 @@ function receivingInstallDelivery(scan, src, mode) {
   if (!src.dayDefault && BERMAN_ISO_DAY.test(String(src.docDay || '')) && (src.dayConfirmed || src.docDay !== bermanScanReadDay(doc))) doc.__bermanDocDateConfirmed = src.docDay;
   // היום של הנייר נאמן: לא נקבע, והקריאה עצמה לא מטילה בו ספק (או שהעובד קבע אותו)
   const paperDayTrusted = !src.dayDefault && !bermanScanDateDoubt(doc, todayStr(), doc.__bermanOcrVerification || scan.verification);
+  // v175: מספר העמודים שנשלחו (תעודה ארוכה שחולקה — כמספר חלקיה), ונתוני הצילום שנשמרו עם הקריאה — באותם שדות
+  // שהקליטה שומרת לצילום שלה (aiScanPageAudit)
+  const pageCount = paperScanPageCount(scan);
+  const photo = scan.photo && typeof scan.photo === 'object' ? cloneSafe(scan.photo) : null;
+  if (photo) delete photo.pageCount;
   const entry = { docIndex: k, ok: true, attempts: Number(scan.attempts) || 1, requestId: scan.requestId || null, model: scan.model || null,
     usage: scan.usage || null, barcodeRetry: scan.retryAudit || null, verification: scan.verification || doc.__bermanOcrVerification || null,
-    reads: scan.reads || [], pageCount: 1, serviceVersion: Number(scan.serviceVersion) || 0, warnings: scan.warnings || [],
-    source: 'paper', paperId: src.paperId, captureId: src.captureId || null, readAt: scan.at || null };
+    reads: scan.reads || [], pageCount, serviceVersion: Number(scan.serviceVersion) || 0, warnings: scan.warnings || [],
+    source: 'paper', paperId: src.paperId, captureId: src.captureId || null, readAt: scan.at || null, ...(photo || {}) };
   const docs = (prev ? prev.scan.documents : []).concat([doc]), n = docs.length;
   const warnings = (prev ? (prev.scan.warnings || []) : []).slice();
   (scan.warnings || []).forEach(w => { const t = (n > 1 ? 'תעודה ' + n + ': ' : '') + w; if (!warnings.includes(t)) warnings.push(t); });
@@ -18470,7 +18721,7 @@ function receivingInstallDelivery(scan, src, mode) {
     }
   }
   aiScanDocuments = aiScanDocuments.map(d => Object.assign({}, d)).concat([{ noteIndex: k, amount: null, units: null, lines: null, kind: 'charge',
-    pages: [], savedPageCount: 1, paperId: src.paperId, captureId: src.captureId || null }]);
+    pages: [], savedPageCount: pageCount, paperId: src.paperId, captureId: src.captureId || null }]);
   aiScanResponse = { ok: true,
     serviceVersion: Math.min(prev ? (Number(prev.serviceVersion) || 0) : Number.MAX_SAFE_INTEGER, Number(scan.serviceVersion) || 0),
     scan: { documents: docs, warnings },
@@ -18820,8 +19071,14 @@ function paperIntakeItemHtml(item) {
   const capAttr = ' data-cap="' + htmlEscape(item.captureId) + '"';
   let body = '', tone = 'border-slate-200 bg-white', actions = '';
   if (item.status === 'photo') {
-    body = '<div class="font-black text-slate-700 text-sm">מוכן לקריאה</div><div class="text-[11px] text-slate-400 font-bold">ודא שהנייר ישר. הטקסט הפוך? סובב.</div>';
-    actions = btn('paper-rotate', '<i class="fa-solid fa-rotate-right"></i> סובב', ' data-id="' + item.captureId + '"') +
+    // v175: צילום נקרא רק אחרי שהתמונה אושרה במסך האישור. מחכה לאישור — "בדוק ואשר"; אושר ועוד לא נקרא (בלי רשת) —
+    // "מוכן לקריאה", ואפשר לפתוח אותו שוב ("בדוק שוב") לפני שנשלח.
+    const confirmed = paperItemConfirmed(item), parts = paperItemPages(item).length;
+    const partsText = parts > 1 ? ' התעודה ארוכה — חולקה ל-' + parts + ' חלקים.' : '';
+    body = confirmed ? '<div class="font-black text-slate-700 text-sm">מוכן לקריאה</div><div class="text-[11px] text-slate-400 font-bold">התמונה אושרה.' + partsText + '</div>'
+      : '<div class="font-black text-amber-800 text-sm">מחכה לאישור התמונה</div><div class="text-[11px] text-amber-700 font-bold">לא נשלח לקריאה לפני שתאשר.' + partsText + '</div>';
+    if (!confirmed) tone = 'border-amber-300 bg-amber-50';
+    actions = btn('paper-photo-review', confirmed ? 'בדוק שוב' : '<i class="fa-solid fa-magnifying-glass"></i> בדוק ואשר', ' data-id="' + item.captureId + '"') +
       '<button data-role="paper-remove" data-id="' + item.captureId + '" aria-label="הסר את הצילום" class="btn-tap min-h-[44px] min-w-[44px] px-3 py-2 rounded-lg bg-white border border-rose-200 text-rose-600 text-xs font-black"><i class="fa-solid fa-trash-can"></i></button>';
   } else if (item.status === 'reading') { body = '<div class="font-black text-blue-700 text-sm"><i class="fa-solid fa-spinner fa-spin"></i> קורא…</div>'; tone = 'border-blue-200 bg-blue-50'; }
   else if (item.status === 'rejected') { body = '<div class="font-black text-slate-600 text-sm">זה לא נייר של הנהג — לא נשמר</div><div class="text-[11px] text-slate-400 font-bold">חשבונית חודשית ומכתבי מבצעים לא נכנסים למאזן.</div>'; tone = 'border-slate-200 bg-slate-50'; }
@@ -18830,6 +19087,7 @@ function paperIntakeItemHtml(item) {
   else if (item.status === 'dup' && !(p && p.kind === 'delivery')) { body = '<div class="font-black text-slate-600 text-sm">הצילום הזה כבר נקרא' + (p ? ' — ' + htmlEscape(paperLabel(p)) : '') + '</div><div class="text-[11px] text-slate-400 font-bold">לא נשלח שוב, ולא שולם שוב.</div>'; tone = 'border-slate-200 bg-slate-50'; }
   else if (item.status === 'error') { body = '<div class="font-black text-rose-700 text-sm">' + htmlEscape(item.message || 'הקריאה נכשלה') + '</div>'; tone = 'border-rose-200 bg-rose-50';
     if (item.page) actions = btn('paper-retry', 'קרא שוב (בתשלום)', ' data-id="' + item.captureId + '"') +
+      btn('paper-photo-review', 'בדוק תמונה', ' data-id="' + item.captureId + '"') + // v175: סיבוב או חיתוך לפני קריאה נוספת
       '<button data-role="paper-remove" data-id="' + item.captureId + '" aria-label="הסר את הצילום" class="btn-tap min-h-[44px] min-w-[44px] px-3 py-2 rounded-lg bg-white border border-rose-200 text-rose-600 text-xs font-black"><i class="fa-solid fa-trash-can"></i></button>'; }
   // v132: הנייר נמחק (מהשורה, בביטול הקליטה או במחיקת הקליטה) — אומרים זאת, ולא כרטיס ריק
   else if (!p && item.paperId && ['delivery', 'dup', 'saved', 'review'].indexOf(item.status) !== -1) { body = '<div class="font-black text-slate-500 text-sm">הצילום נמחק</div><div class="text-[11px] text-slate-400 font-bold">אפשר לשחזר אותו מסל המחזור.</div>'; tone = 'border-slate-200 bg-slate-50'; }
@@ -18898,7 +19156,9 @@ function renderPaperIntake() {
   const it = paperIntake;
   if (!it) { setView('ledger'); return; }
   const R = it.forReturnId ? returns.find(r => r.id === it.forReturnId) : null;
-  const waiting = it.items.filter(x => x.status === 'photo').length;
+  // v175: "קרא" — רק לצילומים שהתמונה שלהם אושרה ועוד לא נקראו (בלי רשת); צילום שמחכה לאישור — "בדוק ואשר"
+  const waiting = it.items.filter(x => x.status === 'photo' && paperItemConfirmed(x)).length;
+  const toConfirm = paperPhotosToConfirm(it).length;
   // v134: קודם מצלמים את כל הניירות שהגיעו ("צלם עוד נייר"), ורק אחרי "זה כל הניירות" — מה עושים איתם. הקריאה
   // רצה בינתיים ברקע (כל נייר נקרא פעם אחת, ותעודת משלוח נכנסת לקליטה לבד), אבל המסך לא ממשיך בלי המשתמש.
   const photographing = !it.allIn && it.items.length > 0;
@@ -18919,9 +19179,11 @@ function renderPaperIntake() {
   app.innerHTML =
     '<div class="px-1 py-1 mb-3"><h2 class="font-black text-2xl text-slate-800">הניירות מהנהג</h2>' +
       '<div class="text-sm text-slate-600 mt-1">' + (R ? 'תעודת הזיכוי של ההחזרה מ-' + htmlEscape(ledgerDayShort(ledgerReturnDay(R))) + '. ' : '') +
-        (photographing ? '<b>צלם את כל הניירות שקיבלת</b> — כל נייר בצילום משלו. בסוף: "זה כל הניירות".' : '<b>נייר אחד בכל צילום</b> — עוד נייר? שוב הכפתור למעלה. כל נייר הולך לבד למקום שלו.') + '</div></div>' +
+        (photographing ? '<b>צלם את כל הניירות שקיבלת</b> — כל נייר בצילום משלו, ואשר כל תמונה. בסוף: "זה כל הניירות".' : '<b>נייר אחד בכל צילום</b> — עוד נייר? שוב הכפתור למעלה. כל נייר הולך לבד למקום שלו.') + '</div></div>' +
     (it.note ? '<div class="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-xs font-bold text-amber-800 mb-3">' + htmlEscape(it.note) + '</div>' : '') +
     (it.preparing ? '<div class="text-xs font-black text-slate-500 text-center mb-2" role="status"><i class="fa-solid fa-spinner fa-spin"></i> מכין את התמונות…</div>' : '') +
+    // v175: צילום שמחכה לאישור התמונה (מסך האישור לא נפתח, או נסגר) — כפתור אחד שפותח אותו
+    (toConfirm && !it.preparing ? '<button data-role="paper-photo-review-next" class="btn-tap w-full bg-amber-500 text-white rounded-2xl py-4 font-black text-lg shadow-md mb-3"><i class="fa-solid fa-magnifying-glass"></i> ' + (toConfirm === 1 ? 'בדוק ואשר את הצילום' : 'בדוק ואשר את הצילומים (' + toConfirm + ')') + '</button>' : '') +
     // הקריאה מתחילה לבד; "קרא" מופיע רק כשהיא לא יכלה להתחיל (בלי רשת) — כדי לנסות שוב
     (waiting && !it.busy ? '<button data-role="paper-run" class="btn-tap w-full bg-emerald-600 text-white rounded-2xl py-4 font-black text-lg shadow-md mb-3"><i class="fa-solid fa-rotate-right"></i> קרא (' + waiting + ')</button>' : '') +
     (it.progress ? '<div class="bg-slate-900 text-white rounded-full px-4 py-2.5 text-sm font-black text-center mb-3" role="status" aria-live="polite"><i class="fa-solid fa-spinner fa-spin"></i> ' + htmlEscape(it.progress) + '</div>' : '') +
@@ -18974,8 +19236,10 @@ async function openPaperReview(id, cap) {
     units: p.anchors && p.anchors.units != null ? paperReviewPrinted(p.anchors.units, nom0.units) : '', lines: p.anchors && p.anchors.lines != null ? paperReviewPrinted(p.anchors.lines, nom0.lines) : '', img: null };
   setView('paperReview');
   const key = (found.local && found.local.captureId) || p.captureId;
-  const img = key ? await paperImgGet(key) : null;
-  if (img && paperReview && paperReview.id === p.id) { paperReview.img = img; if (currentView === 'paperReview') renderPaperReview(); }
+  // v175: תעודה ארוכה שחולקה — כל החלקים, לפי הסדר (img נשאר החלק הראשון)
+  const got = key ? await paperImgGet(key) : null;
+  const imgs = (Array.isArray(got) ? got : [got]).filter(Boolean);
+  if (imgs.length && paperReview && paperReview.id === p.id) { paperReview.img = imgs[0]; paperReview.imgs = imgs; if (currentView === 'paperReview') renderPaperReview(); }
 }
 // v173: המודפס בתחתית הנייר = העוגן השמור ועוד השורות במחיר אפסי. בנייר בלי שורות כאלה — העוגן כמו שהוא, בדיוק כמו עד 172
 function paperReviewPrinted(anchor, nominal) { return nominal ? Number(anchor) + nominal : anchor; }
@@ -19025,7 +19289,7 @@ function renderPaperReview() {
       '<div class="flex gap-1.5 mt-2 flex-wrap"><button data-role="paper-conflict-keep" data-cap="' + htmlEscape(r.cap) + '" class="btn-tap min-h-[44px] px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-xs font-black">החלף בצילום החדש</button>' +
       '<button data-role="paper-conflict-drop" data-cap="' + htmlEscape(r.cap) + '" class="btn-tap min-h-[44px] px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-xs font-black">מחק את הצילום החדש</button></div></div>' : '') +
     (notes.length ? '<div class="bg-amber-50 border border-amber-200 rounded-xl p-2.5 mb-3"><div class="text-xs font-black text-amber-800 mb-1">מה לבדוק:</div>' + notes.map(t => '<div class="text-xs font-bold text-amber-800">• ' + htmlEscape(t) + '</div>').join('') + '</div>' : '') +
-    (r.img ? '<img src="' + r.img + '" alt="צילום הנייר" class="w-full rounded-2xl border border-slate-200 mb-3">'
+    (r.img ? (Array.isArray(r.imgs) && r.imgs.length > 1 ? r.imgs : [r.img]).map((src, i, all) => '<img src="' + src + '" alt="צילום הנייר' + (all.length > 1 ? ' — חלק ' + (i + 1) + ' מתוך ' + all.length : '') + '" class="w-full rounded-2xl border border-slate-200 ' + (i === all.length - 1 ? 'mb-3' : 'mb-1') + '">').join('')
       : (p.deviceName && p.deviceName !== deviceName ? '<div class="text-[11px] text-slate-400 font-bold mb-3">הצילום שמור בטלפון שצילם (' + htmlEscape(p.deviceName) + ').</div>' : '')) +
     (p.kindKnown === false ? '<div class="text-xs font-black text-amber-800 mb-1">מה הנייר?</div>' : '') +
     '<div class="bg-slate-100 rounded-xl p-1 flex gap-1 mb-3">' + kindBtn('charge', 'חיוב') + kindBtn('credit', 'זיכוי / החזרה') + kindBtn('delivery', 'תעודת משלוח') + '</div>' +
@@ -19949,11 +20213,14 @@ function paperOpenCamera(gallery) {
   if (input && typeof input.click === 'function') input.click(); else openPaperIntake({});
 }
 // v126: מצלמים — והקריאה מתחילה לבד (בלי "קרא"). עוד נייר? שוב הכפתור; הוא נכנס לתור של אותו סבב.
+// v175: קודם מסך האישור — הצילום נקרא אחרי "אשר" (paperPhotoConfirmed). צילום שלא צריך אישור (כבר נקרא, כפול) ממשיך
+// כמו קודם, וצילום שאושר ועוד לא נקרא (חיכה לרשת) נקרא עכשיו.
 async function paperPhotoFiles(files) {
   files = Array.from(files || []);
   if (!files.length) return;
   openPaperIntake({});
   await paperIntakeAddFiles(files);
+  paperOpenNextPhotoReview();
   return paperIntakeRun();
 }
 // לחיצות על כל רכיבי הניירות והמאזן — גם מהפס שמחוץ ל-app
@@ -19966,7 +20233,9 @@ function paperUiClick(t) {
   if (role === 'paper-done') { setView((paperIntake && paperIntake.from) || 'receiving'); return true; }
   if (role === 'ledger-open') { setView('ledger'); return true; }
   if (role === 'ledger-all') { ledgerShowAll = true; renderLedger(); return true; }
-  if (role === 'paper-rotate') { paperIntakeRotate(id); return true; }
+  // v175: "בדוק ואשר" / "בדוק שוב" — מסך האישור (סיבוב, חיתוך, מחיקה) במקום כפתור "סובב" שבכרטיס
+  if (role === 'paper-photo-review') { if (!paperOpenPhotoReview(id, true)) refreshPaperIntake(); return true; }
+  if (role === 'paper-photo-review-next') { if (!paperOpenNextPhotoReview()) refreshPaperIntake(); return true; }
   if (role === 'paper-remove') { paperIntakeRemove(id); return true; }
   if (role === 'paper-run') { paperIntakeRun(); return true; }
   if (role === 'paper-goto-intake') { if (paperIntake) setView('paperIntake'); return true; }
@@ -19996,7 +20265,14 @@ function paperUiClick(t) {
   if (role === 'paper-quantity-all' || role === 'paper-quantity-differences') { setView('receiving'); startReceiptQuantityReview(role === 'paper-quantity-all'); return true; }
   if (role === 'paper-quantity-lines') { setView('receiving'); startReceiptLineCheck(); return true; } // v154
   // v134: "זה כל הניירות" — מכאן מחליטים מה עושים איתם (צילום שעוד לא נשלח, למשל בלי רשת — נקרא עכשיו)
-  if (role === 'paper-all-in') { if (paperIntake) { paperIntake.allIn = true; if (!paperIntake.busy && paperIntake.items.some(x => x.status === 'photo')) paperIntakeRun(); refreshPaperIntake(); } return true; }
+  // v175: צילום שעוד מחכה לאישור התמונה — קודם הוא (לא נקרא בלי אישור, ו"זה כל הניירות" מחכה לו)
+  if (role === 'paper-all-in') {
+    if (paperIntake) {
+      if (paperPhotosToConfirm(paperIntake).length) { if (!paperOpenNextPhotoReview()) showToast('אשר קודם את הצילום שמחכה', null, null, 2500); refreshPaperIntake(); return true; }
+      paperIntake.allIn = true; if (!paperIntake.busy && paperIntake.items.some(x => x.status === 'photo')) paperIntakeRun(); refreshPaperIntake();
+    }
+    return true;
+  }
   if (role.indexOf('ledger-') === 0) { ledgerAnswer(role, t.dataset.item, t.dataset.return, t.dataset.paper, t.dataset.receipt); return true; }
   if (!paperReview) return false;
   const r = paperReview;
@@ -25383,10 +25659,13 @@ $('prod_cartonUnits').addEventListener('input', calcCartonPrice);
 $('scanClose').addEventListener('click', closeScanner);
 $('aiOrientationLeft').addEventListener('click', () => aiRotateOrientationReview(-1));
 $('aiOrientationRight').addEventListener('click', () => aiRotateOrientationReview(1));
-$('aiOrientationConfirm').addEventListener('click', aiConfirmOrientationReview);
+// v175 (מהסקירה שלפני המיזוג): הקשה כפולה על "אשר" או על "מחק צילום". ההקשה הראשונה סוגרת את המסך, והצילום הבא נפתח מיד
+// מתחת לאצבע — ההקשה השנייה הייתה מאשרת (קריאה בתשלום) או מוחקת צילום שאיש לא ראה. הקשה שמגיעה פחות מ-450ms אחרי
+// שהמסך סגר את עצמו — לא נחשבת. אדם שבאמת בודק צילום לא מאשר אותו מהר כל כך.
+$('aiOrientationConfirm').addEventListener('click', () => { if (!aiOrientationTapTooSoon()) aiConfirmOrientationReview(); });
 $('aiOrientationCrop').addEventListener('click', aiToggleCropMode);
 $('aiOrientationRestore').addEventListener('click', aiRestoreOriginalImage);
-$('aiOrientationCancel').addEventListener('click', aiCancelOrientationReview);
+$('aiOrientationCancel').addEventListener('click', () => { if (!aiOrientationTapTooSoon()) aiCancelOrientationReview(); });
 $('toastBtn').addEventListener('click', doUndo);
 $('closeSend').addEventListener('click', hideSend);
 $('searchInput').addEventListener('input', (e) => { $('clearSearch').classList.toggle('hidden', !e.target.value); applySearch(e.target.value); });
@@ -25941,7 +26220,7 @@ function captureSharedReceipt() {
     confirmation: sharedReceiptModalOpen('confirmModal') ? sharedReceiptConfirmText : null,
     summary: sharedReceiptModalOpen('receiptSummaryModal') && !!pendingReceipt,
     quantities: sharedReceiptModalOpen('receiptQuantityModal') && !!receiptQuantityReview,
-    orientation: location ? { doc: location.docIndex, page: location.pageIndex, reviewOnly: !!aiOrientationSession.reviewOnly } : null,
+    orientation: location && !location.paper ? { doc: location.docIndex, page: location.pageIndex, reviewOnly: !!aiOrientationSession.reviewOnly } : null, // v175: לא צילום של נייר מהנהג
     quantity: qtyTarget === 'receipt' && qtyProduct && sharedReceiptModalOpen('qtyModal')
       ? { product: qtyProduct, next: qtyNextMode, value: ($('qtyVal') || {}).value || '', pristine: qtyPristine } : null,
     scanning: scanPurpose === 'receiving' && sharedReceiptModalOpen('scanModal')
@@ -26044,7 +26323,7 @@ function renderSharedReceiptUI(ui, preserveOrientation = false) {
     $('qtyVal').value = ui.quantity.value; qtyPristine = !!ui.quantity.pristine; updateQtyBoxBreak();
   } else if (qtyTarget === 'receipt') hideQty();
   if (!preserveOrientation) aiCloseOrientationReview();
-  if (ui.orientation && !preserveOrientation) {
+  if (ui.orientation && !preserveOrientation && !(aiOrientationSession && aiOrientationSession.paper)) { // v175: צילום של נייר מהנהג שמחכה לאישור נשאר פתוח
     const d = aiScanDocuments[ui.orientation.doc], page = d && d.pages[ui.orientation.page];
     if (page) {
       aiOrientationSession = { page, reviewOnly: !!ui.orientation.reviewOnly, cropMode: false };
@@ -26626,6 +26905,8 @@ function sharedReceiptEventTouchesWorkflow(target) {
   if (!target || !target.closest) return false;
   if (target.closest('#sharedReceivingBanner')) return false;
   if (target.closest('#app') && ['receiving', 'reconcile'].includes(currentView)) return true;
+  // v175: מסך האישור של צילום נייר מהנהג אינו חלק מהקליטה — קליטה שנשמרת עכשיו לא חוסמת אותו
+  if (target.closest('#aiOrientationModal') && aiOrientationSession && aiOrientationSession.paper) return false;
   if (target.closest('#receiptSummaryModal, #receiptQuantityModal, #aiOrientationModal, #aiLiveCameraModal')) return true;
   if (target.closest('#qtyModal') && qtyTarget === 'receipt') return true;
   if (target.closest('#scanModal') && (scanPurpose === 'receiving' || scanPurpose === 'linecheck')) return true; // v160: גם הכרטיס שמעל המצלמה בבדיקה שורה-שורה

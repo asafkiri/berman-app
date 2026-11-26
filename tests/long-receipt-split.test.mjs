@@ -28,7 +28,9 @@ const names = ['aiCompressInvoiceImage', 'aiRenderInvoiceRegion', 'aiRenderSplit
   'aiRenderInvoiceRotation', 'aiSetOrientationBusy', 'aiUpdateOrientationControls', 'aiRestoreOriginalImage', 'aiCropInfoText',
   'aiPaintOrientationReview', 'aiOrientationLocation', 'aiOpenOrientationReview', 'aiCloseOrientationReview', 'aiRotateOrientationReview',
   'aiConfirmOrientationReview', 'aiCancelOrientationReview', 'aiRemoveInvoicePage', 'aiAddInvoiceFiles', 'aiOpenNextUnconfirmedOrientation',
-  'aiAllPagesOrientationConfirmed', 'aiOrientationLocation', 'aiTotalPages'];
+  'aiAllPagesOrientationConfirmed', 'aiOrientationLocation', 'aiTotalPages',
+  // v175: מסך האישור משרת גם צילום של נייר מהנהג (paperIntake) — כאן אין כזה
+  'aiOrientationEpoch', 'paperItemPages'];
 const MIN_PITCH = constant('AI_SPLIT_MIN_PITCH'), MAX_SIDE = constant('AI_INVOICE_MAX_SIDE'), MAX_TILT = constant('AI_SPLIT_MAX_TILT');
 
 // הנייר המסונתז: מקור 3000×4000 (פורטרט), פרוקסי 1125×1500 (0.375). מסגרת הנייר בפרוקסי
@@ -75,6 +77,7 @@ function context({ pitch = 24, band = 10, tilt = 0, paper = true } = {}) {
   }
   const c = vm.createContext({ console, canEditDraft: () => true, Number, Math, Array, Object, String, Promise, Date, Set, Map,
     aiScanEditingImages: false, receiptScanChanged() {}, aiOrientationSession: null, aiOrientationBusy: false, aiCropState: null, aiScanBusy: false,
+    paperIntake: null, paperIntakeSession: 0, aiStraightenSideways: async () => null, // v175
     aiScanDocuments: [], aiScanResponse: null, aiScanEvaluation: null, aiScanError: '', aiScanProgressText: '', aiScanRunId: 1,
     aiScanAutoRotationNote: '', aiScanAttemptCount: 0,
     $: node, setTimeout() {}, refreshScanHost() {}, invalidateAiInvoiceResult() {}, saveReceiptDraft() {}, canEditSharedReceipt: () => true, sharedReceiptReadOnlyNotice() {}, aiScanSession: 0,

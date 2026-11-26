@@ -129,11 +129,15 @@ try{
   s=await state(page);assert.equal(s.noDoc,true);assert.deepEqual(s.items,items);
   await page.screenshot({path:'/tmp/berman-nodoc-photo-step.png',fullPage:true});
 
-  // [5] מצאתי את התעודה: צילום מהפס → "קרא" → התעודה מצטרפת לספירה הזאת לבד (אותו יום), והספירה נשמרת
+  // [5] מצאתי את התעודה: צילום מהפס → מסך האישור → "אשר" → התעודה מצטרפת לספירה הזאת לבד (אותו יום), והספירה נשמרת
   assert.match(await page.locator('#app').innerText(),/מצאתי את התעודה\? צלם אותה בכפתור/);
   const [chooser]=await Promise.all([page.waitForEvent('filechooser'),page.locator('#ledgerBar [data-role="paper-photo"]').click()]);
   await chooser.setFiles({name:'paper.svg',mimeType:'image/svg+xml',buffer:Buffer.from(photo.split(',')[1],'base64')});
-  await page.waitForFunction(()=>t.state().paperState==='ok'); // הקריאה מתחילה לבד אחרי הצילום
+  // v175: הצילום נפתח במסך האישור ולא נשלח לפניו; "אשר" — והקריאה מתחילה לבד
+  await page.waitForSelector('#aiOrientationModal:not(.hidden)');
+  assert.notEqual((await state(page)).paperState,'ok','לא נקרא לפני האישור');
+  await page.locator('#aiOrientationConfirm').click();
+  await page.waitForFunction(()=>t.state().paperState==='ok');
   s=await state(page);assert.equal(s.opened,true);assert.equal(s.noDoc,false);assert.equal(s.notes.length,1);assert.deepEqual(s.items,items);
 
   // [6] קליטה רגילה (לא "בלי תעודה") — "סיום" בשדות ריקים עדיין חוסם

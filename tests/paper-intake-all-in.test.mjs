@@ -19,10 +19,13 @@ const json = (r, expr) => JSON.parse(r.run('JSON.stringify(' + expr + ')'));
 const settle = async () => { for (let i = 0; i < 40; i++) await new Promise(res => setImmediate(res)); };
 const screen = r => { r.run('renderPaperIntake()'); return r.node('app').innerHTML; };
 const has = (html, role) => new RegExp('data-role="' + role + '"').test(html);
-// צילום אמיתי דרך המסך (הכנת התמונה — מזויפת)
+// צילום אמיתי דרך המסך (הכנת התמונה — מזויפת). v175: הצילום נפתח במסך האישור, והקריאה מתחילה אחרי "אשר" — ברקע.
 async function photo(r, name) {
   r.run(`aiCompressInvoiceImage = async () => ({ dataUrl: 'data:image/jpeg;base64,eA==', baseDataUrl: 'data:image/jpeg;base64,eA==', rotation: 0 }); paperFileHash = async f => 'h-' + f.name;`);
-  await r.run(`paperIntakeAddFiles([{ name: ${JSON.stringify(name)} }]).then(() => paperIntakeRun())`);
+  await r.run(`paperIntakeAddFiles([{ name: ${JSON.stringify(name)} }])`);
+  assert.equal(r.run('paperOpenNextPhotoReview()'), true, 'מסך האישור נפתח על הצילום');
+  await r.run('aiConfirmOrientationReview()');
+  for (let i = 0; i < 400 && r.run('paperIntake.busy'); i++) await new Promise(res => setImmediate(res));
   await r.run('paperJoinChain'); await settle();
 }
 
