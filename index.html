@@ -824,6 +824,10 @@ const AI_SCAN_MIN_SERVICE_VERSION = 1; // v13: סדרת גרסאות של שרת
 const AI_BARCODE_SUFFIX_DIGITS = 6;
 let aiOrientationSession = null;
 let aiOrientationBusy = false;
+// v175: מתי מסך האישור סגר את עצמו בפעם האחרונה (אישור, מחיקה) — נגד הקשה כפולה (aiOrientationTapTooSoon)
+let aiOrientationClosedAt = 0;
+const AI_ORIENTATION_DOUBLE_TAP_MS = 450;
+function aiOrientationTapTooSoon() { return Date.now() - aiOrientationClosedAt < AI_ORIENTATION_DOUBLE_TAP_MS; }
 let reconcileAiAudit = null;     // מטא-נתונים בלבד, ללא תמונות
 let receiptFix = null;           // תיקון תעודה פתוחה מההיסטוריה
 let returnVerify = null;          // אימות תעודת זיכוי (חזרות)
@@ -10463,6 +10467,17 @@ function aiSplitSkipText(info) {
 // אותה זקופה על המסך, כלומר הטלפון היה לאורך והתג היה צריך להיות 6 (רבע סיבוב ימינה). תג 1 — המצלמה חשבה "לרוחב",
 // וחסר רבע סיבוב ימינה; תג 3 — חשבה "לרוחב" לצד השני, וחסר רבע סיבוב שמאלה. בלי תג (גלריה, צילום מסך) — ימינה.
 // זה ניחוש מושכל ולא קריאה של הנייר, ולכן מסך האישור אומר שהצילום יושר ומבקש לוודא שהכותרת למעלה (autoRotated).
+// מתי — רק כשאין ספק (מהסקירה שלפני המיזוג): סיבוב בטעות גרוע מאי-סיבוב. הצילום מוצג ממילא במסך האישור, ושתי לחיצות על
+// "סובב" מתקנות אותו; צילום ישר שסובב לצד נשלח למודל שוכב. הדפוס של המסופון ברוחב קבוע (כל אות בעמודה משלה), ולכן בעותק
+// מסובב של תעודה ישרה וקצרה העמודות נראות כמו שורות דפוס — בדיוק במקום שבו בתעודה הישרה עצמה לא נמדדו שורות (מעט מדי
+// שורות למחזוריות). לכן הצילום מסובב רק כשכל אלה נכונים:
+//   1. הפריים לרוחב. פריים לאורך אומר שהמצלמה ידעה איפה למעלה.
+//   2. בעותק המסובב שני העוגנים מסכימים על מסגרת נייר שעוברת את כל השערים ('cropped').
+//   3. המסגרת הזאת היא רצועה ארוכה — גבוהה מרוחבה לפחות פי 1.4: תעודת משלוח ששוכבת על הצד. נייר קצר (זיכוי, נייר משלוח
+//      קטן) גבוה בערך כמו רוחבו גם כשהוא ישר, עם הכותרת והסיכום שלו, ולכן העותק המסובב שלו לעולם לא עובר.
+//   4. הצילום המסובב עצמו, דרך כל הצינור, נחתך או מתחלק.
+// כל השאר — הצילום כפי שצולם, וסיבוב ידני במסך האישור.
+const AI_STRAIGHTEN_MIN_ASPECT = 1.4;
 const AI_STRAIGHTEN_MAX_SIDE = 5600; // הצלע הארוכה של הצילום המסובב: שלושה חלקים של 1850 פיקסל, ולא יותר זיכרון מזה
 const AI_STRAIGHTEN_MAX_PIXELS = 16000000; // שטח הקנבס של הצילום המסובב: מעל ~16.7 מיליון פיקסלים Safari מחזיר קנבס ריק בלי שגיאה
 function aiExifOrientationFromBytes(view) {
@@ -10517,13 +10532,14 @@ function aiRotatedSourceCanvas(img, sourceWidth, sourceHeight, quarterTurns, sca
 }
 // null — הצילום אינו שוכב (או שאי אפשר לדעת); אחרת { blob, turns }: הצילום המסובב, וכמה רבעי סיבוב ימינה.
 async function aiStraightenSideways(img, sourceWidth, sourceHeight, file) {
+  if (!(sourceWidth > sourceHeight)) return null; // (1) פריים לאורך — המצלמה ידעה איפה למעלה
   const proxyScale = Math.min(1, AI_CROP_PROXY_SIDE / Math.max(sourceWidth, sourceHeight));
   const probe = aiRotatedSourceCanvas(img, sourceWidth, sourceHeight, 1, proxyScale);
   if (!probe) return null;
   const report = {};
-  aiDetectPaperRegion(probe, probe.width, probe.height, report);
-  // שורות דפוס נמצאו רק אחרי הסיבוב (שני העוגנים, גם אם המסגרת עצמה נדחתה) — הצילום שוכב
-  if (!report.reason || report.reason === 'no_text' || report.reason === 'no_analysis') return null;
+  const found = aiDetectPaperRegion(probe, probe.width, probe.height, report);
+  // (2) + (3): בעותק המסובב — מסגרת נייר מוסכמת, והיא רצועה ארוכה זקופה
+  if (!found || report.reason !== 'cropped' || !(found.height >= AI_STRAIGHTEN_MIN_ASPECT * found.width)) return null;
   const turns = (await aiExifOrientation(file)) === 3 ? 3 : 1;
   const fullScale = Math.min(1, AI_STRAIGHTEN_MAX_SIDE / Math.max(sourceWidth, sourceHeight), Math.sqrt(AI_STRAIGHTEN_MAX_PIXELS / (sourceWidth * sourceHeight)));
   const full = aiRotatedSourceCanvas(img, sourceWidth, sourceHeight, turns, fullScale);
@@ -10572,9 +10588,10 @@ async function aiCompressInvoiceImage(file, forceFullFrame, noSplit, straightene
       const turned = await aiStraightenSideways(img, sourceWidth, sourceHeight, file);
       if (turned) {
         const made = await aiCompressInvoiceImage(turned.blob, false, noSplit, true);
-        // הצילום המסובב חייב להראות בעצמו שורות דפוס; אם לא (קנבס שיצא ריק, קידוד שנכשל בשקט) — הצילום כפי שצולם
-        const reason = ([].concat(made)[0] || {}).cropInfo ? [].concat(made)[0].cropInfo.reason : 'error';
-        if (reason !== 'no_text' && reason !== 'error') {
+        // (4) הצילום המסובב עצמו נחתך או מתחלק; אחרת (קנבס שיצא ריק, קידוד שנכשל בשקט, עוגנים שלא הסכימו) — הצילום כפי שצולם
+        const first = [].concat(made)[0];
+        const reason = first && first.cropInfo ? first.cropInfo.reason : 'error';
+        if (reason === 'cropped' || reason === 'split') {
           [].concat(made).forEach(page => { page.autoRotated = turned.turns * 90; });
           return made;
         }
@@ -11060,6 +11077,7 @@ function aiOpenNextUnconfirmedOrientation() {
 // הוא אינו חלק מהקליטה, ונייר קודם שנקרא ברקע לא סוגר את המסך מול העיניים.
 function aiCloseOrientationReview(own) {
   if (own !== true && aiOrientationSession && aiOrientationSession.paper) return;
+  if (own === true && aiOrientationSession) aiOrientationClosedAt = Date.now();
   aiCropResetOverlay();
   aiOrientationSession = null;
   aiOrientationBusy = false;
@@ -25641,10 +25659,13 @@ $('prod_cartonUnits').addEventListener('input', calcCartonPrice);
 $('scanClose').addEventListener('click', closeScanner);
 $('aiOrientationLeft').addEventListener('click', () => aiRotateOrientationReview(-1));
 $('aiOrientationRight').addEventListener('click', () => aiRotateOrientationReview(1));
-$('aiOrientationConfirm').addEventListener('click', aiConfirmOrientationReview);
+// v175 (מהסקירה שלפני המיזוג): הקשה כפולה על "אשר" או על "מחק צילום". ההקשה הראשונה סוגרת את המסך, והצילום הבא נפתח מיד
+// מתחת לאצבע — ההקשה השנייה הייתה מאשרת (קריאה בתשלום) או מוחקת צילום שאיש לא ראה. הקשה שמגיעה פחות מ-450ms אחרי
+// שהמסך סגר את עצמו — לא נחשבת. אדם שבאמת בודק צילום לא מאשר אותו מהר כל כך.
+$('aiOrientationConfirm').addEventListener('click', () => { if (!aiOrientationTapTooSoon()) aiConfirmOrientationReview(); });
 $('aiOrientationCrop').addEventListener('click', aiToggleCropMode);
 $('aiOrientationRestore').addEventListener('click', aiRestoreOriginalImage);
-$('aiOrientationCancel').addEventListener('click', aiCancelOrientationReview);
+$('aiOrientationCancel').addEventListener('click', () => { if (!aiOrientationTapTooSoon()) aiCancelOrientationReview(); });
 $('toastBtn').addEventListener('click', doUndo);
 $('closeSend').addEventListener('click', hideSend);
 $('searchInput').addEventListener('input', (e) => { $('clearSearch').classList.toggle('hidden', !e.target.value); applySearch(e.target.value); });

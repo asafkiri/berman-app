@@ -359,19 +359,24 @@ function jpegBytes(orientation, { little = true, jfif = false, exif = true } = {
 const photoFile = (orientation, options) => ({ name: 'paper.jpg', slice: () => ({ arrayBuffer: async () => jpegBytes(orientation, options) }) });
 
 // sideways: הזיהוי מוצא שורות דפוס רק כשהתמונה שהוא מקבל גבוהה מרוחבה (המקור 4000×3000 שוכב; אחרי רבע סיבוב — 3000×4000).
-function straightenContext({ sideways = true, encode = true, blank = false, size = [4000, 3000] } = {}) {
+// textWhen: באיזה פריים הזיהוי "רואה" שורות דפוס — 'portrait' (התמונה גבוהה מרוחבה; תעודה ארוכה ששוכבת בפריים לרוחב) או
+// 'landscape' (תעודה ישרה שהעמודות שלה נראות כשורות רק בעותק המסובב). box — המסגרת שעוגן הדיו מוצא (שברים של הפרוקסי),
+// cropBox — המסגרת של עוגן המחזוריות (ברירת מחדל: אותה מסגרת).
+function straightenContext({ sideways = true, encode = true, blank = false, size = [4000, 3000], textWhen = 'portrait', box = [0.3, 0.1, 0.4, 0.8], cropBox = null } = {}) {
   // התמונה המסובבת נקראת בגודל שבו נבנתה (rotatedSize — לפי הקנבס שקודד)
   const images = new Map([['source', { naturalWidth: size[0], naturalHeight: size[1] }], ['rotated', { naturalWidth: size[1], naturalHeight: size[0] }]]);
   const rotations = [], blobs = [], canvases = [];
   let seq = 0;
   const names = ['aiCompressInvoiceImage', 'aiStraightenSideways', 'aiRotatedSourceCanvas', 'aiExifOrientation', 'aiExifOrientationFromBytes', 'aiRenderInvoiceRegion',
     'aiDetectPaperRegion', 'aiMeasurePageQuality', 'aiQualityAdvice', 'aiNormalizeQuarterTurns', 'aiPlanLongReceiptSplit', 'aiUpdateOrientationControls', 'aiDrawCropMap', 'aiSplitSkipText'];
+  const frac = (b, pw, ph) => ({ x: Math.round(pw * b[0]), y: Math.round(ph * b[1]), width: Math.round(pw * b[2]), height: Math.round(ph * b[3]) });
   const nodes = new Map();
   const node = id => { if (!nodes.has(id)) nodes.set(id, { id, textContent: '', innerHTML: '', width: 84, height: 63, classList: { toggle() {}, add() {}, remove() {} }, getContext: () => null }); return nodes.get(id); };
   class FakeFile { constructor(parts, name, options) { this.parts = parts; this.name = name; this.type = options && options.type; this.rotated = true; } }
   const c = vm.createContext({ console, Number, Math, Array, Object, String, Promise, Date, DataView, File: FakeFile,
     Uint8ClampedArray, Uint8Array, Uint32Array, Float32Array, Float64Array,
     AI_INVOICE_MAX_SIDE: constant('AI_INVOICE_MAX_SIDE'), AI_CROP_PROXY_SIDE: constant('AI_CROP_PROXY_SIDE'), AI_STRAIGHTEN_MAX_SIDE: constant('AI_STRAIGHTEN_MAX_SIDE'), AI_STRAIGHTEN_MAX_PIXELS: constant('AI_STRAIGHTEN_MAX_PIXELS'),
+    AI_STRAIGHTEN_MIN_ASPECT: constant('AI_STRAIGHTEN_MIN_ASPECT'),
     AI_SPLIT_MIN_PITCH: constant('AI_SPLIT_MIN_PITCH'), AI_SPLIT_MAX_PARTS: constant('AI_SPLIT_MAX_PARTS'), AI_SPLIT_MIN_SOURCE_GAIN: constant('AI_SPLIT_MIN_SOURCE_GAIN'),
     aiOrientationSession: null, $: node,
     aiReadFile: async file => file && file.rotated ? 'rotated' : 'source',
@@ -380,8 +385,8 @@ function straightenContext({ sideways = true, encode = true, blank = false, size
     aiCanvasToInvoiceJpeg: canvas => { const dataUrl = 'encoded-' + (++seq) + '-' + canvas.width + 'x' + canvas.height; return { dataUrl, bytes: 100 }; },
     // שני העוגנים מסכימים על מסגרת הנייר — רק כשהתמונה זקופה (גבוהה מרוחבה). בלי מרווח שורות (P), ולכן בלי חלוקה.
     // blank: הצילום המסובב המלא יצא ריק (הזיהוי רואה את הפיקסלים שלו — כולם לבנים) — רק העותק המוקטן הראה טקסט
-    aiTextAnchorBox: (luma, pw, ph) => sideways && ph > pw && !(blank && luma[0] === 255) ? { x: Math.round(pw * 0.3), y: Math.round(ph * 0.1), width: Math.round(pw * 0.4), height: Math.round(ph * 0.8) } : null,
-    aiTextCropBox: (luma, pw, ph) => sideways && ph > pw && !(blank && luma[0] === 255) ? { box: { x: Math.round(pw * 0.3), y: Math.round(ph * 0.1), width: Math.round(pw * 0.4), height: Math.round(ph * 0.8) } } : null,
+    aiTextAnchorBox: (luma, pw, ph) => sideways && (textWhen === 'portrait' ? ph > pw : pw > ph) && !(blank && luma[0] === 255) ? frac(box, pw, ph) : null,
+    aiTextCropBox: (luma, pw, ph) => sideways && (textWhen === 'portrait' ? ph > pw : pw > ph) && !(blank && luma[0] === 255) ? { box: frac(cropBox || box, pw, ph) } : null,
     document: { createElement: tag => {
       assert.equal(tag, 'canvas');
       const canvas = { width: 0, height: 0, draws: [], turns: [] };
@@ -465,6 +470,51 @@ test('צילום ענק: הצילום המסובב מוקטן כך שהקנבס 
   assert.ok(Math.max(blob.width, blob.height) <= 5600);
   assert.ok(Math.abs(blob.width / blob.height - 6000 / 8000) < 0.01, 'היחס נשמר');
   assert.ok(blob.height >= 4600, 'ועדיין מספיק לשני חלקים של 1850 פיקסל (' + blob.height + ')');
+});
+
+test('מהסקירה: תעודה ישרה לעולם לא מסובבת — פריים לאורך, נייר קצר, עוגנים שלא הסכימו', async () => {
+  // תעודה ישרה וקצרה בצילום לאורך: בה עצמה לא נמדדו שורות (מעט מדי), ובעותק המסובב העמודות של הדפוס נראות כשורות.
+  // עד התיקון היא סובבה לצד ונשלחה למודל שוכבת.
+  const portrait = straightenContext({ size: [3000, 4000], textWhen: 'landscape' });
+  const kept = await portrait.c.aiCompressInvoiceImage(photoFile(1));
+  assert.deepEqual([kept.autoRotated, kept.cropInfo.reason], [undefined, 'no_text'], 'פריים לאורך — המצלמה ידעה איפה למעלה');
+  assert.deepEqual(portrait.blobs, []); assert.deepEqual(portrait.rotations, [], 'אפילו בלי לבדוק עותק מסובב');
+  // פריים לרוחב, אבל המסגרת שנמצאה בעותק המסובב אינה רצועה ארוכה (נייר קצר: גבוה בערך כרוחבו) — בלי סיבוב
+  const short = straightenContext({ box: [0.2, 0.25, 0.6, 0.5] });
+  const shortPage = await short.c.aiCompressInvoiceImage(photoFile(1));
+  assert.deepEqual([shortPage.autoRotated, shortPage.cropInfo.reason], [undefined, 'no_text']);
+  assert.deepEqual(short.blobs, [], 'הצילום המסובב לא נבנה בכלל');
+  // בעותק המסובב שני העוגנים לא מסכימים על המסגרת — בלי סיבוב
+  const disagree = straightenContext({ cropBox: [0.05, 0.05, 0.3, 0.9] });
+  const disagreePage = await disagree.c.aiCompressInvoiceImage(photoFile(1));
+  assert.deepEqual([disagreePage.autoRotated, disagreePage.cropInfo.reason], [undefined, 'no_text']);
+  assert.deepEqual(disagree.blobs, []);
+  // רצועה ארוכה ששוכבת בפריים לרוחב — כן (1.4 ומעלה)
+  const tall = straightenContext({ box: [0.3, 0.1, 0.4, 0.6] });
+  assert.equal((await tall.c.aiCompressInvoiceImage(photoFile(1))).autoRotated, 90);
+});
+
+test('מהסקירה: הקשה כפולה על "אשר" לא מאשרת את הצילום הבא שנפתח מתחת לאצבע (וגם לא "מחק צילום")', async () => {
+  const r = app(delivery('77001234'));
+  camera(r);
+  await r.run(`paperPhotoFiles([{ name: 'a' }, { name: 'b' }])`);
+  assert.equal(reviewOpen(r), true);
+  const confirmTap = r.events.get('aiOrientationConfirm:click'), cancelTap = r.events.get('aiOrientationCancel:click');
+  const opened = () => json(r, 'aiOrientationSession && paperIntake.items.findIndex(x => paperItemPages(x).includes(aiOrientationSession.page))');
+  assert.equal(opened(), 0);
+  await confirmTap({});
+  // הצילום הבא נפתח מיד (setTimeout) — ההקשה השנייה של אותה הקשה כפולה נוחתת עליו
+  r.callbacks.splice(0).forEach(fn => fn());
+  assert.equal(opened(), 1, 'הצילום השני פתוח');
+  await confirmTap({});
+  await cancelTap({});
+  assert.equal(opened(), 1, 'ההקשה השנייה לא נחשבה — לא אישור ולא מחיקה');
+  assert.deepEqual(json(r, 'paperIntake.items.map(x => paperItemConfirmed(x))'), [true, false]);
+  // אחרי שעבר זמן (אדם שהסתכל על הצילום) — הלחיצה נחשבת
+  r.run('aiOrientationClosedAt -= 1000');
+  await confirmTap({});
+  assert.deepEqual(json(r, 'paperIntake.items.map(x => paperItemConfirmed(x))'), [true, true]);
+  assert.equal(r.run('aiOrientationSession'), null);
 });
 
 test('הגרסה 175 ומעלה, כולל ההערה ב-service worker', () => {

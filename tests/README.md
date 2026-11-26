@@ -8,6 +8,7 @@
 - **`nodoc-found-escape-browser.mjs`**, **`receiving-handoff-browser.mjs`** — אחרי בחירת הקובץ: מסך האישור, ו"אשר" בלחיצה אמיתית. `receiving-handoff-browser` נכשלת אחר כך באותה שורה כמו ב-174 (`handoffDoc` ריק) — לא קשור לשינוי.
 - **`image-capture.test.mjs`**, **`long-receipt-split.test.mjs`** — `aiOrientationEpoch`, `paperItemPages` ברשימת הפונקציות; `paperIntake: null`, ו-`aiStraightenSideways` מזויף (היישור נבדק בקובץ החדש).
 - **`credit-v174.test.mjs`** — בדיקת הגרסה: 174 ומעלה.
+- **מהסקירה שלפני המיזוג:** ב-`photo-confirm-v175.test.mjs` — "תעודה ישרה לעולם לא מסובבת" (`straightenContext` עם `textWhen: 'landscape'` — העותק המסובב "רואה" שורות, כמו העמודות של דפוס ברוחב קבוע; `box` של נייר קצר; `cropBox` שלא מסכים), ו"הקשה כפולה" (המאזינים האמיתיים של `aiOrientationConfirm` / `aiOrientationCancel`, והצילום הבא שנפתח ב-`setTimeout` של ההרנס). שתיהן נכשלות על הקוד שלפני התיקון. ב-`photo-confirm-browser.mjs` — שלב 6: נייר קצר כמו של המסופון (`t.slip`, `monospace`, כותרת וסיכום), 1/3/6 שורות, צילום ישר לאורך — לא מסובב ומה שנשלח זקוף; נכשל על הקוד שלפני התיקון (1 שורה).
 
 ## v174: ליטושים ל-173 — ניחוש של החלפה נסוג רק מפני החלפה מדויקת שבאמת נוצרת
 

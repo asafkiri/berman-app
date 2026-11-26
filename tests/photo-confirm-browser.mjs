@@ -9,6 +9,7 @@
 // - צילום שוכב (אותה תעודה, רבע סיבוב שמאלה, בלי תג כיוון): מיושר לבד, נחתך, המסך אומר זאת, וראש התעודה למעלה.
 // - אותו צילום עם תג כיוון 3 (הדפדפן מציג אותו הפוך מהקודם): מיושר לצד השני — ושוב ראש התעודה למעלה.
 // - תעודה ארוכה, שוכבת: מיושרת ומחולקת לשני חלקים; אישור אחד; בקשה אחת עם שני עמודים; הקליטה סופרת שניהם.
+// - מהסקירה: נייר קצר וישר כמו של המסופון (גופן ברוחב קבוע, 1/3/6 שורות), פריים לאורך — לא מסובב, ומה שנשלח זקוף.
 // - בלי שגיאות דף ובלי גלילה לצדדים.
 // Run: node tests/photo-confirm-browser.mjs (Playwright + Chromium; BERMAN_CHROMIUM optional)
 import assert from 'node:assert/strict';
@@ -98,6 +99,28 @@ window.t = {
   },
   // לא כל פריסה מסונתזת עוברת את הזיהוי (יש שבהן שני העוגנים לא מסכימים), וזה תלוי גם בגרסת הדפדפן. לכן הבדיקה
   // בוחרת זרע שבו הצילום הישר נחתך (want: 'cropped') או מתחלק ('split') — ואז בודקת שהשוכב מגיע לאותה תוצאה.
+  // מהסקירה שלפני המיזוג: נייר קצר כמו שהמסופון מדפיס — כותרת, מעט שורות, סיכום, בגופן ברוחב קבוע — צילום ישר, פריים לאורך.
+  // בעותק מסובב שלו העמודות של האותיות נראות כמו שורות דפוס, ועד התיקון הוא סובב לצד ונשלח למודל שוכב.
+  slip: async ({ rows = 3, cpl = 42, W = 3000, H = 4000 } = {}) => {
+    let s = 4242; const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+    const heb = 'אבגדהוזחטיכלמנסעפצקרשת', word = n => Array.from({ length: n }, () => heb[Math.floor(rnd() * heb.length)]).join('');
+    const digits = n => Array.from({ length: n }, () => Math.floor(rnd() * 10)).join('');
+    const lines = [word(5) + ' ' + word(6), word(4) + ' ' + digits(9), digits(2) + '/' + digits(2) + '/' + digits(4), word(6) + ': ' + digits(9), word(5) + ': ' + word(4), '-'.repeat(cpl)];
+    for (let r = 0; r < rows; r++) lines.push((digits(13) + ' ' + word(5) + ' ' + word(3) + '   ' + digits(2) + ' ' + digits(3) + '.' + digits(2)).slice(0, cpl));
+    lines.push('-'.repeat(cpl), word(3) + ' ' + word(4) + ':   ' + digits(3), word(5) + ': ' + digits(4), word(4) + ' ' + word(5));
+    const pitchK = 1.65, fontN = 1 / 0.602, pwN = cpl / 0.92, phN = (lines.length + 2) * fontN * pitchK, k = Math.min(W * 0.88 / pwN, H * 0.88 / phN);
+    const adv = k, font = fontN * k, pitch = fontN * pitchK * k, pw = pwN * k, ph = phN * k, px = (W - pw) / 2, py = (H - ph) / 2;
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const g = c.getContext('2d');
+    g.fillStyle = 'rgb(105,100,95)'; g.fillRect(0, 0, W, H);
+    g.fillStyle = 'rgb(238,238,234)'; g.fillRect(px, py, pw, ph);
+    g.fillStyle = 'rgb(45,45,48)'; g.font = font + 'px monospace'; g.textBaseline = 'top';
+    lines.forEach((text, r) => { for (let i = 0; i < text.length && i < cpl; i++) if (text[i] !== ' ') g.fillText(text[i], px + pw * 0.04 + i * adv, py + pitch + r * pitch); });
+    const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.9));
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let text = ''; for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(text);
+  },
   pick: async ({ u, want }) => {
     for (const seed of [7, 11, 17, 19, 23, 29, 31, 37, 41, 43]) {
       const made = [].concat(await aiCompressInvoiceImage(new File([await window.t.bytes({ u, seed })], 'pick.jpg', { type: 'image/jpeg' })));
@@ -253,8 +276,25 @@ try {
   assert.deepEqual(s.docs, [1, 1, 1, 2], 'ארבע תעודות בקליטה, האחרונה בשני עמודים');
   assert.deepEqual(s.per[3], { pageCount: 2, cropReasons: ['split', 'split'], rotations: [0, 0], autoRotated: [90, 90], source: 'paper' });
   assert.equal(s.session, null);
+  // 6. מהסקירה: נייר קצר וישר (גופן ברוחב קבוע, 1, 3 ו-6 שורות), פריים לאורך — לעולם לא מסובב, ומה שנשלח זקוף
+  for (const rows of [1, 3, 6]) {
+    const before = (await state()).scans;
+    const b64 = await page.evaluate(o => window.t.slip(o), { rows });
+    await page.setInputFiles('#paperCamGlobal', { name: 'slip-' + rows + '.jpg', mimeType: 'image/jpeg', buffer: Buffer.from(b64, 'base64') });
+    await modalOpen();
+    waiting = (await state()).items.find(x => x.status === 'photo');
+    assert.deepEqual(waiting.pages.map(p => p.autoRotated), [0], rows + ' שורות: נייר ישר לא מסובב');
+    assert.doesNotMatch(await text('#aiOrientationHint'), /יושר לבד/);
+    await page.waitForTimeout(500); // אדם שמסתכל על הצילום (ההגנה מהקשה כפולה)
+    await page.locator('#aiOrientationConfirm').click();
+    await modalClosed();
+    await page.waitForFunction(n => { const x = window.t.state(); return x.scans === n + 1 && !x.busy; }, before);
+    const sent = (await page.evaluate(i => window.t.sent(i), before))[0];
+    const dim = await page.evaluate(d => window.t.tone(d), sent);
+    assert.ok(dim.h > dim.w, rows + ' שורות: מה שנשלח זקוף (' + dim.w + '×' + dim.h + ')');
+  }
   assert.deepEqual(errors, [], 'בלי שגיאות דף');
-  console.log('✓ v175 בדפדפן: צילום של נייר מהנהג מחכה במסך האישור ולא נשלח לפניו; "סובב", "אשר" ו"מחק צילום" בלחיצות אמיתיות; צילום שוכב מיושר לבד (בלי תג כיוון — ימינה, תג 3 — שמאלה) וראש התעודה למעלה; תעודה ארוכה מיושרת, מחולקת לשניים ונשלחת כשני עמודים; נתוני הצילום נשמרים; 390px בלי גלילה לצדדים');
+  console.log('✓ v175 בדפדפן: צילום של נייר מהנהג מחכה במסך האישור ולא נשלח לפניו; "סובב", "אשר" ו"מחק צילום" בלחיצות אמיתיות; צילום שוכב מיושר לבד (בלי תג כיוון — ימינה, תג 3 — שמאלה) וראש התעודה למעלה; תעודה ארוכה מיושרת, מחולקת לשניים ונשלחת כשני עמודים; נתוני הצילום נשמרים; נייר קצר וישר (גופן ברוחב קבוע) לא מסובב לעולם; 390px בלי גלילה לצדדים');
 } finally {
   await browser.close();
   server.close();
