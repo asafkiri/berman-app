@@ -117,7 +117,7 @@ try {
   const retry = bar.locator('button[data-shared-receiving="local-retry"]');
   assert.equal((await retry.innerText()).trim(), 'בדוק ונסה לשמור שוב');
   const box = await retry.boundingBox();
-  assert.ok(box.width >= 300 && box.height >= 34, 'כפתור של ממש, לא קישור: ' + JSON.stringify(box));
+  assert.ok(box.width >= 300 && box.height >= 28, 'כפתור של ממש, ברוחב המסך — לא קישור: ' + JSON.stringify(box)); // הגובה תלוי בגופן של הסביבה
   const width = await p.evaluate(() => ({ scroll: document.scrollingElement.scrollWidth, client: document.scrollingElement.clientWidth }));
   assert.ok(width.scroll <= width.client + 1, 'בלי גלילה לצדדים: ' + JSON.stringify(width));
   // כפתור אחר במסך הקליטה — נעצר, עם השם של הכפתור כמו שהוא כתוב בפס
