@@ -858,7 +858,7 @@ let sharedReceiptScanToken = null;
 
 let receivingDigitsMissTimer = null;
 let receivingDigitsMissNotified = '';
-const APP_VERSION = '175'; // מסך האישור גם לצילום של נייר מהנהג (סיבוב, חיתוך, מחיקה) — הצילום נקרא רק אחרי "אשר", והקריאה ממשיכה ברקע; תעודה ארוכה מתחלקת לחלקים גם במסלול הזה; צילום שיצא שוכב מיושר לבד לפני החיתוך; נתוני הצילום (חיתוך, חלוקה, איכות, סיבוב) נשמרים עם הקריאה
+const APP_VERSION = '176'; // "אשר וקלוט" עם ניסיון שמירה תלוי מגיע ל-confirmReceipt גם בלחיצה אמיתית (שומר הלחיצות עצר אותה — התיקון של 157 לא פעל בטלפון); הפס אומר מה קרה ומה לוחצים, ו"בודק ושומר…" בזמן הבדיקה
 // מאותחל לפני ההתחברות: גם נפילה מיידית לעבודה מקומית יכולה לצייר את המסך.
 let ledgerLoadingSources = null;
 let ledgerFailedSources = new Set();
@@ -26557,7 +26557,8 @@ function receivingHandoffWhat(sm) {
 // מה לומר כשמנסים לערוך קליטה שלא בידיים של הטלפון הזה
 function receivingHandoffBlockedText(st) {
   if (sharedReceiptFinalizing) return 'שומר את התעודה — רגע.';
-  if (localReceivingPending()) return 'השמירה לא אושרה עדיין. לחץ על בדיקה וניסיון חוזר בראש מסך הקליטה.';
+  // v176: בשם של הכפתור כמו שהוא כתוב בפס (עד 175: "לחץ על בדיקה וניסיון חוזר") — ומה המצב: נעול עד האישור
+  if (localReceivingPending()) return 'הקליטה נעולה עד שהשמירה תאושר. לחץ "בדוק ונסה לשמור שוב" בראש מסך הקליטה.';
   if (!st) return 'רגע…';
   if (st.checking === 'finish') return 'בודק אם התעודה נשמרה בענן — רגע.';
   if (st.checking === 'take') return 'בודק אם הקליטה עברה לטלפון הזה — רגע.';
@@ -26570,7 +26571,15 @@ function receivingHandoffBlockedText(st) {
   return 'רגע…';
 }
 function receivingHandoffBannerHtml() {
-  const waiting = localReceivingPending() ? '<div class="border rounded-xl p-3 text-sm mb-2">השמירה לא אושרה עדיין. הנתונים נשמרו בטלפון.<button data-shared-receiving="local-retry" class="block underline font-bold mt-2">בדוק ונסה לשמור שוב</button></div>' : '';
+  // v176 (כמו תנובה 166): מה קרה, שלא אבד כלום, שהקליטה נעולה עד האישור ומה לוחצים — וכפתור של ממש, לא קישור. בזמן
+  // הבדיקה עצמה: "בודק ושומר…" בלי כפתור (עד 175 שום דבר לא השתנה על המסך במשך הבדיקה — עד חצי דקה ויותר).
+  // עד 175: "השמירה לא אושרה עדיין. הנתונים נשמרו בטלפון." וקישור.
+  const waiting = !localReceivingPending() ? '' : '<div class="border border-blue-200 bg-blue-50 text-blue-900 rounded-xl p-3 text-sm font-bold mb-2">' +
+    (sharedReceiptFinalizing
+      ? '<div class="font-black">בודק ושומר…</div><div class="mt-1">זה לוקח פחות מדקה. שום דבר לא אבד — הקליטה שמורה בטלפון הזה.</div>'
+      : '<div class="font-black">השמירה נשלחה, ועוד לא הגיע אישור מהענן.</div><div class="mt-1">שום דבר לא אבד — הקליטה שמורה בטלפון הזה. עד שהשמירה תאושר, הקליטה נעולה.</div>' +
+        '<button data-shared-receiving="local-retry" class="btn-tap block w-full bg-white border rounded-lg p-2 mt-2 font-black">בדוק ונסה לשמור שוב</button>' +
+        '<div class="mt-2 text-xs">לא עובר? סגור את האפליקציה, פתח אותה שוב ולחץ כאן שוב.</div>') + '</div>';
   const rows = localReceivingRecoveryList();
   return waiting + '<div class="text-xs font-bold text-slate-500 mb-2">הקליטה נשמרת בטלפון הזה בלבד. התעודה תישמר בענן בסיום.</div>' +
     ((!receivingDraftEmpty() && (localReceivingPending() || receipts.some(r => r.id === receiptDraftId))) ? '<button data-shared-receiving="local-archive" class="block underline text-xs mb-2">שמור עותק בצד ופנה את המסך</button>' : '') +
@@ -26655,6 +26664,7 @@ async function localReceivingRetry() {
   const sessionId = receivingSessionOf({ receiptDraftId, receiptAttachTarget }), attempt = localReceivingFinalizer.attempt(sessionId);
   if (!attempt) return null;
   sharedReceiptFinalizing = true;
+  renderSharedReceivingBanner(); // v176: "בודק ושומר…" בזמן הבדיקה
   let result = null;
   try {
     result = await localReceivingFinalizer.finish(attempt);
@@ -26931,6 +26941,10 @@ function guardSharedReceiptEvent(event) {
   if (['rc-history', 'rc-recon-cancel', 'paper-photo', 'ledger-open', 'ret-card', 'paper-goto-intake', 'paper-count-now'].includes(role) || ['receiptQuantityClose', 'rs_cancel', 'qty_cancel', 'scanClose', 'confirmCancel'].includes(id)) return;
   if (id === 'confirmOk' && typeof confirmCb === 'function' && confirmCb.allowReadOnly) return; // v135: "המשך בטלפון הזה בלבד"
   if (['aiOrientationConfirm', 'aiOrientationCancel'].includes(id) && aiOrientationSession?.reviewOnly) return;
+  // v176: "אשר וקלוט" עם ניסיון שמירה תלוי עובר — confirmReceipt בודק אותו בעצמו ומנסה שוב (v157). עד 175 הלחיצה נעצרה
+  // כאן עם "לחץ על בדיקה וניסיון חוזר בראש מסך הקליטה", והתיקון של 157 לא הגיע ללחיצה אמיתית (הבדיקות שלו קראו
+  // ל-confirmReceipt ישירות). בזמן שמירה שרצה עכשיו — נעצר כמו קודם, כדי שלחיצה כפולה לא תשמור פעמיים.
+  if (id === 'rs_ok' && !sharedReceiptFinalizing && localReceivingPending()) return;
   event.preventDefault(); event.stopImmediatePropagation(); sharedReceiptReadOnlyNotice();
 }
 // Capture guards run before any delegated handler (including modal controls).
